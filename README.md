@@ -46,6 +46,10 @@ Rust stable is enough. Vulkan is not needed yet.
 
 ## Licence
 
-novena is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). You may use, change and share it for any noncommercial purpose. Commercial use needs a separate licence, described in [COMMERCIAL.md](COMMERCIAL.md).
+You choose one of three:
 
-[FAQ.md](FAQ.md) explains this in plain words. Notes on scope and intent are in [LEGAL.md](LEGAL.md).
+- **Noncommercial use:** free, under PolyForm Noncommercial 1.0.0.
+- **GPL projects:** free, under the GNU GPL version 3 or later.
+- **Closed commercial use:** needs a paid commercial licence.
+
+[LICENSE.md](LICENSE.md) has a table that says which one fits your case. [FAQ.md](FAQ.md) explains the reasons in plain words, and [COMMERCIAL.md](COMMERCIAL.md) covers commercial licences. Notes on scope and intent are in [LEGAL.md](LEGAL.md).

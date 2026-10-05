@@ -1,73 +1,32 @@
-# PolyForm Noncommercial License 1.0.0
+# Licence
 
-<https://polyformproject.org/licenses/noncommercial/1.0.0>
+novena is offered under three licences. You pick the one that fits what you are doing. You only need to follow the one you pick.
 
-## Acceptance
+## Which one is for me?
 
-In order to get any license under these terms, you must agree to them as both strict obligations and conditions to all your licenses.
+| If you are... | Use this licence | What it asks of you |
+|---|---|---|
+| Using it for personal, hobby, study, research or other noncommercial purposes | [PolyForm Noncommercial 1.0.0](LICENSES/PolyForm-Noncommercial-1.0.0.md) | Keep the licence and notice with it. No commercial use. |
+| Adding it to a project that is itself under the GPL, or willing to follow the GPL | [GNU GPL, version 3 or later](LICENSES/GPL-3.0-or-later.txt) | Anything you distribute that includes novena must be under the GPL too, with complete source. |
+| Using it commercially without publishing your own source | A commercial licence, see [COMMERCIAL.md](COMMERCIAL.md) | Agree terms with the licensor first. |
 
-## Copyright License
+## The short version
 
-The licensor grants you a copyright license for the software to do everything you might do with the software that would otherwise infringe the licensor's copyright in it for any permitted purpose.  However, you may only distribute the software according to [Distribution License](#distribution-license) and make changes or new works based on the software according to [Changes and New Works License](#changes-and-new-works-license).
+- **Free for noncommercial use.** Do what you like with it, as long as it is not commercial.
+- **Free for GPL projects.** If your project follows the GPL, novena can be part of it.
+- **Paid for closed commercial use.** If you want to make money with it and keep your own source closed, you need a commercial licence.
 
-## Distribution License
+## Common cases
 
-The licensor grants you an additional copyright license to distribute copies of the software.  Your license to distribute covers distributing the software with changes and new works permitted by [Changes and New Works License](#changes-and-new-works-license).
+- *I am tinkering at home.* Noncommercial licence. Nothing to do.
+- *I maintain a free emulator under the MIT licence.* Noncommercial licence, as long as your project is noncommercial.
+- *I maintain an emulator under GPL version 3, or version 2 "or later".* GPL. You can bundle novena.
+- *My project is under GPL version 2 only.* Neither public licence fits. Get in touch.
+- *I want to ship it in a device or program I sell, with my own source closed.* Commercial licence.
+- *I want to ship it in something I sell, and I will publish all of my source under the GPL and meet its other terms.* The GPL allows that.
 
-## Notices
+## The exact terms
 
-You must ensure that anyone who gets a copy of any part of the software from you also gets a copy of these terms or the URL for them above, as well as copies of any plain-text lines beginning with `Required Notice:` that the licensor provided with the software.  For example:
+The full texts are in the [LICENSES](LICENSES) folder. They are what counts if anything on this page reads differently. The notice that must stay with every copy is in [NOTICE](NOTICE). Plain-language answers are in [FAQ.md](FAQ.md).
 
-> Required Notice: Copyright Yoyodyne, Inc. (http://example.com)
-
-## Changes and New Works License
-
-The licensor grants you an additional copyright license to make changes and new works based on the software for any permitted purpose.
-
-## Patent License
-
-The licensor grants you a patent license for the software that covers patent claims the licensor can license, or becomes able to license, that you would infringe by using the software.
-
-## Noncommercial Purposes
-
-Any noncommercial purpose is a permitted purpose.
-
-## Personal Uses
-
-Personal use for research, experiment, and testing for the benefit of public knowledge, personal study, private entertainment, hobby projects, amateur pursuits, or religious observance, without any anticipated commercial application, is use for a permitted purpose.
-
-## Noncommercial Organizations
-
-Use by any charitable organization, educational institution, public research organization, public safety or health organization, environmental protection organization, or government institution is use for a permitted purpose regardless of the source of funding or obligations resulting from the funding.
-
-## Fair Use
-
-You may have "fair use" rights for the software under the law. These terms do not limit them.
-
-## No Other Rights
-
-These terms do not allow you to sublicense or transfer any of your licenses to anyone else, or prevent the licensor from granting licenses to anyone else.  These terms do not imply any other licenses.
-
-## Patent Defense
-
-If you make any written claim that the software infringes or contributes to infringement of any patent, your patent license for the software granted under these terms ends immediately. If your company makes such a claim, your patent license ends immediately for work on behalf of your company.
-
-## Violations
-
-The first time you are notified in writing that you have violated any of these terms, or done anything with the software not covered by your licenses, your licenses can nonetheless continue if you come into full compliance with these terms, and take practical steps to correct past violations, within 32 days of receiving notice.  Otherwise, all your licenses end immediately.
-
-## No Liability
-
-***As far as the law allows, the software comes as is, without any warranty or condition, and the licensor will not be liable to you for any damages arising out of these terms or the use or nature of the software, under any kind of legal claim.***
-
-## Definitions
-
-The **licensor** is the individual or entity offering these terms, and the **software** is the software the licensor makes available under these terms.
-
-**You** refers to the individual or entity agreeing to these terms.
-
-**Your company** is any legal entity, sole proprietorship, or other kind of organization that you work for, plus all organizations that have control over, are under the control of, or are under common control with that organization.  **Control** means ownership of substantially all the assets of an entity, or the power to direct its management and policies by vote, contract, or otherwise.  Control can be direct or indirect.
-
-**Your licenses** are all the licenses granted to you for the software under these terms.
-
-**Use** means anything you do with the software requiring one of your licenses.
+SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 OR GPL-3.0-or-later

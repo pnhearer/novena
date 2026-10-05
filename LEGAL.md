@@ -4,7 +4,7 @@ This file explains what the project is and is not. It is not legal advice.
 
 ## Purpose
 
-novena is an independent research and hobby project, shared for noncommercial use. It exists for interoperability, education, and the study and preservation of software that people have lawfully acquired. It is offered in the hope that it is useful to people writing emulators, recompilers and tools.
+novena is an independent research and hobby project. It exists for interoperability, education, and the study and preservation of software that people have lawfully acquired. It is offered in the hope that it is useful to people writing emulators, recompilers and tools.
 
 ## Independent work
 
@@ -26,7 +26,7 @@ Use the library only with software you are entitled to use, and in line with the
 
 ## No warranty
 
-The software is provided as is, without warranty of any kind, as set out in [LICENSE.md](LICENSE.md).
+The software is provided as is, without warranty of any kind, as set out in the licence texts in the LICENSES folder.
 
 ## Concerns
 

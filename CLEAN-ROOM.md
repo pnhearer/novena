@@ -5,7 +5,7 @@ novena reimplements an interface. It must never contain, or be derived from, the
 ## Sources that may be used
 
 1. **Observation of software you lawfully own.** Which API functions a program asks for, the order and arguments of its calls, and the visible result, observed on your own copy with your own tools.
-2. **Public facts.** Function and symbol names that programs carry in their own files, public specifications such as Vulkan and SPIR-V, published research, and openly licensed code whose licence allows it to be included in this project (permissive licences such as MIT, BSD and Apache-2.0).
+2. **Public facts.** Function and symbol names that programs carry in their own files, public specifications such as Vulkan and SPIR-V, published research, and openly licensed code whose licence allows it to be included under every licence this project is offered under. In practice that means permissive licences such as MIT, BSD and Apache-2.0.
 3. **Your own experiments.** Small test programs written for this project.
 4. **Hardware behaviour documented in public.** Open drivers and public register documentation for the graphics processor, under their licences.
 
@@ -19,7 +19,7 @@ The rule is general. It is not limited to one company or one product.
 - **Proprietary source code**, including driver, firmware, operating system, engine and game source, however it was obtained.
 - **Code taken from proprietary binaries.** Decompiled or disassembled code of any proprietary driver, library, firmware or program must not be copied, translated or closely paraphrased into this project. Reading a binary you own to learn what an interface does is observation. Carrying its code across is not.
 - **Internal documents**: design documents, bug trackers, emails, slides, certification or guideline documents not published by their owner.
-- **Code under a licence that does not allow inclusion here**, which includes copyleft licences such as the GPL family. Such projects may be read for understanding where their licence allows. Their code may not be copied or closely paraphrased.
+- **Code under a licence that does not allow inclusion here.** That includes copyleft licences such as the GPL family: novena is also offered under noncommercial and commercial terms, which GPL-licensed code from others cannot be placed under. Such projects may be read for understanding where their licence allows. Their code may not be copied or closely paraphrased.
 
 If you are unsure whether something falls under one of these, treat it as excluded and ask.
 

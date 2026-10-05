@@ -1,4 +1,15 @@
 Required Notice: Copyright (c) 2026 Khargoosh (https://github.com/pnhearer/novena)
 
-novena is licensed under the PolyForm Noncommercial License 1.0.0. See LICENSE.md.
-Commercial use requires a separate licence. See COMMERCIAL.md.
+novena is licensed under your choice of:
+
+  - the PolyForm Noncommercial License 1.0.0
+    (LICENSES/PolyForm-Noncommercial-1.0.0.md), or
+  - the GNU General Public License, version 3 or (at your option) any later
+    version (LICENSES/GPL-3.0-or-later.txt).
+
+Commercial use that fits neither needs a separate licence. See COMMERCIAL.md.
+LICENSE.md explains which licence applies to which use.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE.
