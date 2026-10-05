@@ -1,0 +1,45 @@
+# Clean-room rules
+
+novena reimplements an interface. It must never contain, or be derived from, the proprietary implementation or its documentation. These rules exist so that the origin of every line can be shown.
+
+## Sources that may be used
+
+1. **Observation of software you lawfully own.** Which API functions a program asks for, the order and arguments of its calls, and the visible result, observed on your own copy with your own tools.
+2. **Public facts.** Function and symbol names that programs carry in their own files, public specifications such as Vulkan and SPIR-V, published research, and openly licensed code whose licence is compatible with this project.
+3. **Your own experiments.** Small test programs written for this project.
+4. **Hardware behaviour documented in public.** Open drivers and public register documentation for the graphics processor, under their licences.
+
+## Sources that must not be used
+
+- The platform's software development kit: its headers, libraries, samples, tools and documentation. This includes copies found online. A leak does not make material public for this purpose.
+- Any material received under a non-disclosure agreement.
+- Decompiled or disassembled code of the proprietary driver, copied or translated into this project. Reading a binary you own to learn what an interface does is observation. Carrying its code across is not.
+- Code from projects whose licence is not compatible with MIT or Apache-2.0. Such projects may be read for understanding where their licence allows. Their code may not be copied or closely paraphrased.
+
+## Separation of people
+
+Anyone who has seen the platform's proprietary development material does not write, review or advise on the parts of novena that reimplement what that material covers. They are welcome in parts that do not touch it, such as the Vulkan backend internals, build tooling and tests of public behaviour.
+
+If you are not sure which side of that line you are on, say so before contributing. Nobody will hold it against you. An undeclared problem is the only kind that can hurt the project.
+
+## Provenance notes
+
+Each function, structure layout, constant and behaviour in the library points to a note under `docs/provenance/`. A note records:
+
+- what was learned,
+- how it was learned (which kind of permitted source, which experiment),
+- who did the work and when,
+- what is still a guess.
+
+A change that adds behaviour without a note is not merged. The format is in [docs/provenance/README.md](docs/provenance/README.md).
+
+## What stays out of the repository
+
+- Game files, dumps, shaders taken from games, captures of copyrighted output, keys and firmware.
+- Traces that contain a program's data rather than the shape of its calls. A list of function names and call counts is fine. A buffer of a game's vertices or textures is not.
+
+Tests use programs and assets written for this project.
+
+## If something goes wrong
+
+If material that breaks these rules is found in the repository, it is removed, the affected work is redone by someone who has not seen it, and the incident is written down in the provenance folder. Report it by opening an issue or, if you prefer, privately to a maintainer.

@@ -1,0 +1,10 @@
+[package]
+name = "novena"
+description = "A Vulkan implementation of a console graphics API, written from scratch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
