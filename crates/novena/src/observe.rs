@@ -7,8 +7,11 @@
 //! that is the evidence a signature is worked out from.
 //!
 //! Only the shape is kept: ranges, a handful of distinct values, and whether
-//! a value was a readable address. The memory an address points to is never
-//! copied.
+//! a value was a readable address. For an address argument, the first 64
+//! bytes behind it are classified word by word in the same way, and compared
+//! after the call to see what the function wrote. No memory is stored or
+//! reported verbatim: a word that is not a small integer or a plausible
+//! float is reported only as "other".
 
 use crate::instance::{Host, Registers};
 use std::fmt::{self, Write};
@@ -166,11 +169,185 @@ impl fmt::Display for RegisterShape {
     }
 }
 
+/// Bytes looked at behind an address argument.
+pub const POINTEE_BYTES: usize = 64;
+const POINTEE_WORDS: usize = POINTEE_BYTES / 4;
+const WORD_DISTINCT_LIMIT: usize = 4;
+
+/// What one 32-bit word behind an address argument held across the sampled
+/// calls, and whether the function changed it.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct WordShape {
+    min: u32,
+    max: u32,
+    zeros: u64,
+    /// Samples where the word read as a plausible float and not as a small
+    /// integer.
+    floats: u64,
+    distinct: Vec<u32>,
+    more_distinct: bool,
+    /// Samples where the word differed after the function returned.
+    changed: u64,
+}
+
+impl WordShape {
+    fn record(&mut self, value: u32, first: bool) {
+        if first {
+            self.min = value;
+            self.max = value;
+        } else {
+            self.min = self.min.min(value);
+            self.max = self.max.max(value);
+        }
+        self.zeros += u64::from(value == 0);
+        let small = u64::from(value) < LOWEST_ADDRESS;
+        let float = !small && plausible_float(f64::from(f32::from_bits(value))).is_some();
+        self.floats += u64::from(float);
+        if !self.distinct.contains(&value) {
+            if self.distinct.len() < WORD_DISTINCT_LIMIT {
+                self.distinct.push(value);
+            } else {
+                self.more_distinct = true;
+            }
+        }
+    }
+}
+
+/// What the memory behind one address argument looked like: the first 64
+/// bytes, as sixteen 32-bit words and eight 64-bit words.
+///
+/// This is the one place the library looks at memory an argument points to.
+/// It keeps per-word ranges and a few small or float values. Words that are
+/// neither are reported only as "other", and nothing is kept verbatim.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct PointeeShape {
+    samples: u64,
+    words: [WordShape; POINTEE_WORDS],
+    /// Samples where a 64-bit word was itself a readable address.
+    addresses: [u64; POINTEE_WORDS / 2],
+    /// Samples compared before and after the call.
+    compared: u64,
+}
+
+fn read_pointee(host: Option<&Host>, address: u64) -> Option<[u8; POINTEE_BYTES]> {
+    let host = host?;
+    let read = host.read_memory?;
+    if !(LOWEST_ADDRESS..ADDRESS_LIMIT).contains(&address) {
+        return None;
+    }
+    let mut bytes = [0u8; POINTEE_BYTES];
+    // SAFETY: the buffer is valid for the bytes requested; the host's
+    // callback reports an inaccessible range instead of faulting.
+    (unsafe { read(host.user, address, bytes.as_mut_ptr(), POINTEE_BYTES as u64) } == 0)
+        .then_some(bytes)
+}
+
+fn word(bytes: &[u8; POINTEE_BYTES], index: usize) -> u32 {
+    u32::from_le_bytes(
+        bytes[index * 4..index * 4 + 4]
+            .try_into()
+            .expect("four bytes"),
+    )
+}
+
+impl PointeeShape {
+    fn record(&mut self, host: Option<&Host>, bytes: &[u8; POINTEE_BYTES]) {
+        let first = self.samples == 0;
+        self.samples += 1;
+        for (index, shape) in self.words.iter_mut().enumerate() {
+            shape.record(word(bytes, index), first);
+        }
+        for (index, count) in self.addresses.iter_mut().enumerate() {
+            let value =
+                u64::from(word(bytes, index * 2)) | u64::from(word(bytes, index * 2 + 1)) << 32;
+            *count += u64::from(is_readable_address(host, value));
+        }
+    }
+
+    fn record_change(&mut self, before: &[u8; POINTEE_BYTES], after: &[u8; POINTEE_BYTES]) {
+        self.compared += 1;
+        for (index, shape) in self.words.iter_mut().enumerate() {
+            shape.changed += u64::from(word(before, index) != word(after, index));
+        }
+    }
+
+    fn write(&self, out: &mut String, register: usize) {
+        let _ = writeln!(
+            out,
+            "    x{register} points to ({} sampled, {} compared after the call):",
+            self.samples, self.compared
+        );
+        let mut index = 0;
+        while index < POINTEE_WORDS {
+            let quad = index / 2;
+            let offset = index * 4;
+            // A 64-bit word that was an address every time is shown as one.
+            if index % 2 == 0 && self.addresses[quad] == self.samples {
+                let changed = self.words[index].changed.max(self.words[index + 1].changed);
+                let _ = writeln!(out, "      +{offset:#04x} address{}", changed_note(changed));
+                index += 2;
+                continue;
+            }
+            let shape = &self.words[index];
+            let mut line = format!("      +{offset:#04x} ");
+            if shape.max == 0 {
+                line.push_str("zero");
+            } else if u64::from(shape.max) < LOWEST_ADDRESS {
+                let _ = write!(
+                    line,
+                    "small min={:#x} max={:#x} values=[",
+                    shape.min, shape.max
+                );
+                push_words(&mut line, shape, |value| format!("{value:#x}"));
+            } else if shape.floats + shape.zeros == self.samples {
+                line.push_str("f32 values=[");
+                push_words(&mut line, shape, |value| {
+                    format!("{}", f32::from_bits(value))
+                });
+            } else {
+                line.push_str("other");
+                if index % 2 == 0 && self.addresses[quad] > 0 {
+                    let _ = write!(
+                        line,
+                        " (address in {}/{})",
+                        self.addresses[quad], self.samples
+                    );
+                }
+            }
+            line.push_str(&changed_note(shape.changed));
+            let _ = writeln!(out, "{line}");
+            index += 1;
+        }
+    }
+}
+
+fn changed_note(changed: u64) -> String {
+    if changed > 0 {
+        format!(" changed-by-call={changed}")
+    } else {
+        String::new()
+    }
+}
+
+fn push_words(line: &mut String, shape: &WordShape, show: impl Fn(u32) -> String) {
+    let shown: Vec<String> = shape.distinct.iter().map(|value| show(*value)).collect();
+    line.push_str(&shown.join(" "));
+    line.push_str(if shape.more_distinct { " ...]" } else { "]" });
+}
+
+/// The memory behind each address argument as it was when a call started,
+/// kept until the same thread reports the return so the two can be compared.
+#[derive(Clone, Copy)]
+pub(crate) struct CallSnapshot {
+    pointees: [Option<(u64, [u8; POINTEE_BYTES])>; 8],
+}
+
 /// What one function's calls looked like.
 #[derive(Debug, Clone, Default)]
 pub struct FunctionShape {
     sampled_calls: u64,
     sampled_returns: u64,
+    pointees: [PointeeShape; 8],
     x: [RegisterShape; 8],
     d: [RegisterShape; 8],
     result_x0: RegisterShape,
@@ -196,20 +373,53 @@ fn is_readable_address(host: Option<&Host>, value: u64) -> bool {
 }
 
 impl FunctionShape {
-    pub(crate) fn record_call(&mut self, host: Option<&Host>, registers: &Registers) {
+    /// Sample a call. Returns what the address arguments pointed to, for
+    /// comparison when the call returns, or `None` once sampling has stopped.
+    pub(crate) fn record_call(
+        &mut self,
+        host: Option<&Host>,
+        registers: &Registers,
+    ) -> Option<CallSnapshot> {
         if self.sampled_calls >= SAMPLE_LIMIT {
-            return;
+            return None;
         }
         self.sampled_calls += 1;
-        for (shape, value) in self.x.iter_mut().zip(registers.x) {
-            shape.record(value, is_readable_address(host, value));
+        let mut snapshot = CallSnapshot {
+            pointees: [None; 8],
+        };
+        for (index, value) in registers.x.into_iter().enumerate() {
+            let bytes = read_pointee(host, value);
+            // A full read can fail near the end of a mapping where a short
+            // one succeeds, so readability is still asked separately.
+            let readable = bytes.is_some() || is_readable_address(host, value);
+            self.x[index].record(value, readable);
+            if let Some(bytes) = bytes {
+                self.pointees[index].record(host, &bytes);
+                snapshot.pointees[index] = Some((value, bytes));
+            }
         }
         for (shape, value) in self.d.iter_mut().zip(registers.d) {
             shape.record(value, false);
         }
+        Some(snapshot)
     }
 
-    pub(crate) fn record_return(&mut self, host: Option<&Host>, registers: &Registers) {
+    pub(crate) fn record_return(
+        &mut self,
+        host: Option<&Host>,
+        registers: &Registers,
+        snapshot: Option<&CallSnapshot>,
+    ) {
+        if let Some(snapshot) = snapshot {
+            for (index, pointee) in snapshot.pointees.iter().enumerate() {
+                let Some((address, before)) = pointee else {
+                    continue;
+                };
+                if let Some(after) = read_pointee(host, *address) {
+                    self.pointees[index].record_change(before, &after);
+                }
+            }
+        }
         if self.sampled_returns >= SAMPLE_LIMIT {
             return;
         }
@@ -237,6 +447,9 @@ impl FunctionShape {
         );
         for (index, shape) in self.x.iter().enumerate() {
             let _ = writeln!(out, "  x{index} {shape}");
+            if self.pointees[index].samples > 0 {
+                self.pointees[index].write(out, index);
+            }
         }
         for (index, shape) in self.d.iter().enumerate() {
             let _ = writeln!(out, "  d{index} {shape}");
@@ -330,12 +543,81 @@ mod tests {
         assert!(!text.contains("result"), "{text}");
     }
 
+    /// A host with one readable page whose contents the test controls.
+    static PAGE: std::sync::Mutex<[u8; 256]> = std::sync::Mutex::new([0; 256]);
+    const PAGE_BASE: u64 = 0x40_0000;
+
+    unsafe extern "C" fn read_page(
+        _user: *mut c_void,
+        address: u64,
+        out: *mut u8,
+        size: u64,
+    ) -> i32 {
+        let page = PAGE.lock().unwrap();
+        let Some(offset) = address.checked_sub(PAGE_BASE) else {
+            return 1;
+        };
+        let (offset, size) = (offset as usize, size as usize);
+        if offset + size > page.len() {
+            return 1;
+        }
+        // SAFETY: the caller passes a buffer of `size` bytes.
+        unsafe { std::ptr::copy_nonoverlapping(page[offset..].as_ptr(), out, size) };
+        0
+    }
+
+    #[test]
+    fn memory_behind_an_address_is_classified_and_changes_are_noticed() {
+        let host = Host {
+            user: std::ptr::null_mut(),
+            read_memory: Some(read_page),
+            write_memory: None,
+        };
+        let mut shape = FunctionShape::default();
+        for call in 0..3u32 {
+            {
+                let mut page = PAGE.lock().unwrap();
+                page.fill(0);
+                page[0..4].copy_from_slice(&0.5f32.to_bits().to_le_bytes());
+                page[4..8].copy_from_slice(&(call + 1).to_le_bytes());
+                // A pointer back into the page, and a word that is neither
+                // small nor a float.
+                page[8..16].copy_from_slice(&(PAGE_BASE + 0x80).to_le_bytes());
+                page[16..20].copy_from_slice(&0xdead_beefu32.to_le_bytes());
+            }
+            let mut registers = Registers::default();
+            registers.x[1] = PAGE_BASE;
+            let snapshot = shape.record_call(Some(&host), &registers);
+            // The function writes an output into the fourth word.
+            PAGE.lock().unwrap()[12 + 12..12 + 16].copy_from_slice(&7u32.to_le_bytes());
+            shape.record_return(Some(&host), &Registers::default(), snapshot.as_ref());
+        }
+        let mut text = String::new();
+        shape.write(&mut text, "someFunction", 3);
+        assert!(
+            text.contains("    x1 points to (3 sampled, 3 compared after the call):"),
+            "{text}"
+        );
+        assert!(text.contains("      +0x00 f32 values=[0.5]\n"), "{text}");
+        assert!(
+            text.contains("      +0x04 small min=0x1 max=0x3 values=[0x1 0x2 0x3]\n"),
+            "{text}"
+        );
+        assert!(text.contains("      +0x08 address\n"), "{text}");
+        assert!(text.contains("      +0x10 other\n"), "{text}");
+        assert!(
+            text.contains("      +0x18 zero changed-by-call=3\n"),
+            "{text}"
+        );
+        assert!(!text.contains("dead"), "{text}");
+    }
+
     #[test]
     fn sampling_stops_at_the_limit() {
         let mut shape = FunctionShape::default();
         for _ in 0..SAMPLE_LIMIT + 10 {
             shape.record_call(None, &Registers::default());
-            shape.record_return(None, &Registers::default());
+            shape.record_return(None, &Registers::default(), None);
         }
         assert_eq!(shape.sampled_calls(), SAMPLE_LIMIT);
         assert_eq!(shape.sampled_returns, SAMPLE_LIMIT);

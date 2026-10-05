@@ -41,7 +41,11 @@ The census holds names and counts only. It never contains a program's data, so i
 
 A host can let the platform's own implementation keep doing the work and only tell novena what passed by. It calls `novena_instance_call` before the original function, ignores what novena writes to the registers, runs the original, and then calls `novena_instance_returned` with the result registers.
 
-novena samples the first calls of each function and records the shape of what each register held: its range, a few distinct values, and whether the values were addresses the host could read (it asks the host's `read_memory` for eight bytes to find out). `novena_instance_write_shapes` writes that as text. Addresses are counted and never listed, and the memory behind them is never copied.
+novena samples the first calls of each function and records the shape of what each register held: its range, a few distinct values, and whether the values were addresses the host could read (it asks the host's `read_memory` to find out). For an address, it also classifies the first 64 bytes behind it word by word, and reads them again when the host reports the return, to see which words the function changed. `novena_instance_write_shapes` writes all of that as text.
+
+Addresses are counted and never listed. Memory is not stored or printed verbatim: a word shows up as a small integer, a plausible float, an address, or just "other".
+
+The before-and-after comparison relies on the host reporting a function's return on the same thread as its call, with no other reported call in between.
 
 This is how signatures are worked out. See [provenance note 0006](provenance/0006-observing-shapes.md).
 

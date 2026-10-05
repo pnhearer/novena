@@ -2,7 +2,8 @@
 //! calls to.
 
 use crate::functions::{self, FunctionId};
-use crate::observe::FunctionShape;
+use crate::observe::{CallSnapshot, FunctionShape};
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::fmt;
@@ -67,6 +68,12 @@ pub enum Status {
     BadFunction = 2,
     /// A pointer argument was null, or a file could not be written.
     BadArgument = 3,
+}
+
+thread_local! {
+    /// The call this thread last reported and what its address arguments
+    /// pointed to, until the matching return is reported.
+    static PENDING: Cell<Option<(u32, CallSnapshot)>> = const { Cell::new(None) };
 }
 
 pub struct Instance {
@@ -136,10 +143,13 @@ impl Instance {
         };
         // The first calls of each function are sampled for their shape; after
         // that only the counter is touched.
-        if counter.fetch_add(1, Ordering::Relaxed) < crate::observe::SAMPLE_LIMIT {
+        let snapshot = if counter.fetch_add(1, Ordering::Relaxed) < crate::observe::SAMPLE_LIMIT {
             self.shape(function)
-                .record_call(self.host.as_ref(), registers);
-        }
+                .record_call(self.host.as_ref(), registers)
+        } else {
+            None
+        };
+        PENDING.set(snapshot.map(|snapshot| (function.0, snapshot)));
         registers.x[0] = 0;
         registers.x[1] = 0;
         registers.d[0] = 0;
@@ -152,8 +162,14 @@ impl Instance {
         if function.0 as usize >= self.shapes.len() {
             return Status::BadFunction;
         }
+        // The snapshot only belongs to this return if the thread's last
+        // reported call was the same function.
+        let snapshot = PENDING
+            .take()
+            .filter(|(pending, _)| *pending == function.0)
+            .map(|(_, snapshot)| snapshot);
         self.shape(function)
-            .record_return(self.host.as_ref(), registers);
+            .record_return(self.host.as_ref(), registers, snapshot.as_ref());
         Status::Ok
     }
 
