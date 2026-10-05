@@ -1,4 +1,4 @@
-/* novena host interface, version 1. See docs/host-interface.md. */
+/* novena host interface, version 2. See docs/host-interface.md. */
 #ifndef NOVENA_H
 #define NOVENA_H
 
@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define NOVENA_HOST_INTERFACE_VERSION 1u
+#define NOVENA_HOST_INTERFACE_VERSION 2u
 
 /* Returned by lookups for a name the library does not know. */
 #define NOVENA_FUNCTION_NONE UINT32_MAX
@@ -82,9 +82,20 @@ uint32_t novena_instance_request(const novena_instance *instance, const char *na
 novena_status novena_instance_call(const novena_instance *instance, uint32_t function,
                                    novena_registers *registers);
 
+/* The original implementation of a function returned; `registers` holds its
+ * result registers. Only for hosts that let the original implementation run,
+ * so that results are sampled along with arguments. */
+novena_status novena_instance_returned(const novena_instance *instance, uint32_t function,
+                                       const novena_registers *registers);
+
 /* What was requested and called so far. */
 uint64_t novena_instance_call_count(const novena_instance *instance, uint32_t function);
 novena_status novena_instance_write_census(const novena_instance *instance, const char *path);
+
+/* What the argument and result registers held in the first calls of each
+ * function: ranges, a few distinct values, and which were readable addresses.
+ * Never the memory behind an address. */
+novena_status novena_instance_write_shapes(const novena_instance *instance, const char *path);
 
 #ifdef __cplusplus
 }

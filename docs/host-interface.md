@@ -1,6 +1,6 @@
 # Host interface
 
-The host is whatever runs the program: an emulator, or the runtime of a recompiled program. novena does not load or run programs. The host tells it what the program asked for and forwards the program's calls. The C declarations are in [include/novena.h](../include/novena.h). This page describes interface version 1.
+The host is whatever runs the program: an emulator, or the runtime of a recompiled program. novena does not load or run programs. The host tells it what the program asked for and forwards the program's calls. The C declarations are in [include/novena.h](../include/novena.h). This page describes interface version 2.
 
 ## The two moments a host hooks
 
@@ -36,6 +36,14 @@ unknown 1 <a name that is not in the table>
 ```
 
 The census holds names and counts only. It never contains a program's data, so it can be shared.
+
+## Observing shapes
+
+A host can let the platform's own implementation keep doing the work and only tell novena what passed by. It calls `novena_instance_call` before the original function, ignores what novena writes to the registers, runs the original, and then calls `novena_instance_returned` with the result registers.
+
+novena samples the first calls of each function and records the shape of what each register held: its range, a few distinct values, and whether the values were addresses the host could read (it asks the host's `read_memory` for eight bytes to find out). `novena_instance_write_shapes` writes that as text. Addresses are counted and never listed, and the memory behind them is never copied.
+
+This is how signatures are worked out. See [provenance note 0006](provenance/0006-observing-shapes.md).
 
 ## Versioning
 

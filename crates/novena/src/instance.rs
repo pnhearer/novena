@@ -2,6 +2,7 @@
 //! calls to.
 
 use crate::functions::{self, FunctionId};
+use crate::observe::FunctionShape;
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::fmt;
@@ -72,6 +73,7 @@ pub struct Instance {
     host: Option<Host>,
     requested: Vec<AtomicBool>,
     calls: Vec<AtomicU64>,
+    shapes: Vec<Mutex<FunctionShape>>,
     /// Names the program asked for that are not in the table, with how often.
     unknown_requests: Mutex<BTreeMap<String, u64>>,
 }
@@ -98,6 +100,7 @@ impl Instance {
             host,
             requested: (0..count).map(|_| AtomicBool::new(false)).collect(),
             calls: (0..count).map(|_| AtomicU64::new(0)).collect(),
+            shapes: (0..count).map(|_| Mutex::default()).collect(),
             unknown_requests: Mutex::new(BTreeMap::new()),
         }
     }
@@ -131,11 +134,47 @@ impl Instance {
         let Some(counter) = self.calls.get(function.0 as usize) else {
             return Status::BadFunction;
         };
-        counter.fetch_add(1, Ordering::Relaxed);
+        // The first calls of each function are sampled for their shape; after
+        // that only the counter is touched.
+        if counter.fetch_add(1, Ordering::Relaxed) < crate::observe::SAMPLE_LIMIT {
+            self.shape(function)
+                .record_call(self.host.as_ref(), registers);
+        }
         registers.x[0] = 0;
         registers.x[1] = 0;
         registers.d[0] = 0;
         Status::Unimplemented
+    }
+
+    /// A host that lets the original implementation run reports what it
+    /// returned here, so results are sampled along with arguments.
+    pub fn returned(&self, function: FunctionId, registers: &Registers) -> Status {
+        if function.0 as usize >= self.shapes.len() {
+            return Status::BadFunction;
+        }
+        self.shape(function)
+            .record_return(self.host.as_ref(), registers);
+        Status::Ok
+    }
+
+    fn shape(&self, function: FunctionId) -> std::sync::MutexGuard<'_, FunctionShape> {
+        self.shapes[function.0 as usize]
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The sampled shapes of every function that was called, as text.
+    pub fn shapes_report(&self) -> String {
+        let mut out = String::from(
+            "# novena shapes: what the argument and result registers held, per function\n",
+        );
+        for (id, name) in functions::all() {
+            let calls = self.call_count(id);
+            if calls > 0 {
+                self.shape(id).write(&mut out, name, calls);
+            }
+        }
+        out
     }
 
     pub fn call_count(&self, function: FunctionId) -> u64 {

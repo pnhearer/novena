@@ -13,6 +13,7 @@
 
 pub mod functions;
 mod instance;
+pub mod observe;
 
 pub use instance::{Census, Host, Instance, Registers, Status};
 
@@ -21,7 +22,7 @@ use std::ffi::{c_char, CStr};
 
 /// Version of the host interface. It changes when a host built against an
 /// older `include/novena.h` could no longer use the library.
-pub const HOST_INTERFACE_VERSION: u32 = 1;
+pub const HOST_INTERFACE_VERSION: u32 = 2;
 
 /// Returned by lookups for a name the library does not know.
 pub const FUNCTION_NONE: u32 = u32::MAX;
@@ -144,6 +145,49 @@ pub unsafe extern "C" fn novena_instance_call(
     match unsafe { (instance.as_ref(), registers.as_mut()) } {
         (Some(instance), Some(registers)) => instance.call(FunctionId(function), registers),
         _ => Status::BadArgument,
+    }
+}
+
+/// The original implementation of `function` returned. `registers` holds
+/// its result registers. Only hosts that let the original implementation run
+/// call this; it lets results be sampled along with arguments.
+///
+/// # Safety
+/// `instance` must be live and `registers` must point to a valid `Registers`.
+#[no_mangle]
+pub unsafe extern "C" fn novena_instance_returned(
+    instance: *const Instance,
+    function: u32,
+    registers: *const Registers,
+) -> Status {
+    // SAFETY: the caller passes a live instance and valid registers.
+    match unsafe { (instance.as_ref(), registers.as_ref()) } {
+        (Some(instance), Some(registers)) => instance.returned(FunctionId(function), registers),
+        _ => Status::BadArgument,
+    }
+}
+
+/// Write the sampled argument and result shapes to a text file.
+///
+/// # Safety
+/// `instance` must be live; `path` must be NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn novena_instance_write_shapes(
+    instance: *const Instance,
+    path: *const c_char,
+) -> Status {
+    // SAFETY: the caller passes a live instance.
+    let Some(instance) = (unsafe { instance.as_ref() }) else {
+        return Status::BadArgument;
+    };
+    if path.is_null() {
+        return Status::BadArgument;
+    }
+    // SAFETY: the caller passes a NUL-terminated string.
+    let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
+    match std::fs::write(&*path, instance.shapes_report()) {
+        Ok(()) => Status::Ok,
+        Err(_) => Status::BadArgument,
     }
 }
 
