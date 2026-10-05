@@ -60,7 +60,7 @@ Rust stable and a C compiler are enough. Vulkan is not needed yet. The last comm
 You choose one of three:
 
 - **Noncommercial use:** free, under PolyForm Noncommercial 1.0.0.
-- **GPL projects:** free, under the GNU GPL version 3 or later.
+- **GPL and AGPL projects:** free, under the GNU Affero GPL version 3 or later.
 - **Closed commercial use:** needs a paid commercial licence.
 
 [LICENSE.md](LICENSE.md) has a table that says which one fits your case. [FAQ.md](FAQ.md) explains the reasons in plain words, and [COMMERCIAL.md](COMMERCIAL.md) covers commercial licences. Notes on scope and intent are in [LEGAL.md](LEGAL.md).

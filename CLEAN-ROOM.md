@@ -24,7 +24,7 @@ If you are unsure whether something falls under one of these, treat it as exclud
 
 ## Open code that may be read but not copied
 
-Some openly published code has a licence that does not allow it to be included here. Copyleft licences such as the GPL family are the main case: novena is also offered under noncommercial and commercial terms, which other people's GPL code cannot be placed under.
+Some openly published code has a licence that does not allow it to be included here. Copyleft licences such as the GPL family are the main case: novena is also offered under noncommercial and commercial terms, which other people's copyleft code cannot be placed under.
 
 Such code is not excluded material. It is public, and reading it to understand a general technique is allowed where its licence allows. What is not allowed is copying it, translating it, or writing something that follows it closely. If a part of novena was informed by reading such a project, say so in the provenance note.
 

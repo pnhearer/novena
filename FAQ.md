@@ -11,12 +11,12 @@ Research and curiosity. It is an attempt to understand how a console's graphics 
 Yes. There are three ways, and you choose one:
 
 1. **Noncommercial use is free.** Personal projects, hobby work, study, teaching, research, and use by charities, schools, public bodies and similar organisations.
-2. **GPL projects can include it for free.** If your project is under the GPL (version 3, or version 2 "or later"), novena can be part of it under the GPL.
+2. **GPL and AGPL projects can include it for free.** If your project is under version 3 of the GPL or AGPL (or GPL version 2 "or later"), novena can be part of it under the AGPL.
 3. **Closed commercial use is paid.** If you want to make money with it and keep your own source closed, you need a commercial licence.
 
 ## Can I change it?
 
-Yes. Under the noncommercial licence you can modify it however you like for noncommercial purposes and share your changes on the same terms. Under the GPL you can modify it and share your changes under the GPL. Either way, pass the licence terms and the copyright notice along with it so the next person knows the terms too. Each licence says exactly how.
+Yes. Under the noncommercial licence you can modify it however you like for noncommercial purposes and share your changes on the same terms. Under the AGPL you can modify it and share your changes under the AGPL. Either way, pass the licence terms and the copyright notice along with it so the next person knows the terms too. Each licence says exactly how.
 
 ## Why is it not simply free for everything?
 
@@ -34,21 +34,23 @@ If you are in between, ask before you ship.
 
 ## Why are there two free licences? Is one not enough?
 
-Each covers people the other leaves out. The noncommercial licence is the simple one: its main condition is "not for commercial use". But projects under the GPL are not allowed to take in code that carries a restriction like that, so the GPL is offered as well and those projects can include novena too.
+Each covers people the other leaves out. The noncommercial licence is the simple one: its main condition is "not for commercial use". But projects under the GPL are not allowed to take in code that carries a restriction like that. So the AGPL is offered as well. It is the GPL's sibling, GPL version 3 projects are allowed to combine with it, and it lets those projects include novena too.
 
-## Can a company use the GPL option and sell it without paying?
+## Why the AGPL and not the plain GPL?
 
-Only by following the GPL in full. Whatever they hand to customers that combines novena with their own code has to be under the GPL, and the customers must be able to get its source. For software shipped in consumer products, the GPL in most cases also requires what a buyer needs to install a changed version. A seller who does all that is sharing their work back, which is fair. A seller who wants to keep things closed needs the commercial licence.
+The plain GPL only asks for source when the software itself is handed to someone. A company could run it on its own servers, charge for the service, and share nothing. The AGPL closes that: people who use the software over a network must be offered its source too.
 
-One thing the GPL does not cover is worth saying plainly. Someone who only runs novena on their own machines, and never hands the software to anyone else, is not required by the GPL to share source, even if they charge for what those machines do.
+## Can a company use the AGPL option and make money without paying?
+
+Only by following the AGPL in full. Whatever they hand to customers, or let people use over a network, that combines novena with their own code has to come with its source under the same kind of licence. For software shipped in consumer products, the licence in most cases also requires what a buyer needs to install a changed version. A company that does all that is sharing its work back, which is fair. A company that wants to keep things closed needs the commercial licence.
 
 ## I run a free, community emulator or tool. Can I use it?
 
-Yes. If your project is noncommercial, use the noncommercial licence. If your project is under the GPL, use the GPL. Either way you may bundle novena. The one case that fits neither is a project under GPL version 2 only. If that is you, open an issue.
+Yes. If your project is noncommercial, use the noncommercial licence. If your project is under the GPL or AGPL, use the AGPL. Either way you may bundle novena. The one case that fits neither is a project under GPL version 2 only. If that is you, open an issue.
 
 ## Is this open source?
 
-Under the GPL option, yes: the GPL is an open source and free software licence. The noncommercial option is not open source by the usual definition, because that definition does not allow a noncommercial restriction. You only need one of the two, so pick the one that suits you.
+Under the AGPL option, yes: the AGPL is an open source and free software licence. The noncommercial option is not open source by the usual definition, because that definition does not allow a noncommercial restriction. You only need one of the two, so pick the one that suits you.
 
 ## Can I contribute?
 

@@ -1,6 +1,6 @@
 # Contributor agreement
 
-novena is offered to the public under the PolyForm Noncommercial License 1.0.0 or the GNU General Public License version 3 or later, and to commercial users under separate licences. For that to work, the project needs permission to use contributions under all of them. This agreement gives that permission and nothing more.
+novena is offered to the public under the PolyForm Noncommercial License 1.0.0 or the GNU Affero General Public License version 3 or later, and to commercial users under separate licences. For that to work, the project needs permission to use contributions under all of them. This agreement gives that permission and nothing more.
 
 By submitting a contribution to this repository, you agree that:
 
