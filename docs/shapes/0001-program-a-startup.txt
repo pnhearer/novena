@@ -1,0 +1,3361 @@
+# novena shapes: what the argument and result registers held, per function
+nvnBlendStateSetBlendEquation calls=1088 sampled=1088 returns_sampled=1088
+  x0 address distinct=6+
+  x1 small min=0x1 max=0x5 values=[0x1 0x5 0x4]
+  x2 small min=0x1 max=0x5 values=[0x1 0x5 0x4]
+  x3 mixed distinct=3 readable=136/1088 zero=82/1088
+  x4 mixed distinct=5 readable=3/1088 zero=89/1088
+  x5 small min=0x0 max=0x2 values=[0x0 0x1 0x2]
+  x6 address-or-null distinct=5 readable=1072/1088 zero=16/1088
+  x7 address-or-null distinct=2 readable=936/1088 zero=152/1088
+  d0 number values=[wide wide wide]
+  d1 number values=[wide wide wide wide wide wide ...]
+  d2 number values=[0x4b400000 0x1 0x0 0x4b7fffff 0x4b4000ff 0x4 ...]
+  d3 number values=[0x4b400000 0x4b4000ff 0x3 0x80000000 wide]
+  d4 number values=[0x3f800000 wide wide 0x0 wide wide]
+  d5 number values=[wide wide 0x0 wide wide wide]
+  d6 number values=[wide wide 0x1 0x3f800000 wide]
+  d7 number values=[0x0 0x2 wide]
+  result x0 address distinct=6+
+  result x1 small min=0x1 max=0x5 values=[0x1 0x5 0x4]
+  result d0 number values=[wide wide wide]
+nvnBlendStateSetBlendFunc calls=1088 sampled=1088 returns_sampled=1088
+  x0 address distinct=6+
+  x1 small min=0x1 max=0x9 values=[0x2 0x5 0x1 0x9 0x3]
+  x2 small min=0x1 max=0x9 values=[0x1 0x6 0x5 0x2 0x9 0x7 ...]
+  x3 small min=0x1 max=0x8 values=[0x2 0x1 0x5 0x8]
+  x4 small min=0x1 max=0x7 values=[0x1 0x2 0x6 0x7 0x5]
+  x5 small min=0x0 max=0x2 values=[0x0 0x1 0x2]
+  x6 address-or-null distinct=5 readable=1072/1088 zero=16/1088
+  x7 address-or-null distinct=2 readable=936/1088 zero=152/1088
+  d0 number values=[wide wide wide]
+  d1 number values=[wide wide wide wide wide wide ...]
+  d2 number values=[0x4b400000 0x1 0x0 0x4b7fffff 0x4b4000ff 0x4 ...]
+  d3 number values=[0x4b400000 0x4b4000ff 0x3 0x80000000 wide]
+  d4 number values=[0x3f800000 wide wide 0x0 wide wide]
+  d5 number values=[wide wide 0x0 wide wide wide]
+  d6 number values=[wide wide 0x1 0x3f800000 wide]
+  d7 number values=[0x0 0x2 wide]
+  result x0 address distinct=6+
+  result x1 small min=0x1 max=0x9 values=[0x2 0x5 0x1 0x9 0x3]
+  result d0 number values=[wide wide wide]
+nvnBlendStateSetBlendTarget calls=1088 sampled=1088 returns_sampled=1088
+  x0 address distinct=6+
+  x1 small min=0x0 max=0x7 values=[0x0 0x1 0x2 0x3 0x4 0x5 ...]
+  x2 small min=0x0 max=0x1 values=[0x0 0x1]
+  x3 mixed distinct=3 readable=136/1088 zero=82/1088
+  x4 mixed distinct=5 readable=3/1088 zero=89/1088
+  x5 small min=0x0 max=0x2 values=[0x0 0x1 0x2]
+  x6 address-or-null distinct=5 readable=1072/1088 zero=16/1088
+  x7 address-or-null distinct=2 readable=936/1088 zero=152/1088
+  d0 number values=[wide wide wide]
+  d1 number values=[wide wide wide wide wide wide ...]
+  d2 number values=[0x4b400000 0x1 0x0 0x4b7fffff 0x4b4000ff 0x4 ...]
+  d3 number values=[0x4b400000 0x4b4000ff 0x3 0x80000000 wide]
+  d4 number values=[0x3f800000 wide wide 0x0 wide wide]
+  d5 number values=[wide wide 0x0 wide wide wide]
+  d6 number values=[wide wide 0x1 0x3f800000 wide]
+  d7 number values=[0x0 0x2 wide]
+  result x0 address distinct=6+
+  result x1 small min=0x0 max=0x7 values=[0x0 0x1 0x2 0x3 0x4 0x5 ...]
+  result d0 number values=[wide wide wide]
+nvnBlendStateSetDefaults calls=1096 sampled=1096 returns_sampled=1096
+  x0 address distinct=6+
+  x1 address-or-null distinct=2 readable=1088/1096 zero=8/1096
+  x2 small min=0x0 max=0x128 values=[0x128 0x0]
+  x3 mixed distinct=2 readable=1088/1096
+  x4 mixed distinct=6 readable=24/1096 zero=48/1096
+  x5 small min=0x0 max=0x2 values=[0x0 0x1 0x2]
+  x6 address-or-null distinct=5 readable=1072/1096 zero=24/1096
+  x7 address-or-null distinct=2 readable=936/1096 zero=160/1096
+  d0 number values=[0x0 wide wide wide]
+  d1 number values=[wide wide wide wide wide wide ...]
+  d2 number values=[wide 0x4b400000 0x1 0x0 0x4b7fffff 0x4b4000ff ...]
+  d3 number values=[wide 0x4b400000 0x4b4000ff 0x3 0x80000000 wide]
+  d4 number values=[0xbf000000 0x3f800000 wide wide 0x0 wide ...]
+  d5 number values=[wide wide wide 0x0 wide wide ...]
+  d6 number values=[0x0 wide wide 0x1 0x3f800000 wide]
+  d7 number values=[0x0 0x2 wide]
+  result x0 address distinct=6+
+  result x1 address-or-null distinct=2 readable=1088/1096 zero=8/1096
+  result d0 number values=[0x0 wide wide wide]
+nvnChannelMaskStateSetChannelMask calls=1088 sampled=1088 returns_sampled=1088
+  x0 address distinct=6+
+  x1 small min=0x0 max=0x7 values=[0x0 0x1 0x2 0x3 0x4 0x5 ...]
+  x2 small min=0x0 max=0x1 values=[0x1 0x0]
+  x3 small min=0x0 max=0x1 values=[0x1 0x0]
+  x4 small min=0x0 max=0x1 values=[0x1 0x0]
+  x5 small min=0x0 max=0x1 values=[0x1 0x0]
+  x6 address-or-null distinct=5 readable=1072/1088 zero=16/1088
+  x7 address-or-null distinct=2 readable=936/1088 zero=152/1088
+  d0 number values=[wide wide wide]
+  d1 number values=[wide wide wide wide wide wide ...]
+  d2 number values=[0x4b400000 0x1 0x0 0x4b7fffff 0x4b4000ff 0x4 ...]
+  d3 number values=[0x4b400000 0x4b4000ff 0x3 0x80000000 wide]
+  d4 number values=[0x3f800000 wide wide 0x0 wide wide]
+  d5 number values=[wide wide 0x0 wide wide wide]
+  d6 number values=[wide wide 0x1 0x3f800000 wide]
+  d7 number values=[0x0 0x2 wide]
+  result x0 address distinct=6+
+  result x1 small min=0x0 max=0x7 values=[0x0 0x1 0x2 0x3 0x4 0x5 ...]
+  result d0 number values=[wide wide wide]
+nvnChannelMaskStateSetDefaults calls=137 sampled=137 returns_sampled=137
+  x0 address distinct=6+
+  x1 address-or-null distinct=2 readable=136/137 zero=1/137
+  x2 small min=0x0 max=0x128 values=[0x128 0x0]
+  x3 mixed distinct=2 readable=136/137
+  x4 mixed distinct=6 readable=3/137 zero=6/137
+  x5 small min=0x0 max=0x2 values=[0x0 0x1 0x2]
+  x6 address-or-null distinct=5 readable=134/137 zero=3/137
+  x7 address-or-null distinct=2 readable=117/137 zero=20/137
+  d0 number values=[0x0 wide wide wide]
+  d1 number values=[wide wide wide wide wide wide ...]
+  d2 number values=[wide 0x4b400000 0x1 0x0 0x4b7fffff 0x4b4000ff ...]
+  d3 number values=[wide 0x4b400000 0x4b4000ff 0x3 0x80000000 wide]
+  d4 number values=[0xbf000000 0x3f800000 wide wide 0x0 wide ...]
+  d5 number values=[wide wide wide 0x0 wide wide ...]
+  d6 number values=[0x0 wide wide 0x1 0x3f800000 wide]
+  d7 number values=[0x0 0x2 wide]
+  result x0 address distinct=6+
+  result x1 address-or-null distinct=2 readable=136/137 zero=1/137
+  result d0 number values=[0x0 wide wide wide]
+nvnColorStateSetBlendEnable calls=1088 sampled=1088 returns_sampled=1088
+  x0 address distinct=6+
+  x1 small min=0x0 max=0x7 values=[0x0 0x1 0x2 0x3 0x4 0x5 ...]
+  x2 small min=0x0 max=0x1 values=[0x0 0x1]
+  x3 small min=0x1 max=0x8 values=[0x2 0x1 0x5 0x8]
+  x4 small min=0x1 max=0x7 values=[0x1 0x2 0x6 0x7 0x5]
+  x5 small min=0x0 max=0x2 values=[0x0 0x1 0x2]
+  x6 address-or-null distinct=5 readable=1072/1088 zero=16/1088
+  x7 address-or-null distinct=2 readable=936/1088 zero=152/1088
+  d0 number values=[wide wide wide]
+  d1 number values=[wide wide wide wide wide wide ...]
+  d2 number values=[0x4b400000 0x1 0x0 0x4b7fffff 0x4b4000ff 0x4 ...]
+  d3 number values=[0x4b400000 0x4b4000ff 0x3 0x80000000 wide]
+  d4 number values=[0x3f800000 wide wide 0x0 wide wide]
+  d5 number values=[wide wide 0x0 wide wide wide]
+  d6 number values=[wide wide 0x1 0x3f800000 wide]
+  d7 number values=[0x0 0x2 wide]
+  result x0 address distinct=6+
+  result x1 small min=0x0 max=0x7 values=[0x0 0x1 0x2 0x3 0x4 0x5 ...]
+  result d0 number values=[wide wide wide]
+nvnColorStateSetDefaults calls=137 sampled=137 returns_sampled=137
+  x0 address distinct=6+
+  x1 address-or-null distinct=2 readable=136/137 zero=1/137
+  x2 small min=0x0 max=0x128 values=[0x128 0x0]
+  x3 mixed distinct=2 readable=136/137
+  x4 mixed distinct=6 readable=3/137 zero=6/137
+  x5 small min=0x0 max=0x2 values=[0x0 0x1 0x2]
+  x6 address-or-null distinct=5 readable=134/137 zero=3/137
+  x7 address-or-null distinct=2 readable=117/137 zero=20/137
+  d0 number values=[0x0 wide wide wide]
+  d1 number values=[wide wide wide wide wide wide ...]
+  d2 number values=[wide 0x4b400000 0x1 0x0 0x4b7fffff 0x4b4000ff ...]
+  d3 number values=[wide 0x4b400000 0x4b4000ff 0x3 0x80000000 wide]
+  d4 number values=[0xbf000000 0x3f800000 wide wide 0x0 wide ...]
+  d5 number values=[wide wide wide 0x0 wide wide ...]
+  d6 number values=[0x0 wide wide 0x1 0x3f800000 wide]
+  d7 number values=[0x0 0x2 wide]
+  result x0 address distinct=6+
+  result x1 address-or-null distinct=2 readable=136/137 zero=1/137
+  result d0 number values=[0x0 wide wide wide]
+nvnCommandBufferAddCommandMemory calls=17242 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 address distinct=2
+  x2 number min=0x0 max=0x1e0000 values=[0x0 0x10000 0x20000 0x30000 0x1c0000 0x1d0000 ...]
+  x3 constant min=0x10000 max=0x10000 values=[0x10000]
+  x4 constant-address distinct=1
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[0x0 wide]
+  d1 number values=[0x0 wide wide wide wide wide]
+  d2 number values=[wide 0x0 wide wide 0x3f800000 0x7f7fffff]
+  d3 number values=[wide wide wide wide wide 0x0 ...]
+  d4 number values=[0xbf000000 wide 0x0 wide wide]
+  d5 number values=[wide 0xffff 0xffffffff wide 0x0 0x3f000000 ...]
+  d6 number values=[0x0 0xffffffff 0x43b40000 0x3f800000 wide 0x43870000 ...]
+  d7 number min=0x0 max=0xffffffff values=[0x0 0xc3b40000 0xffffffff 0xc3870000 0x3a888889 0xc3ca8000 ...]
+  result x0 address distinct=6+
+  result x1 address distinct=2
+  result d0 number values=[0x0 wide]
+nvnCommandBufferAddControlMemory calls=17242 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant-address distinct=1
+  x2 constant min=0x140000 max=0x140000 values=[0x140000]
+  x3 mixed distinct=2 readable=2046/2048
+  x4 number min=0x0 max=0x17ea5678 values=[0x17ea5678 0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 number values=[wide wide wide wide 0x0 wide]
+  d2 number values=[wide 0x0 wide wide 0x3f800000 0x7f7fffff]
+  d3 number values=[wide wide wide wide wide 0x0 ...]
+  d4 number values=[0xbf000000 wide 0x0 wide wide]
+  d5 number values=[wide 0xffff 0xffffffff wide 0x0 0x3f000000 ...]
+  d6 number values=[0x0 0xffffffff 0x43b40000 0x3f800000 wide 0x43870000 ...]
+  d7 number min=0x0 max=0xffffffff values=[0x0 0xc3b40000 0xffffffff 0xc3870000 0x3a888889 0xc3ca8000 ...]
+  result x0 address distinct=6+
+  result x1 constant-address distinct=1
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnCommandBufferBarrier calls=229365 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 small min=0x12 max=0x40 values=[0x40 0x33 0x32 0x30 0x12 0x20 ...]
+  x2 address-or-null distinct=6+ readable=2039/2048 zero=9/2048
+  x3 mixed distinct=6+ readable=220/2048 zero=1292/2048
+  x4 mixed distinct=6+ readable=205/2048 zero=1651/2048
+  x5 small min=0x0 max=0x20 values=[0x0 0x1 0x20 0x4]
+  x6 mixed distinct=6+ readable=118/2048 zero=761/2048
+  x7 mixed distinct=6+ readable=681/2048 zero=559/2048
+  d0 number values=[wide 0x3f800000 0x0 0x4b400008 0x4b400004 wide ...]
+  d1 number values=[0x3f800000 0x0 wide 0x4b400000 wide wide ...]
+  d2 number values=[0x4b400000 0x0 wide 0x4b4000ff 0x3f800000 wide ...]
+  d3 number values=[0x4b400000 0x4b4000ff 0x3 wide 0x0 wide ...]
+  d4 number values=[0xbf000000 0x3f800000 wide 0x0 wide wide ...]
+  d5 number values=[wide wide wide wide 0x0 wide ...]
+  d6 number values=[0x0 wide wide 0x3f800000 0x1 wide ...]
+  d7 number values=[0x0 0x2 wide wide 0xbf000000 0xc3b40000 ...]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 number values=[wide wide 0x200181c7 0x3f000000 wide wide ...]
+nvnCommandBufferBeginRecording calls=17242 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant-address distinct=1
+  x2 constant min=0x140000 max=0x140000 values=[0x140000]
+  x3 mixed distinct=2 readable=2046/2048
+  x4 number min=0x0 max=0x17ea5678 values=[0x17ea5678 0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 number values=[wide wide wide wide 0x0 wide]
+  d2 number values=[wide 0x0 wide wide 0x3f800000 0x7f7fffff]
+  d3 number values=[wide wide wide wide wide 0x0 ...]
+  d4 number values=[0xbf000000 wide 0x0 wide wide]
+  d5 number values=[wide 0xffff 0xffffffff wide 0x0 0x3f000000 ...]
+  d6 number values=[0x0 0xffffffff 0x43b40000 0x3f800000 wide 0x43870000 ...]
+  d7 number min=0x0 max=0xffffffff values=[0x0 0xc3b40000 0xffffffff 0xc3870000 0x3a888889 0xc3ca8000 ...]
+  result x0 address distinct=6+
+  result x1 constant-address distinct=1
+  result d0 constant values=[wide]
+nvnCommandBufferBindBlendState calls=946464 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 address distinct=6+
+  x2 constant-address distinct=1
+  x3 small min=0x0 max=0x16 values=[0x0 0x1 0x2 0x4 0x5 0x6 ...]
+  x4 address-or-null distinct=6+ readable=1795/2048 zero=253/2048
+  x5 address-or-null distinct=2 readable=152/2048 zero=1896/2048
+  x6 address-or-null distinct=2 readable=168/2048 zero=1880/2048
+  x7 mixed distinct=6+ readable=264/2048
+  d0 number values=[wide wide]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant min=0x7f7fffff max=0x7f7fffff values=[0x7f7fffff]
+  d3 number values=[wide wide wide]
+  d4 number values=[wide wide wide wide wide wide ...]
+  d5 number values=[wide wide]
+  d6 number min=0x3f000000 max=0x44070000 values=[0x42000000 0x43870000 0x43070000 0x3f000000 0x42870000 0x42080000 ...] f32=[32 270 135 0.5 67.5 34]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xc2000000 0xc3870000 0xc3070000 0xbf000000 0xc2870000 0xc2080000 ...] f32=[-32 -270 -135 -0.5 -67.5 -34]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 constant values=[wide]
+nvnCommandBufferBindChannelMaskState calls=112158 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 address distinct=3
+  x2 constant-address distinct=1
+  x3 small min=0x0 max=0x16 values=[0x0 0x1 0x2 0x4 0x5 0x6 ...]
+  x4 address distinct=6+
+  x5 address-or-null distinct=2 readable=156/2048 zero=1892/2048
+  x6 address-or-null distinct=2 readable=158/2048 zero=1890/2048
+  x7 mixed distinct=6+ readable=101/2048
+  d0 constant values=[wide]
+  d1 constant values=[wide]
+  d2 constant min=0x7f7fffff max=0x7f7fffff values=[0x7f7fffff]
+  d3 number values=[wide wide wide]
+  d4 number values=[wide wide wide wide wide wide ...]
+  d5 number values=[wide wide]
+  d6 number min=0x3f000000 max=0x44070000 values=[0x42000000 0x43870000 0x43070000 0x3f000000 0x42870000 0x42080000 ...] f32=[32 270 135 0.5 67.5 34]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xc2000000 0xc3870000 0xc3070000 0xbf000000 0xc2870000 0xc2080000 ...] f32=[-32 -270 -135 -0.5 -67.5 -34]
+  result x0 address distinct=6+
+  result x1 address distinct=3
+  result d0 number values=[wide 0x0]
+nvnCommandBufferBindColorState calls=112158 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 address distinct=3
+  x2 constant-address distinct=1
+  x3 small min=0x0 max=0x16 values=[0x0 0x1 0x2 0x4 0x5 0x6 ...]
+  x4 address distinct=6+
+  x5 address-or-null distinct=2 readable=156/2048 zero=1892/2048
+  x6 address-or-null distinct=2 readable=158/2048 zero=1890/2048
+  x7 mixed distinct=6+ readable=101/2048
+  d0 constant values=[wide]
+  d1 constant values=[wide]
+  d2 constant min=0x7f7fffff max=0x7f7fffff values=[0x7f7fffff]
+  d3 number values=[wide wide wide]
+  d4 number values=[wide wide wide wide wide wide ...]
+  d5 number values=[wide wide]
+  d6 number min=0x3f000000 max=0x44070000 values=[0x42000000 0x43870000 0x43070000 0x3f000000 0x42870000 0x42080000 ...] f32=[32 270 135 0.5 67.5 34]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xc2000000 0xc3870000 0xc3070000 0xbf000000 0xc2870000 0xc2080000 ...] f32=[-32 -270 -135 -0.5 -67.5 -34]
+  result x0 address distinct=6+
+  result x1 address distinct=3
+  result d0 constant values=[wide]
+nvnCommandBufferBindDepthStencilState calls=112158 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 address distinct=2
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 small min=0x0 max=0x16 values=[0x0 0x1 0x2 0x4 0x5 0x6 ...]
+  x4 address-or-null distinct=2 readable=3/2048 zero=2045/2048
+  x5 address-or-null distinct=2 readable=156/2048 zero=1892/2048
+  x6 address-or-null distinct=2 readable=158/2048 zero=1890/2048
+  x7 mixed distinct=6+ readable=101/2048
+  d0 constant values=[wide]
+  d1 number values=[wide 0x0 wide wide wide wide ...]
+  d2 number values=[wide wide]
+  d3 number values=[wide wide wide]
+  d4 number values=[wide wide wide wide wide wide ...]
+  d5 number values=[wide wide]
+  d6 number min=0x3f000000 max=0x44070000 values=[0x42000000 0x43870000 0x43070000 0x3f000000 0x42870000 0x42080000 ...] f32=[32 270 135 0.5 67.5 34]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xc2000000 0xc3870000 0xc3070000 0xbf000000 0xc2870000 0xc2080000 ...] f32=[-32 -270 -135 -0.5 -67.5 -34]
+  result x0 address distinct=6+
+  result x1 address distinct=2
+  result d0 constant values=[wide]
+nvnCommandBufferBindImage calls=25854 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant min=0x5 max=0x5 values=[0x5]
+  x2 small min=0x0 max=0x2 values=[0x2 0x1 0x0]
+  x3 small min=0x21d max=0x258 values=[0x224 0x223 0x226 0x21d 0x21f 0x225 ...]
+  x4 constant-address distinct=1
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 small min=0x0 max=0x400 values=[0x0 0x400]
+  x7 address-or-null distinct=2 readable=1934/2048 zero=114/2048
+  d0 number values=[wide 0x0]
+  d1 number values=[wide 0x0]
+  d2 constant values=[wide]
+  d3 constant min=0x0 max=0x0 values=[0x0]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 constant min=0x3f000000 max=0x3f000000 values=[0x3f000000] f32=[0.5]
+  d6 number min=0x43870000 max=0x43cb0000 values=[0x43870000 0x43cb0000] f32=[270 406]
+  d7 number min=0xc3870000 max=0xc3cb0000 values=[0xc3870000 0xc3cb0000] f32=[-270 -406]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 number values=[wide 0x0]
+nvnCommandBufferBindMultisampleState calls=176816 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 address distinct=2
+  x2 constant min=0x1 max=0x1 values=[0x1]
+  x3 address distinct=2
+  x4 small min=0x1 max=0x438 values=[0x1 0x2d0 0x400 0x32f 0x10e 0x200 ...]
+  x5 small min=0x4 max=0x20 values=[0x4 0x8 0x20 0x10]
+  x6 small min=0x1 max=0x400 values=[0x1 0x400]
+  x7 mixed distinct=2 readable=651/2048
+  d0 number values=[wide wide wide wide wide wide ...]
+  d1 constant min=0x3f800000 max=0x3f800000 values=[0x3f800000] f32=[1]
+  d2 constant min=0x0 max=0x0 values=[0x0]
+  d3 constant min=0x0 max=0x0 values=[0x0]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 constant min=0x3f000000 max=0x3f000000 values=[0x3f000000] f32=[0.5]
+  d6 number min=0x3f000000 max=0x44070000 values=[0x3f000000 0x43b40000 0x44000000 0x43cbc000 0x43070000 0x43800000 ...] f32=[0.5 360 512 407.5 135 256]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xbf000000 0xc3b40000 0xc4000000 0xc3cbc000 0xc3070000 0xc3800000 ...] f32=[-0.5 -360 -512 -407.5 -135 -256]
+  result x0 address distinct=6+
+  result x1 constant-address distinct=1
+  result d0 constant values=[wide]
+nvnCommandBufferBindPolygonState calls=112158 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 address distinct=2
+  x2 constant min=0xff max=0xff values=[0xff]
+  x3 small min=0x0 max=0x16 values=[0x0 0x1 0x2 0x4 0x5 0x6 ...]
+  x4 address-or-null distinct=2 readable=3/2048 zero=2045/2048
+  x5 address-or-null distinct=2 readable=156/2048 zero=1892/2048
+  x6 address-or-null distinct=2 readable=158/2048 zero=1890/2048
+  x7 mixed distinct=6+ readable=101/2048
+  d0 constant values=[wide]
+  d1 number values=[wide 0x0 wide wide wide wide ...]
+  d2 number values=[wide wide]
+  d3 number values=[wide wide wide]
+  d4 number values=[wide wide wide wide wide wide ...]
+  d5 number values=[wide wide]
+  d6 number min=0x3f000000 max=0x44070000 values=[0x42000000 0x43870000 0x43070000 0x3f000000 0x42870000 0x42080000 ...] f32=[32 270 135 0.5 67.5 34]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xc2000000 0xc3870000 0xc3070000 0xbf000000 0xc2870000 0xc2080000 ...] f32=[-32 -270 -135 -0.5 -67.5 -34]
+  result x0 address distinct=6+
+  result x1 address distinct=2
+  result d0 constant values=[wide]
+nvnCommandBufferBindProgram calls=585574 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 address-or-null distinct=6+ readable=854/2048 zero=1194/2048
+  x2 small min=0x1 max=0x20 values=[0x1 0x2 0x4 0x8 0x10 0x20]
+  x3 small min=0x0 max=0x16 values=[0x0 0x1 0x2 0x4 0x5 0x6 ...]
+  x4 address-or-null distinct=4 readable=47/2048 zero=2001/2048
+  x5 address-or-null distinct=2 readable=145/2048 zero=1903/2048
+  x6 mixed distinct=3 readable=155/2048 zero=1865/2048
+  x7 mixed distinct=6+ readable=218/2048 zero=4/2048
+  d0 number values=[0x0 wide wide wide wide wide ...]
+  d1 number values=[0x1d6c wide wide 0x0 wide wide ...]
+  d2 number values=[wide wide wide wide]
+  d3 number values=[wide wide 0x0 wide wide]
+  d4 number values=[wide 0x0 wide wide wide wide ...]
+  d5 number values=[wide 0x3f000000 wide]
+  d6 number min=0x3f000000 max=0x44070000 values=[0x42000000 0x43870000 0x43070000 0x3f000000 0x42870000 0x42080000 ...] f32=[32 270 135 0.5 67.5 34]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xc2000000 0xc3870000 0xc3070000 0xbf000000 0xc2870000 0xc2080000 ...] f32=[-32 -270 -135 -0.5 -67.5 -34]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 number values=[0x0 wide wide wide wide wide ...]
+nvnCommandBufferBindSeparateSampler calls=152563 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 small min=0x1 max=0x5 values=[0x5 0x1]
+  x2 small min=0x0 max=0x3 values=[0x0 0x1 0x2 0x3]
+  x3 address distinct=5
+  x4 mixed distinct=6+ readable=1985/2048
+  x5 small min=0x0 max=0x6 values=[0x0 0x6]
+  x6 small min=0x0 max=0x400 values=[0x0 0x1 0x400]
+  x7 mixed distinct=6+ readable=87/2048 zero=5/2048
+  d0 number values=[wide wide wide wide 0x0 wide ...]
+  d1 number values=[wide wide wide]
+  d2 number values=[wide wide]
+  d3 number values=[0x0 wide]
+  d4 number values=[0x0 wide]
+  d5 number values=[0x3f000000 wide]
+  d6 number values=[0x43870000 wide 0x43cb0000]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xc3870000 0xc3070000 0xbf000000 0xc2870000 0xc2080000 0xc1880000 ...] f32=[-270 -135 -0.5 -67.5 -34 -17]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 number values=[wide wide wide wide 0x0 wide ...]
+nvnCommandBufferBindSeparateTexture calls=170207 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 small min=0x1 max=0x5 values=[0x5 0x1]
+  x2 small min=0x0 max=0x3 values=[0x1 0x0 0x2 0x3]
+  x3 number values=[wide wide wide wide wide wide ...]
+  x4 address distinct=6+
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 small min=0x0 max=0x400 values=[0x0 0x400]
+  x7 mixed distinct=6+ readable=234/2048 zero=69/2048
+  d0 number values=[wide 0x0 wide wide wide wide ...]
+  d1 number values=[wide 0x0 wide wide]
+  d2 number values=[wide wide 0x7f7fffff]
+  d3 number values=[0x0 wide wide]
+  d4 number values=[0x0 wide wide]
+  d5 number values=[0x3f000000 wide wide]
+  d6 number values=[0x43870000 wide 0x43cb0000]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xc3870000 0xc3070000 0xbf000000 0xc2870000 0xc2080000 0xc1880000 ...] f32=[-270 -135 -0.5 -67.5 -34 -17]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 number values=[wide 0x0 wide wide wide wide ...]
+nvnCommandBufferBindUniformBuffer calls=321498 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 small min=0x0 max=0x5 values=[0x1 0x0 0x5]
+  x2 small min=0x0 max=0x2 values=[0x0 0x1 0x2]
+  x3 number values=[wide wide wide wide wide wide ...]
+  x4 small min=0x10 max=0xaa80 values=[0x80 0x10 0xaa80 0x280 0x1690 0x30 ...]
+  x5 mixed distinct=3 readable=207/2048 zero=740/2048
+  x6 mixed distinct=5 readable=214/2048 zero=577/2048
+  x7 mixed distinct=6+ readable=165/2048 zero=115/2048
+  d0 number values=[wide wide 0x0 wide wide wide ...]
+  d1 number values=[wide 0x0 wide wide wide wide]
+  d2 number values=[wide 0x0 wide 0x7f7fffff]
+  d3 number values=[wide 0x0 wide]
+  d4 number values=[wide 0x0 wide]
+  d5 number values=[wide 0x0 0x3f000000 wide]
+  d6 number values=[wide 0x42000000 0x43870000 0x0 0x41800000 0x43cb0000]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xc2000000 0xc3870000 0xc3070000 0xbf000000 0xc2870000 0xc2080000 ...] f32=[-32 -270 -135 -0.5 -67.5 -34]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 number values=[wide wide 0x0 wide wide wide ...]
+nvnCommandBufferBindVertexAttribState calls=112158 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 small min=0x1 max=0x5 values=[0x2 0x1 0x5]
+  x2 address distinct=4
+  x3 small min=0x0 max=0x16 values=[0x0 0x1 0x2 0x4 0x5 0x6 ...]
+  x4 address-or-null distinct=2 readable=3/2048 zero=2045/2048
+  x5 address-or-null distinct=2 readable=156/2048 zero=1892/2048
+  x6 address-or-null distinct=2 readable=158/2048 zero=1890/2048
+  x7 mixed distinct=6+ readable=101/2048
+  d0 number min=0x0 max=0x66b6483e values=[0x0 0x66b6483e]
+  d1 small min=0x0 max=0x1d6c values=[0x1d6c 0x0]
+  d2 number values=[wide wide]
+  d3 number values=[wide wide]
+  d4 number values=[wide wide wide wide wide wide ...]
+  d5 number values=[wide wide]
+  d6 number min=0x3f000000 max=0x44070000 values=[0x42000000 0x43870000 0x43070000 0x3f000000 0x42870000 0x42080000 ...] f32=[32 270 135 0.5 67.5 34]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xc2000000 0xc3870000 0xc3070000 0xbf000000 0xc2870000 0xc2080000 ...] f32=[-32 -270 -135 -0.5 -67.5 -34]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 number min=0x0 max=0x66b6483e values=[0x0 0x66b6483e]
+nvnCommandBufferBindVertexBuffer calls=124524 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant min=0x0 max=0x0 values=[0x0]
+  x2 number values=[wide wide wide wide wide wide ...]
+  x3 number min=0x100 max=0x1e8500 values=[0x100 0x1e8500 0x1e8460]
+  x4 small min=0x10 max=0x1f0 values=[0x10 0x30 0xf0 0x150 0x130 0xd0 ...]
+  x5 mixed distinct=3 readable=156/2048 zero=76/2048
+  x6 mixed distinct=4 readable=158/2048 zero=1/2048
+  x7 mixed distinct=4 readable=2/2048 zero=147/2048
+  d0 number values=[0x0 wide wide wide wide wide ...]
+  d1 number values=[0x0 wide wide wide wide]
+  d2 number values=[0x0 wide 0x7f7fffff]
+  d3 number values=[0x0 wide wide]
+  d4 number values=[0x0 wide wide]
+  d5 number values=[0x0 wide wide]
+  d6 number values=[0x42000000 wide 0x41800000]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xc2000000 0xc3870000 0xc3070000 0xbf000000 0xc2870000 0xc2080000 ...] f32=[-32 -270 -135 -0.5 -67.5 -34]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 number values=[0x0 wide wide wide wide wide ...]
+nvnCommandBufferBindVertexStreamState calls=112158 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant min=0x1 max=0x1 values=[0x1]
+  x2 address distinct=4
+  x3 small min=0x0 max=0x16 values=[0x0 0x1 0x2 0x4 0x5 0x6 ...]
+  x4 address-or-null distinct=2 readable=3/2048 zero=2045/2048
+  x5 address-or-null distinct=2 readable=156/2048 zero=1892/2048
+  x6 address-or-null distinct=2 readable=158/2048 zero=1890/2048
+  x7 mixed distinct=6+ readable=101/2048
+  d0 number min=0x0 max=0x66b6483e values=[0x0 0x66b6483e]
+  d1 small min=0x0 max=0x1d6c values=[0x1d6c 0x0]
+  d2 number values=[wide wide]
+  d3 number values=[wide wide]
+  d4 number values=[wide wide wide wide wide wide ...]
+  d5 number values=[wide wide]
+  d6 number min=0x3f000000 max=0x44070000 values=[0x42000000 0x43870000 0x43070000 0x3f000000 0x42870000 0x42080000 ...] f32=[32 270 135 0.5 67.5 34]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xc2000000 0xc3870000 0xc3070000 0xbf000000 0xc2870000 0xc2080000 ...] f32=[-32 -270 -135 -0.5 -67.5 -34]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 number min=0x0 max=0x66b6483e values=[0x0 0x66b6483e]
+nvnCommandBufferClearBuffer calls=12927 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 number values=[wide wide wide wide]
+  x2 number min=0x4 max=0x12b00 values=[0x8700 0x4 0x12b00]
+  x3 number min=0x0 max=0xffffffff values=[0xffffffff 0x0]
+  x4 constant-address distinct=1
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 small min=0x0 max=0x400 values=[0x0 0x400]
+  x7 address-or-null distinct=2 readable=1958/2048 zero=90/2048
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 constant values=[wide]
+  d2 constant values=[wide]
+  d3 constant min=0x0 max=0x0 values=[0x0]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 constant min=0x3f000000 max=0x3f000000 values=[0x3f000000] f32=[0.5]
+  d6 number min=0x43870000 max=0x43cb0000 values=[0x43870000 0x43cb0000] f32=[270 406]
+  d7 number min=0xc3870000 max=0xc3cb0000 values=[0xc3870000 0xc3cb0000] f32=[-270 -406]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 constant values=[wide]
+nvnCommandBufferClearColor calls=21574 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 small min=0x0 max=0x1 values=[0x0 0x1]
+  x2 address distinct=2
+  x3 constant min=0xf max=0xf values=[0xf]
+  x4 small min=0x1 max=0x438 values=[0x1 0x400 0x32f 0x10e 0x200 0x21c ...]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x1 max=0x1 values=[0x1]
+  d0 number values=[0x3f800000 0x44800000 0x444bc000 0x43870000 0x44000000 wide ...]
+  d1 number min=0x0 max=0x44870000 values=[0x3f800000 0x44800000 0x444bc000 0x43870000 0x44000000 0x0 ...] f32=[1 1024 815 270 512 0]
+  d2 constant min=0x0 max=0x0 values=[0x0]
+  d3 constant min=0x0 max=0x0 values=[0x0]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 constant min=0x3f000000 max=0x3f000000 values=[0x3f000000] f32=[0.5]
+  d6 number min=0x3f000000 max=0x44070000 values=[0x3f000000 0x44000000 0x43cbc000 0x43070000 0x43800000 0x43870000 ...] f32=[0.5 512 407.5 135 256 270]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xbf000000 0xc4000000 0xc3cbc000 0xc3070000 0xc3800000 0xc3870000 ...] f32=[-0.5 -512 -407.5 -135 -256 -270]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 constant values=[wide]
+nvnCommandBufferClearDepthStencil calls=8619 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant min=0x1 max=0x1 values=[0x1]
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant min=0xff max=0xff values=[0xff]
+  x4 small min=0x1 max=0x32c values=[0x1 0x21c 0x32c]
+  x5 constant min=0x1 max=0x1 values=[0x1]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant-address distinct=1
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 number min=0x3f800000 max=0x444b0000 values=[0x3f800000 0x44070000 0x444b0000] f32=[1 540 812]
+  d2 constant min=0x0 max=0x0 values=[0x0]
+  d3 constant min=0x0 max=0x0 values=[0x0]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 constant min=0x3f000000 max=0x3f000000 values=[0x3f000000] f32=[0.5]
+  d6 number min=0x3f000000 max=0x43cb0000 values=[0x3f000000 0x43870000 0x43cb0000] f32=[0.5 270 406]
+  d7 number min=0xbf000000 max=0xc3cb0000 values=[0xbf000000 0xc3870000 0xc3cb0000] f32=[-0.5 -270 -406]
+  result x0 address distinct=6+
+  result x1 address distinct=4
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnCommandBufferClearTexture calls=6 sampled=6 returns_sampled=6
+  x0 address distinct=6
+  x1 address distinct=6
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 address distinct=2
+  x4 address distinct=2
+  x5 constant min=0xf max=0xf values=[0xf]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant values=[wide]
+  d0 number values=[wide wide]
+  d1 number values=[wide wide]
+  d2 constant min=0x0 max=0x0 values=[0x0]
+  d3 number values=[wide wide wide]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 small min=0x0 max=0xffff values=[0xffff 0x0]
+  d6 number values=[0xffffffff wide]
+  d7 number min=0x0 max=0x3a888889 values=[0x0 0x3a888889] f32=[0 0.0010416667209938169]
+  result x0 address distinct=2
+  result x1 address distinct=6
+  result d0 constant values=[wide]
+nvnCommandBufferCopyBufferToTexture calls=1766 sampled=1766 returns_sampled=1766
+  x0 address distinct=6+
+  x1 number values=[wide wide wide wide wide wide ...]
+  x2 address distinct=6+
+  x3 address distinct=6+
+  x4 address distinct=6+
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 small min=0x0 max=0x1 values=[0x1 0x0]
+  d0 number values=[wide wide wide wide wide wide ...]
+  d1 number values=[wide wide wide wide]
+  d2 number values=[0x0 0x4b400000 wide wide wide]
+  d3 number values=[0x4b400000 0x0 wide wide wide wide ...]
+  d4 number values=[0x3f800000 0x0 wide wide wide]
+  d5 number values=[wide 0x0 0x3f000000 0xffffffff wide wide ...]
+  d6 number values=[wide 0x0 0x3f000000 0x43b40000 wide 0x43870000 ...]
+  d7 number values=[0x0 0xbf000000 0xc3b40000 wide 0xc3870000 0xc4070000]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 number min=0x0 max=0x200181c7 values=[0x200181c7 0x0]
+nvnCommandBufferCopyTextureToTexture calls=7 sampled=7 returns_sampled=7
+  x0 constant-address distinct=1
+  x1 constant-address distinct=1
+  x2 constant-address distinct=1
+  x3 constant-address distinct=1
+  x4 constant-address distinct=1
+  x5 constant-address distinct=1
+  x6 constant-address distinct=1
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[wide wide wide wide wide wide ...]
+  d1 number values=[0x0 wide wide wide wide wide ...]
+  d2 constant values=[wide]
+  d3 constant values=[wide]
+  d4 constant values=[wide]
+  d5 constant values=[wide]
+  d6 constant values=[wide]
+  d7 constant min=0xc4070000 max=0xc4070000 values=[0xc4070000] f32=[-540]
+  result x0 constant-address distinct=1
+  result x1 address distinct=6+
+  result d0 constant values=[wide]
+nvnCommandBufferDispatchCompute calls=8618 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 small min=0x4 max=0x6 values=[0x4 0x6]
+  x2 small min=0x3 max=0x4 values=[0x3 0x4]
+  x3 constant min=0x8 max=0x8 values=[0x8]
+  x4 constant-address distinct=1
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 small min=0x0 max=0x400 values=[0x0 0x400]
+  x7 address-or-null distinct=2 readable=1982/2048 zero=66/2048
+  d0 number values=[wide 0x0]
+  d1 number values=[wide 0x0]
+  d2 constant values=[wide]
+  d3 constant min=0x0 max=0x0 values=[0x0]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 constant min=0x3f000000 max=0x3f000000 values=[0x3f000000] f32=[0.5]
+  d6 number min=0x43870000 max=0x43cb0000 values=[0x43870000 0x43cb0000] f32=[270 406]
+  d7 number min=0xc3870000 max=0xc3cb0000 values=[0xc3870000 0xc3cb0000] f32=[-270 -406]
+  result x0 address distinct=6+
+  result x1 address distinct=5
+  result d0 number values=[wide 0x0]
+nvnCommandBufferDrawArrays calls=181 sampled=181 returns_sampled=181
+  x0 address distinct=6
+  x1 constant min=0x5 max=0x5 values=[0x5]
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant min=0x4 max=0x4 values=[0x4]
+  x4 constant min=0x438 max=0x438 values=[0x438]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 mixed distinct=2 readable=1/181
+  d0 number values=[wide wide wide wide wide wide ...]
+  d1 constant min=0x3f800000 max=0x3f800000 values=[0x3f800000] f32=[1]
+  d2 constant min=0x3f800000 max=0x3f800000 values=[0x3f800000] f32=[1]
+  d3 constant min=0x0 max=0x0 values=[0x0]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 constant min=0x3f000000 max=0x3f000000 values=[0x3f000000] f32=[0.5]
+  d6 constant min=0x44070000 max=0x44070000 values=[0x44070000] f32=[540]
+  d7 constant min=0xc4070000 max=0xc4070000 values=[0xc4070000] f32=[-540]
+  result x0 address distinct=6
+  result x1 address distinct=4
+  result d0 number values=[wide wide wide wide wide wide ...]
+nvnCommandBufferDrawArraysInstanced calls=8618 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant min=0x5 max=0x5 values=[0x5]
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant min=0x4 max=0x4 values=[0x4]
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 small min=0x20 max=0x40 values=[0x40 0x20]
+  x6 address-or-null distinct=2 readable=2047/2048 zero=1/2048
+  x7 mixed distinct=4 readable=2/2048 zero=1/2048
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant min=0x0 max=0x0 values=[0x0]
+  d3 constant min=0x0 max=0x0 values=[0x0]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 constant min=0x0 max=0x0 values=[0x0]
+  d6 number min=0x41800000 max=0x42000000 values=[0x42000000 0x41800000] f32=[32 16]
+  d7 number min=0xc1800000 max=0xc2000000 values=[0xc2000000 0xc1800000] f32=[-32 -16]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnCommandBufferDrawElementsBaseVertex calls=115725 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant min=0x4 max=0x4 values=[0x4]
+  x2 small min=0x1 max=0x2 values=[0x1 0x2]
+  x3 small min=0x3 max=0x6 values=[0x3 0x6]
+  x4 number values=[wide wide wide wide wide wide ...]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 small min=0x1 max=0x2 values=[0x1 0x2]
+  x7 small min=0x0 max=0x1 values=[0x1 0x0]
+  d0 number values=[wide wide wide wide wide wide ...]
+  d1 number values=[wide wide wide wide]
+  d2 number values=[wide 0x7f7fffff]
+  d3 number values=[wide wide]
+  d4 number values=[wide wide]
+  d5 number values=[wide wide]
+  d6 constant values=[wide]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xc3870000 0xc3070000 0xbf000000 0xc2870000 0xc2080000 0xc1880000 ...] f32=[-270 -135 -0.5 -67.5 -34 -17]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 constant values=[wide]
+nvnCommandBufferEndRecording calls=17241 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 address-or-null distinct=6+ readable=2046/2048 zero=2/2048
+  x2 number values=[0x20 wide wide wide 0x0 wide ...]
+  x3 mixed distinct=5 readable=510/2048 zero=1023/2048
+  x4 mixed distinct=6+ readable=515/2048 zero=510/2048
+  x5 small min=0x0 max=0x4 values=[0x0 0x4 0x1]
+  x6 small min=0x0 max=0x2 values=[0x0 0x1 0x2]
+  x7 mixed distinct=4 readable=510/2048 zero=1017/2048
+  d0 number values=[wide wide 0x0 wide wide 0x3f000000 ...]
+  d1 number values=[0x0 wide wide wide wide 0x3f800000 ...]
+  d2 number values=[0x0 wide wide 0x3f800000 0x7f7fffff]
+  d3 number values=[wide wide wide wide 0x0 0x44340000 ...]
+  d4 number values=[wide 0x0 wide wide]
+  d5 number values=[0xffff 0xffffffff wide wide 0x3f000000 0x0 ...]
+  d6 number values=[0xffffffff 0x43b40000 0x3f800000 wide 0x0 0x43870000 ...]
+  d7 number min=0x0 max=0xffffffff values=[0x0 0xc3b40000 0xffffffff 0xc3870000 0x3a888889 0xc3ca8000 ...]
+  result x0 mixed distinct=2 readable=1534/2048
+  result x1 address-or-null distinct=6+ readable=2046/2048 zero=2/2048
+  result d0 number values=[wide wide 0x0 wide wide 0x3f000000 ...]
+nvnCommandBufferFenceSync calls=8620 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 address distinct=6+
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant min=0x1 max=0x1 values=[0x1]
+  x4 address-or-null distinct=2 readable=1028/2048 zero=1020/2048
+  x5 mixed distinct=3 readable=1015/2048 zero=1029/2048
+  x6 small min=0x0 max=0x2 values=[0x0 0x1 0x2]
+  x7 small min=0x0 max=0x1 values=[0x0 0x1]
+  d0 number values=[wide 0x0 wide 0x3f000000 wide wide ...]
+  d1 number values=[0x0 wide wide wide wide wide ...]
+  d2 number values=[0x0 wide wide 0x7f7fffff]
+  d3 number values=[wide wide 0x0 0x44340000 wide]
+  d4 number values=[wide 0x0 wide wide]
+  d5 number values=[0xffff 0xffffffff wide 0x0 wide]
+  d6 number values=[0xffffffff 0x43b40000 0x3f800000 wide wide 0x44070000 ...]
+  d7 number min=0x0 max=0xffffffff values=[0x0 0xc3b40000 0xffffffff 0x3a888889 0xc4070000]
+  result x0 address distinct=6+
+  result x1 address distinct=6
+  result d0 number values=[wide 0x0 wide 0x3f000000 wide wide ...]
+nvnCommandBufferFinalize calls=17233 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 mixed distinct=6+ readable=1551/2048 zero=496/2048
+  x2 address-or-null distinct=3 readable=2044/2048 zero=4/2048
+  x3 mixed distinct=3 readable=65/2048 zero=1978/2048
+  x4 address-or-null distinct=2 readable=2035/2048 zero=13/2048
+  x5 address-or-null distinct=2 readable=2036/2048 zero=12/2048
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[wide 0x0]
+  d1 number values=[wide wide wide]
+  d2 number values=[wide 0x0 wide]
+  d3 number values=[wide 0x0 0x44340000]
+  d4 number values=[0x0 wide]
+  d5 number values=[0xffffffff wide 0x0 wide]
+  d6 number values=[0x43b40000 0x3f800000 wide wide 0x44070000 wide]
+  d7 number min=0x0 max=0xffffffff values=[0xc3b40000 0x0 0xffffffff 0x3a888889 0xc4070000]
+  result x0 address distinct=6+
+  result x1 mixed distinct=6+ readable=1551/2048 zero=496/2048
+  result d0 number values=[wide 0x0]
+nvnCommandBufferGetCommandMemorySize calls=12929 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant-address distinct=1
+  x2 small min=0x0 max=0x1 values=[0x1 0x0]
+  x3 mixed distinct=4 readable=682/2048 zero=683/2048
+  x4 mixed distinct=5 readable=684/2048 zero=682/2048
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 mixed distinct=4 readable=682/2048 zero=684/2048
+  d0 number values=[wide wide wide 0x3f000000 0x0 wide ...]
+  d1 number values=[0x0 wide wide wide 0x3f800000 wide ...]
+  d2 number values=[0x0 wide wide 0x3f800000 0x7f7fffff]
+  d3 number values=[wide wide 0x0 0x44340000 wide wide]
+  d4 number values=[wide 0x0 wide wide]
+  d5 number values=[0xffff 0xffffffff wide wide 0x3f000000 0x0 ...]
+  d6 number values=[0xffffffff 0x43b40000 0x3f800000 wide 0x0 0x43870000 ...]
+  d7 number min=0x0 max=0xffffffff values=[0x0 0xc3b40000 0xffffffff 0xc3870000 0x3a888889 0xc3ca8000 ...]
+  result x0 constant min=0x10000 max=0x10000 values=[0x10000]
+  result x1 constant-address distinct=1
+  result d0 number values=[wide wide wide 0x3f000000 0x0 wide ...]
+nvnCommandBufferInitialize calls=17242 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant-address distinct=1
+  x2 small min=0x0 max=0xf7 values=[0x0 0xf6 0xf7]
+  x3 mixed distinct=2 readable=2046/2048
+  x4 number min=0x0 max=0x17ea5678 values=[0x17ea5678 0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number min=0x0 max=0x39431234 values=[0x39431234 0x0] f32=[0.00018603430362418294 0]
+  d1 number values=[wide wide wide wide 0x0 wide]
+  d2 number values=[wide 0x0 wide wide 0x3f800000 0x7f7fffff]
+  d3 number values=[wide wide wide wide wide 0x0 ...]
+  d4 number values=[0xbf000000 wide 0x0 wide wide]
+  d5 number values=[wide 0xffff 0xffffffff wide 0x0 0x3f000000 ...]
+  d6 number values=[0x0 0xffffffff 0x43b40000 0x3f800000 wide 0x43870000 ...]
+  d7 number min=0x0 max=0xffffffff values=[0x0 0xc3b40000 0xffffffff 0xc3870000 0x3a888889 0xc3ca8000 ...]
+  result x0 constant min=0x1 max=0x1 values=[0x1]
+  result x1 constant-address distinct=1
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnCommandBufferReportCounter calls=51711 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant min=0x0 max=0x0 values=[0x0]
+  x2 number values=[wide wide wide wide wide wide ...]
+  x3 mixed distinct=6+ readable=1193/2048 zero=676/2048
+  x4 mixed distinct=6+ readable=172/2048 zero=1360/2048
+  x5 small min=0x0 max=0x4 values=[0x0 0x4 0x1]
+  x6 small min=0x0 max=0x400 values=[0x0 0x1 0x400 0x2]
+  x7 mixed distinct=4 readable=340/2048 zero=1353/2048
+  d0 number values=[wide wide wide 0x0 wide wide ...]
+  d1 number values=[wide 0x0 wide wide wide wide ...]
+  d2 number values=[wide 0x0 wide wide 0x3f800000 wide ...]
+  d3 number values=[wide wide wide wide wide 0x0 ...]
+  d4 number values=[0xbf000000 wide 0x0 wide wide wide]
+  d5 number values=[wide 0xffff 0xffffffff wide wide 0x0 ...]
+  d6 number values=[0x0 0xffffffff 0x43b40000 0x3f800000 wide 0x43870000 ...]
+  d7 number min=0x0 max=0xffffffff values=[0x0 0xc3b40000 0xffffffff 0xc3870000 0x3a888889 0xc3ca8000 ...]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 number values=[0x0 wide wide wide wide wide ...]
+nvnCommandBufferRestoreZCullData calls=47405 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 number values=[wide wide wide]
+  x2 small min=0x40a0 max=0x9320 values=[0x40a0 0x9320]
+  x3 constant min=0x2 max=0x2 values=[0x2]
+  x4 constant min=0x20 max=0x20 values=[0x20]
+  x5 constant min=0x20 max=0x20 values=[0x20]
+  x6 constant min=0x400 max=0x400 values=[0x400]
+  x7 constant-address distinct=1
+  d0 number values=[wide wide]
+  d1 number values=[wide wide]
+  d2 number values=[0x0 0x3f800000 wide]
+  d3 constant min=0x0 max=0x0 values=[0x0]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 number min=0x0 max=0x3f000000 values=[0x3f000000 0x0] f32=[0.5 0]
+  d6 number min=0x42000000 max=0x43cb0000 values=[0x43870000 0x43cb0000 0x43ca8000 0x42000000] f32=[270 406 405 32]
+  d7 number min=0xc2000000 max=0xc3cb0000 values=[0xc3870000 0xc3cb0000 0xc3ca8000 0xc2000000] f32=[-270 -406 -405 -32]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 number values=[wide wide]
+nvnCommandBufferSaveZCullData calls=56018 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 number values=[wide wide wide wide wide]
+  x2 small min=0x100 max=0x9320 values=[0x100 0x40a0 0x9320]
+  x3 constant-address distinct=1
+  x4 mixed distinct=6+ readable=157/2048
+  x5 mixed distinct=4 readable=473/2048 zero=157/2048
+  x6 small min=0x0 max=0x400 values=[0x0 0x400]
+  x7 address distinct=2
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 number min=0x0 max=0x444b0000 values=[0x3f800000 0x44070000 0x0 0x444b0000] f32=[1 540 0 812]
+  d2 number min=0x0 max=0x3f800000 values=[0x0 0x3f800000] f32=[0 1]
+  d3 constant min=0x0 max=0x0 values=[0x0]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 number values=[0x3f000000 wide]
+  d6 number min=0x0 max=0x43cb0000 values=[0x3f000000 0x43870000 0x0 0x43cb0000 0x43ca8000] f32=[0.5 270 0 406 405]
+  d7 number min=0xbf000000 max=0xc3cb0000 values=[0xbf000000 0xc3870000 0xc3cb0000 0xc3ca8000] f32=[-0.5 -270 -406 -405]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 constant values=[wide]
+nvnCommandBufferSetDepthRange calls=327812 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 small min=0x1 max=0x438 values=[0x1 0x2d0 0x400 0x32f 0x10e 0x200 ...]
+  x2 constant min=0xffff max=0xffff values=[0xffff]
+  x3 address distinct=3
+  x4 small min=0x1 max=0x438 values=[0x1 0x2d0 0x400 0x32f 0x10e 0x200 ...]
+  x5 mixed distinct=6+ readable=131/2048 zero=162/2048
+  x6 mixed distinct=4 readable=52/2048 zero=187/2048
+  x7 mixed distinct=5 readable=597/2048 zero=1/2048
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 number min=0x0 max=0x3f800000 values=[0x3f800000 0x0] f32=[1 0]
+  d2 number min=0x3f000000 max=0x44070000 values=[0x3f000000 0x43b40000 0x44000000 0x43cbc000 0x43070000 0x43800000 ...] f32=[0.5 360 512 407.5 135 256]
+  d3 number min=0x3f000000 max=0x44700000 values=[0x3f000000 0x44200000 0x44000000 0x43cbc000 0x43070000 0x43800000 ...] f32=[0.5 640 512 407.5 135 256]
+  d4 number min=0xbf000000 max=0xc4070000 values=[0xbf000000 0xc3b40000 0xc4000000 0xc3cbc000 0xc3070000 0xc3800000 ...] f32=[-0.5 -360 -512 -407.5 -135 -256]
+  d5 number min=0x3f800000 max=0x44870000 values=[0x3f800000 0x44340000 0x44800000 0x444bc000 0x43870000 0x44000000 ...] f32=[1 720 1024 815 270 512]
+  d6 number min=0x3f000000 max=0x44070000 values=[0x3f000000 0x43b40000 0x44000000 0x43cbc000 0x43070000 0x43800000 ...] f32=[0.5 360 512 407.5 135 256]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xbf000000 0xc3b40000 0xc4000000 0xc3cbc000 0xc3070000 0xc3800000 ...] f32=[-0.5 -360 -512 -407.5 -135 -256]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 constant min=0x3f000000 max=0x3f000000 values=[0x3f000000] f32=[0.5]
+nvnCommandBufferSetMemoryCallback calls=17242 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant-address distinct=1
+  x2 small min=0x0 max=0xf7 values=[0x0 0xf6 0xf7]
+  x3 mixed distinct=2 readable=2046/2048
+  x4 number min=0x0 max=0x17ea5678 values=[0x17ea5678 0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 number values=[wide wide wide wide 0x0 wide]
+  d2 number values=[wide 0x0 wide wide 0x3f800000 0x7f7fffff]
+  d3 number values=[wide wide wide wide wide 0x0 ...]
+  d4 number values=[0xbf000000 wide 0x0 wide wide]
+  d5 number values=[wide 0xffff 0xffffffff wide 0x0 0x3f000000 ...]
+  d6 number values=[0x0 0xffffffff 0x43b40000 0x3f800000 wide 0x43870000 ...]
+  d7 number min=0x0 max=0xffffffff values=[0x0 0xc3b40000 0xffffffff 0xc3870000 0x3a888889 0xc3ca8000 ...]
+  result x0 address distinct=6+
+  result x1 constant-address distinct=1
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnCommandBufferSetMemoryCallbackData calls=17242 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant-address distinct=1
+  x2 small min=0x0 max=0xf7 values=[0x0 0xf6 0xf7]
+  x3 mixed distinct=2 readable=2046/2048
+  x4 number min=0x0 max=0x17ea5678 values=[0x17ea5678 0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 number values=[wide wide wide wide 0x0 wide]
+  d2 number values=[wide 0x0 wide wide 0x3f800000 0x7f7fffff]
+  d3 number values=[wide wide wide wide wide 0x0 ...]
+  d4 number values=[0xbf000000 wide 0x0 wide wide]
+  d5 number values=[wide 0xffff 0xffffffff wide 0x0 0x3f000000 ...]
+  d6 number values=[0x0 0xffffffff 0x43b40000 0x3f800000 wide 0x43870000 ...]
+  d7 number min=0x0 max=0xffffffff values=[0x0 0xc3b40000 0xffffffff 0xc3870000 0x3a888889 0xc3ca8000 ...]
+  result x0 address distinct=6+
+  result x1 constant-address distinct=1
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnCommandBufferSetPolygonOffsetClamp calls=112158 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 address distinct=2
+  x2 constant min=0xff max=0xff values=[0xff]
+  x3 small min=0x0 max=0x16 values=[0x0 0x1 0x2 0x4 0x5 0x6 ...]
+  x4 address-or-null distinct=2 readable=3/2048 zero=2045/2048
+  x5 address-or-null distinct=2 readable=156/2048 zero=1892/2048
+  x6 address-or-null distinct=2 readable=158/2048 zero=1890/2048
+  x7 mixed distinct=6+ readable=101/2048
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant min=0x7f7fffff max=0x7f7fffff values=[0x7f7fffff]
+  d3 number values=[wide wide wide]
+  d4 number values=[wide wide wide wide wide wide ...]
+  d5 number values=[wide wide]
+  d6 number min=0x3f000000 max=0x44070000 values=[0x42000000 0x43870000 0x43070000 0x3f000000 0x42870000 0x42080000 ...] f32=[32 270 135 0.5 67.5 34]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xc2000000 0xc3870000 0xc3070000 0xbf000000 0xc2870000 0xc2080000 ...] f32=[-32 -270 -135 -0.5 -67.5 -34]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnCommandBufferSetRenderTargets calls=349326 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 small min=0x0 max=0x6 values=[0x1 0x0 0x6 0x2]
+  x2 address distinct=2
+  x3 address-or-null distinct=3 readable=760/2048 zero=1288/2048
+  x4 address-or-null distinct=6 readable=326/2048 zero=1722/2048
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 mixed distinct=5 readable=74/2048 zero=356/2048
+  x7 mixed distinct=6 readable=611/2048 zero=143/2048
+  d0 number values=[0x0 wide wide]
+  d1 number values=[wide 0x3f800000 wide 0x0 0x477fdc00 0x3f000000 ...]
+  d2 number values=[0x0 0x3f800000 wide wide 0x7f7fffff]
+  d3 number values=[0x0 wide wide wide wide]
+  d4 number values=[0x0 wide wide]
+  d5 number values=[0x0 0x3f000000 0xffffffff wide wide wide]
+  d6 number values=[0x0 0x3f000000 0x43b40000 0x44000000 0x43cbc000 0x43070000 ...] f32=[0 0.5 360 512 407.5 135]
+  d7 number min=0x0 max=0xc4070000 values=[0x0 0xbf000000 0xc3b40000 0xc4000000 0xc3cbc000 0xc3070000 ...] f32=[0 -0.5 -360 -512 -407.5 -135]
+  result x0 mixed distinct=6+ readable=1722/2048
+  result x1 mixed distinct=6+ readable=1012/2048
+  result d0 number values=[wide wide wide wide wide wide ...]
+nvnCommandBufferSetSamplerPool calls=1 sampled=1 returns_sampled=1
+  x0 constant-address distinct=1
+  x1 constant-address distinct=1
+  x2 constant min=0x10 max=0x10 values=[0x10]
+  x3 constant min=0x80000 max=0x80000 values=[0x80000]
+  x4 constant min=0x4 max=0x4 values=[0x4]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant min=0x4b400002 max=0x4b400002 values=[0x4b400002] f32=[12582914]
+  d1 constant min=0x4b400000 max=0x4b400000 values=[0x4b400000] f32=[12582912]
+  d2 constant min=0x4b400000 max=0x4b400000 values=[0x4b400000] f32=[12582912]
+  d3 constant min=0x4b400000 max=0x4b400000 values=[0x4b400000] f32=[12582912]
+  d4 constant min=0xbf000000 max=0xbf000000 values=[0xbf000000] f32=[-0.5]
+  d5 constant values=[wide]
+  d6 constant min=0x0 max=0x0 values=[0x0]
+  d7 constant min=0x0 max=0x0 values=[0x0]
+  result x0 constant-address distinct=1
+  result x1 constant-address distinct=1
+  result d0 constant min=0x4b400002 max=0x4b400002 values=[0x4b400002] f32=[12582914]
+nvnCommandBufferSetScissor calls=206751 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant min=0x0 max=0x0 values=[0x0]
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 small min=0x1 max=0x2000 values=[0x1 0x500 0x400 0x32f 0x10e 0x200 ...]
+  x4 small min=0x1 max=0x2000 values=[0x1 0x2d0 0x400 0x32f 0x10e 0x200 ...]
+  x5 mixed distinct=5 readable=273/2048
+  x6 small min=0x1 max=0x400 values=[0x1 0x400 0x2]
+  x7 mixed distinct=3 readable=689/2048 zero=72/2048
+  d0 number values=[wide wide wide wide wide wide ...]
+  d1 number values=[0x3f800000 wide]
+  d2 number min=0x0 max=0x7f7fffff values=[0x0 0x7f7fffff]
+  d3 number values=[0x0 wide]
+  d4 number values=[0x0 wide]
+  d5 number values=[0x3f000000 wide]
+  d6 number values=[0x3f000000 0x43b40000 0x44000000 0x43cbc000 0x43070000 0x43800000 ...] f32=[0.5 360 512 407.5 135 256]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xbf000000 0xc3b40000 0xc4000000 0xc3cbc000 0xc3070000 0xc3800000 ...] f32=[-0.5 -360 -512 -407.5 -135 -256]
+  result x0 small min=0x1 max=0x2000 values=[0x1 0x2d0 0x400 0x32f 0x10e 0x200 ...]
+  result x1 constant min=0xffff max=0xffff values=[0xffff]
+  result d0 number values=[wide wide wide wide wide wide ...]
+nvnCommandBufferSetShaderScratchMemory calls=1 sampled=1 returns_sampled=1
+  x0 constant-address distinct=1
+  x1 constant-address distinct=1
+  x2 constant min=0x140000 max=0x140000 values=[0x140000]
+  x3 constant min=0x60000 max=0x60000 values=[0x60000]
+  x4 constant min=0x7 max=0x7 values=[0x7]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant values=[wide]
+  d3 constant min=0x0 max=0x0 values=[0x0]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 constant min=0x3f000000 max=0x3f000000 values=[0x3f000000] f32=[0.5]
+  d6 constant min=0x43870000 max=0x43870000 values=[0x43870000] f32=[270]
+  d7 constant min=0xc3870000 max=0xc3870000 values=[0xc3870000] f32=[-270]
+  result x0 constant-address distinct=1
+  result x1 constant-address distinct=1
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnCommandBufferSetStencilMask calls=112158 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant min=0x3 max=0x3 values=[0x3]
+  x2 constant min=0xff max=0xff values=[0xff]
+  x3 small min=0x0 max=0x16 values=[0x0 0x1 0x2 0x4 0x5 0x6 ...]
+  x4 address-or-null distinct=2 readable=3/2048 zero=2045/2048
+  x5 address-or-null distinct=2 readable=156/2048 zero=1892/2048
+  x6 address-or-null distinct=2 readable=158/2048 zero=1890/2048
+  x7 mixed distinct=6+ readable=101/2048
+  d0 constant values=[wide]
+  d1 number values=[wide 0x0 wide wide wide wide ...]
+  d2 number values=[wide wide]
+  d3 number values=[wide wide wide]
+  d4 number values=[wide wide wide wide wide wide ...]
+  d5 number values=[wide wide]
+  d6 number min=0x3f000000 max=0x44070000 values=[0x42000000 0x43870000 0x43070000 0x3f000000 0x42870000 0x42080000 ...] f32=[32 270 135 0.5 67.5 34]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xc2000000 0xc3870000 0xc3070000 0xbf000000 0xc2870000 0xc2080000 ...] f32=[-32 -270 -135 -0.5 -67.5 -34]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 constant values=[wide]
+nvnCommandBufferSetStencilRef calls=112158 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant min=0x3 max=0x3 values=[0x3]
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 small min=0x0 max=0x16 values=[0x0 0x1 0x2 0x4 0x5 0x6 ...]
+  x4 address-or-null distinct=2 readable=3/2048 zero=2045/2048
+  x5 address-or-null distinct=2 readable=156/2048 zero=1892/2048
+  x6 address-or-null distinct=2 readable=158/2048 zero=1890/2048
+  x7 mixed distinct=6+ readable=101/2048
+  d0 constant values=[wide]
+  d1 number values=[wide 0x0 wide wide wide wide ...]
+  d2 number values=[wide wide]
+  d3 number values=[wide wide wide]
+  d4 number values=[wide wide wide wide wide wide ...]
+  d5 number values=[wide wide]
+  d6 number min=0x3f000000 max=0x44070000 values=[0x42000000 0x43870000 0x43070000 0x3f000000 0x42870000 0x42080000 ...] f32=[32 270 135 0.5 67.5 34]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xc2000000 0xc3870000 0xc3070000 0xbf000000 0xc2870000 0xc2080000 ...] f32=[-32 -270 -135 -0.5 -67.5 -34]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 constant values=[wide]
+nvnCommandBufferSetStencilValueMask calls=112158 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant min=0x3 max=0x3 values=[0x3]
+  x2 constant min=0xff max=0xff values=[0xff]
+  x3 small min=0x0 max=0x16 values=[0x0 0x1 0x2 0x4 0x5 0x6 ...]
+  x4 address-or-null distinct=2 readable=3/2048 zero=2045/2048
+  x5 address-or-null distinct=2 readable=156/2048 zero=1892/2048
+  x6 address-or-null distinct=2 readable=158/2048 zero=1890/2048
+  x7 mixed distinct=6+ readable=101/2048
+  d0 constant values=[wide]
+  d1 number values=[wide 0x0 wide wide wide wide ...]
+  d2 number values=[wide wide]
+  d3 number values=[wide wide wide]
+  d4 number values=[wide wide wide wide wide wide ...]
+  d5 number values=[wide wide]
+  d6 number min=0x3f000000 max=0x44070000 values=[0x42000000 0x43870000 0x43070000 0x3f000000 0x42870000 0x42080000 ...] f32=[32 270 135 0.5 67.5 34]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xc2000000 0xc3870000 0xc3070000 0xbf000000 0xc2870000 0xc2080000 ...] f32=[-32 -270 -135 -0.5 -67.5 -34]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 constant values=[wide]
+nvnCommandBufferSetTexturePool calls=1 sampled=1 returns_sampled=1
+  x0 constant-address distinct=1
+  x1 constant-address distinct=1
+  x2 constant min=0x20000 max=0x20000 values=[0x20000]
+  x3 constant min=0x80000 max=0x80000 values=[0x80000]
+  x4 constant min=0x4 max=0x4 values=[0x4]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant min=0x4b400002 max=0x4b400002 values=[0x4b400002] f32=[12582914]
+  d1 constant min=0x4b400000 max=0x4b400000 values=[0x4b400000] f32=[12582912]
+  d2 constant min=0x4b400000 max=0x4b400000 values=[0x4b400000] f32=[12582912]
+  d3 constant min=0x4b400000 max=0x4b400000 values=[0x4b400000] f32=[12582912]
+  d4 constant min=0xbf000000 max=0xbf000000 values=[0xbf000000] f32=[-0.5]
+  d5 constant values=[wide]
+  d6 constant min=0x0 max=0x0 values=[0x0]
+  d7 constant min=0x0 max=0x0 values=[0x0]
+  result x0 constant-address distinct=1
+  result x1 constant-address distinct=1
+  result d0 constant min=0x4b400002 max=0x4b400002 values=[0x4b400002] f32=[12582914]
+nvnCommandBufferSetTiledCacheAction calls=4305 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant min=0x2 max=0x2 values=[0x2]
+  x2 address-or-null distinct=2 readable=1/2048 zero=2047/2048
+  x3 small min=0x0 max=0xc1b values=[0xc1b 0x0]
+  x4 address-or-null distinct=2 readable=2047/2048 zero=1/2048
+  x5 constant-address distinct=1
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[wide 0xffffffff]
+  d1 number values=[wide wide]
+  d2 constant values=[wide]
+  d3 constant values=[wide]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 number values=[0xffffffff 0x0 wide wide]
+  d6 number values=[0x43b40000 0x44070000 wide]
+  d7 number min=0xc3b40000 max=0xc4070000 values=[0xc3b40000 0xc4070000] f32=[-360 -540]
+  result x0 address distinct=6+
+  result x1 address distinct=6
+  result d0 number values=[wide 0xffffffff]
+nvnCommandBufferSetViewport calls=327812 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant min=0x0 max=0x0 values=[0x0]
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 small min=0x1 max=0x780 values=[0x1 0x500 0x400 0x32f 0x10e 0x200 ...]
+  x4 small min=0x1 max=0x438 values=[0x1 0x2d0 0x400 0x32f 0x10e 0x200 ...]
+  x5 mixed distinct=6+ readable=131/2048 zero=162/2048
+  x6 mixed distinct=4 readable=52/2048 zero=187/2048
+  x7 mixed distinct=5 readable=597/2048 zero=1/2048
+  d0 number values=[wide wide 0x44340000 wide wide wide ...]
+  d1 number values=[wide 0x0]
+  d2 number values=[0x0 wide 0x3f800000 wide]
+  d3 number values=[0x0 wide wide wide]
+  d4 number values=[0x0 wide]
+  d5 number values=[0x0 0x3f000000 0xffffffff wide wide]
+  d6 number values=[0x0 0x3f000000 0x43b40000 0x44000000 0x43cbc000 0x43070000 ...] f32=[0 0.5 360 512 407.5 135]
+  d7 number min=0x0 max=0xc4070000 values=[0x0 0xbf000000 0xc3b40000 0xc4000000 0xc3cbc000 0xc3070000 ...] f32=[0 -0.5 -360 -512 -407.5 -135]
+  result x0 number min=0x10000 max=0x4380000 values=[0x10000 0x2d00000 0x4000000 0x32f0000 0x10e0000 0x2000000 ...]
+  result x1 small min=0x1 max=0x438 values=[0x1 0x2d0 0x400 0x32f 0x10e 0x200 ...]
+  result d0 constant min=0x3f000000 max=0x3f000000 values=[0x3f000000] f32=[0.5]
+nvnCommandBufferSignalEvent calls=4306 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 address distinct=2
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant min=0x2 max=0x2 values=[0x2]
+  x4 constant min=0x1 max=0x1 values=[0x1]
+  x5 constant min=0x1 max=0x1 values=[0x1]
+  x6 small min=0x1 max=0x2 values=[0x1 0x2]
+  x7 small min=0x0 max=0x1 values=[0x1 0x0]
+  d0 number values=[0x0 0x3f000000 wide]
+  d1 number values=[0x0 wide] f64=[0 2.000000476837158]
+  d2 number values=[wide 0x0 0x7f7fffff wide]
+  d3 number values=[wide 0x0 wide wide]
+  d4 number values=[wide 0x0 wide wide]
+  d5 number values=[0xffffffff 0x0 wide wide]
+  d6 number values=[0x43b40000 0x44070000 wide]
+  d7 number min=0xc3b40000 max=0xc4070000 values=[0xc3b40000 0xc4070000] f32=[-360 -540]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 number values=[0x0 0x3f000000 wide]
+nvnDepthStencilStateSetDefaults calls=65 sampled=65 returns_sampled=65
+  x0 address distinct=6+
+  x1 address-or-null distinct=2 readable=64/65 zero=1/65
+  x2 small min=0x0 max=0x128 values=[0x128 0x0]
+  x3 mixed distinct=2 readable=64/65
+  x4 number min=0x0 max=0x17ea5678 values=[0x17ea5678 0x1 0x0 0x3 0x6 0x2 ...]
+  x5 small min=0x0 max=0x1 values=[0x0 0x1]
+  x6 address-or-null distinct=5 readable=63/65 zero=2/65
+  x7 address-or-null distinct=2 readable=49/65 zero=16/65
+  d0 number values=[0x0 0x7000700 wide 0x7000701 wide 0x7000400 ...]
+  d1 number values=[wide wide wide 0x1010102 wide 0x3030301 ...]
+  d2 number values=[wide 0x4b400000 0x1 0x4b7fffff 0x4b4000ff wide ...]
+  d3 number values=[wide 0x4b400000 0x4b4000ff wide 0x3 0x80000000 ...]
+  d4 number values=[0xbf000000 0x3f800000 wide wide wide 0x0 ...]
+  d5 number values=[wide wide wide wide 0x0 wide ...]
+  d6 number values=[0x0 wide wide 0x1 0x3f800000 wide]
+  d7 number values=[0x0 0x2 wide]
+  result x0 address distinct=6+
+  result x1 address-or-null distinct=2 readable=64/65 zero=1/65
+  result d0 number values=[0x0 0x7000700 wide 0x7000701 wide 0x7000400 ...]
+nvnDepthStencilStateSetDepthFunc calls=64 sampled=64 returns_sampled=64
+  x0 address distinct=6+
+  x1 small min=0x2 max=0x8 values=[0x8 0x3 0x7 0x4 0x5 0x2]
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant-address distinct=1
+  x4 small min=0x0 max=0x8 values=[0x1 0x0 0x3 0x6 0x2 0x8 ...]
+  x5 small min=0x0 max=0x1 values=[0x1 0x0]
+  x6 address-or-null distinct=5 readable=63/64 zero=1/64
+  x7 address-or-null distinct=2 readable=49/64 zero=15/64
+  d0 number values=[0x7000700 wide 0x7000701 wide 0x7000400 wide ...]
+  d1 number values=[wide wide 0x1010102 wide 0x3030301 wide ...]
+  d2 number values=[0x4b400000 0x1 0x4b7fffff 0x4b4000ff wide 0x4 ...]
+  d3 number values=[0x4b400000 0x4b4000ff wide 0x3 0x80000000 wide]
+  d4 number values=[0x3f800000 wide wide wide 0x0 wide]
+  d5 number values=[wide wide wide 0x0 wide wide]
+  d6 number values=[wide wide 0x1 0x3f800000 wide]
+  d7 number values=[0x0 0x2 wide]
+  result x0 address distinct=6+
+  result x1 small min=0x2 max=0x8 values=[0x8 0x3 0x7 0x4 0x5 0x2]
+  result d0 number values=[0x7000700 wide 0x7000701 wide 0x7000400 wide ...]
+nvnDepthStencilStateSetDepthTestEnable calls=64 sampled=64 returns_sampled=64
+  x0 address distinct=6+
+  x1 small min=0x0 max=0x1 values=[0x0 0x1]
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant-address distinct=1
+  x4 small min=0x0 max=0x8 values=[0x1 0x0 0x3 0x6 0x2 0x8 ...]
+  x5 small min=0x0 max=0x1 values=[0x1 0x0]
+  x6 address-or-null distinct=5 readable=63/64 zero=1/64
+  x7 address-or-null distinct=2 readable=49/64 zero=15/64
+  d0 number values=[0x7000700 wide 0x7000701 wide 0x7000400 wide ...]
+  d1 number values=[wide wide 0x1010102 wide 0x3030301 wide ...]
+  d2 number values=[0x4b400000 0x1 0x4b7fffff 0x4b4000ff wide 0x4 ...]
+  d3 number values=[0x4b400000 0x4b4000ff wide 0x3 0x80000000 wide]
+  d4 number values=[0x3f800000 wide wide wide 0x0 wide]
+  d5 number values=[wide wide wide 0x0 wide wide]
+  d6 number values=[wide wide 0x1 0x3f800000 wide]
+  d7 number values=[0x0 0x2 wide]
+  result x0 address distinct=6+
+  result x1 small min=0x0 max=0x1 values=[0x0 0x1]
+  result d0 number values=[0x7000700 wide 0x7000701 wide 0x7000400 wide ...]
+nvnDepthStencilStateSetDepthWriteEnable calls=64 sampled=64 returns_sampled=64
+  x0 address distinct=6+
+  x1 small min=0x0 max=0x1 values=[0x0 0x1]
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant-address distinct=1
+  x4 small min=0x0 max=0x8 values=[0x1 0x0 0x3 0x6 0x2 0x8 ...]
+  x5 small min=0x0 max=0x1 values=[0x1 0x0]
+  x6 address-or-null distinct=5 readable=63/64 zero=1/64
+  x7 address-or-null distinct=2 readable=49/64 zero=15/64
+  d0 number values=[0x7000700 wide 0x7000701 wide 0x7000400 wide ...]
+  d1 number values=[wide wide 0x1010102 wide 0x3030301 wide ...]
+  d2 number values=[0x4b400000 0x1 0x4b7fffff 0x4b4000ff wide 0x4 ...]
+  d3 number values=[0x4b400000 0x4b4000ff wide 0x3 0x80000000 wide]
+  d4 number values=[0x3f800000 wide wide wide 0x0 wide]
+  d5 number values=[wide wide wide 0x0 wide wide]
+  d6 number values=[wide wide 0x1 0x3f800000 wide]
+  d7 number values=[0x0 0x2 wide]
+  result x0 address distinct=6+
+  result x1 small min=0x0 max=0x1 values=[0x0 0x1]
+  result d0 number values=[0x7000700 wide 0x7000701 wide 0x7000400 wide ...]
+nvnDepthStencilStateSetStencilFunc calls=109 sampled=109 returns_sampled=109
+  x0 address distinct=6+
+  x1 small min=0x1 max=0x2 values=[0x1 0x2]
+  x2 small min=0x1 max=0x8 values=[0x8 0x3 0x2 0x4 0x5 0x7 ...]
+  x3 mixed distinct=5 readable=55/109
+  x4 small min=0x0 max=0x8 values=[0x0 0x3 0x1 0x6 0x2 0x7 ...]
+  x5 small min=0x0 max=0x1 values=[0x0 0x1]
+  x6 address distinct=4
+  x7 address-or-null distinct=2 readable=89/109 zero=20/109
+  d0 number values=[wide wide wide wide wide wide ...]
+  d1 number values=[wide wide wide 0x3030301 wide 0x0 ...]
+  d2 number values=[0x1 0x4b7fffff 0x4b4000ff 0x4b400000 wide 0x4 ...]
+  d3 number values=[0x4b400000 0x4b4000ff wide 0x3 0x80000000 wide]
+  d4 number values=[0x3f800000 wide wide wide 0x0 wide]
+  d5 number values=[wide wide wide 0x0 wide wide]
+  d6 number values=[wide wide 0x1 0x3f800000 wide]
+  d7 number values=[0x0 0x2 wide]
+  result x0 address distinct=6+
+  result x1 small min=0x1 max=0x2 values=[0x1 0x2]
+  result d0 number values=[wide wide wide wide wide wide ...]
+nvnDepthStencilStateSetStencilOp calls=109 sampled=109 returns_sampled=109
+  x0 address distinct=6+
+  x1 small min=0x1 max=0x2 values=[0x1 0x2]
+  x2 small min=0x1 max=0x3 values=[0x3 0x1 0x2]
+  x3 small min=0x1 max=0x8 values=[0x3 0x1 0x2 0x7 0x8]
+  x4 small min=0x1 max=0x8 values=[0x3 0x1 0x6 0x2 0x7 0x8 ...]
+  x5 small min=0x0 max=0x1 values=[0x0 0x1]
+  x6 address distinct=4
+  x7 address-or-null distinct=2 readable=89/109 zero=20/109
+  d0 number values=[wide wide wide wide wide wide ...]
+  d1 number values=[wide wide wide 0x3030301 wide 0x0 ...]
+  d2 number values=[0x1 0x4b7fffff 0x4b4000ff 0x4b400000 wide 0x4 ...]
+  d3 number values=[0x4b400000 0x4b4000ff wide 0x3 0x80000000 wide]
+  d4 number values=[0x3f800000 wide wide wide 0x0 wide]
+  d5 number values=[wide wide wide 0x0 wide wide]
+  d6 number values=[wide wide 0x1 0x3f800000 wide]
+  d7 number values=[0x0 0x2 wide]
+  result x0 address distinct=6+
+  result x1 small min=0x1 max=0x2 values=[0x1 0x2]
+  result d0 number values=[wide wide wide wide wide wide ...]
+nvnDepthStencilStateSetStencilTestEnable calls=64 sampled=64 returns_sampled=64
+  x0 address distinct=6+
+  x1 small min=0x0 max=0x1 values=[0x0 0x1]
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant-address distinct=1
+  x4 small min=0x0 max=0x8 values=[0x1 0x0 0x3 0x6 0x2 0x8 ...]
+  x5 small min=0x0 max=0x1 values=[0x1 0x0]
+  x6 address-or-null distinct=5 readable=63/64 zero=1/64
+  x7 address-or-null distinct=2 readable=49/64 zero=15/64
+  d0 number values=[0x7000700 wide 0x7000701 wide 0x7000400 wide ...]
+  d1 number values=[wide wide 0x1010102 wide 0x3030301 wide ...]
+  d2 number values=[0x4b400000 0x1 0x4b7fffff 0x4b4000ff wide 0x4 ...]
+  d3 number values=[0x4b400000 0x4b4000ff wide 0x3 0x80000000 wide]
+  d4 number values=[0x3f800000 wide wide wide 0x0 wide]
+  d5 number values=[wide wide wide 0x0 wide wide]
+  d6 number values=[wide wide 0x1 0x3f800000 wide]
+  d7 number values=[0x0 0x2 wide]
+  result x0 address distinct=6+
+  result x1 small min=0x0 max=0x1 values=[0x0 0x1]
+  result d0 number values=[0x7000700 wide 0x7000701 wide 0x7000400 wide ...]
+nvnDeviceBuilderSetDefaults calls=1 sampled=1 returns_sampled=1
+  x0 constant-address distinct=1
+  x1 constant-address distinct=1
+  x2 constant-address distinct=1
+  x3 constant min=0x1 max=0x1 values=[0x1]
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant values=[wide]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant values=[wide]
+  d3 constant values=[wide]
+  d4 constant values=[wide]
+  d5 constant min=0xffffffff max=0xffffffff values=[0xffffffff]
+  d6 constant values=[wide]
+  d7 constant min=0x0 max=0x0 values=[0x0]
+  result x0 constant-address distinct=1
+  result x1 constant-address distinct=1
+  result d0 constant values=[wide]
+nvnDeviceBuilderSetFlags calls=1 sampled=1 returns_sampled=1
+  x0 constant-address distinct=1
+  x1 constant min=0x100 max=0x100 values=[0x100]
+  x2 constant-address distinct=1
+  x3 constant min=0x1 max=0x1 values=[0x1]
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant values=[wide]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant values=[wide]
+  d3 constant values=[wide]
+  d4 constant values=[wide]
+  d5 constant min=0xffffffff max=0xffffffff values=[0xffffffff]
+  d6 constant values=[wide]
+  d7 constant min=0x0 max=0x0 values=[0x0]
+  result x0 constant-address distinct=1
+  result x1 constant min=0x100 max=0x100 values=[0x100]
+  result d0 constant values=[wide]
+nvnDeviceGetImageHandle calls=39 sampled=39 returns_sampled=39
+  x0 constant-address distinct=1
+  x1 small min=0x103 max=0x3e4 values=[0x103 0x10e 0x115 0x116 0x11d 0x11f ...]
+  x2 address distinct=6+
+  x3 constant min=0xb max=0xb values=[0xb]
+  x4 small min=0x0 max=0x1 values=[0x0 0x1]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 small min=0x0 max=0x400 values=[0x0 0x1 0x400]
+  x7 mixed distinct=4 readable=7/39 zero=26/39
+  d0 number values=[0x0 wide]
+  d1 number values=[0x0 wide wide]
+  d2 number values=[0x4b400000 wide 0x3f800000 wide 0x0 wide]
+  d3 number values=[0x4b400000 0x3 wide 0x0 wide wide ...]
+  d4 number values=[0x3f800000 wide wide wide wide wide ...]
+  d5 number values=[wide 0x0 wide wide wide wide ...]
+  d6 number values=[wide 0x1 wide wide wide 0x0 ...]
+  d7 number values=[0x0 0x2 wide wide wide 0x3b088889 ...]
+  result x0 small min=0x103 max=0x3e4 values=[0x103 0x10e 0x115 0x116 0x11d 0x11f ...]
+  result x1 small min=0x103 max=0x3e4 values=[0x103 0x10e 0x115 0x116 0x11d 0x11f ...]
+  result d0 number values=[0x0 wide]
+nvnDeviceGetInteger calls=23 sampled=23 returns_sampled=23
+  x0 constant-address distinct=1
+  x1 small min=0x0 max=0x5d values=[0x0 0x1 0xf 0x10 0x11 0x12 ...]
+  x2 address distinct=6+
+  x3 mixed distinct=3 readable=1/23 zero=13/23
+  x4 mixed distinct=4 readable=2/23 zero=11/23
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[wide 0x0 0x10000000 wide]
+  d1 number values=[wide 0x1010100 0x0 wide]
+  d2 number values=[0x0 0x4b400000 0x3acccccd wide]
+  d3 number values=[wide 0x4b400000 wide 0x0]
+  d4 number values=[0x0 0xbf000000 wide]
+  d5 number values=[0x2060461 wide wide 0x3f000000]
+  d6 number min=0x0 max=0x43870000 values=[0x0 0x43870000] f32=[0 270]
+  d7 number values=[0x65462 0x0 wide 0xc3870000]
+  result x0 number min=0x1 max=0x100000 values=[0x37 0xf 0x20 0x100 0x1000 0x100000 ...]
+  result x1 address distinct=5
+  result d0 number values=[wide 0x0 0x10000000 wide]
+nvnDeviceGetProcAddress calls=1070 sampled=1070 returns_sampled=1070
+  x0 address-or-null distinct=2 readable=1068/1070 zero=2/1070
+  x1 address distinct=6+
+  x2 mixed distinct=3 readable=2/1070
+  x3 small min=0x0 max=0x1 values=[0x1 0x0]
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[wide wide]
+  d1 number values=[0x0 wide]
+  d2 number values=[wide 0x0]
+  d3 number values=[wide wide]
+  d4 number values=[wide 0x0]
+  d5 number min=0x2060461 max=0xffffffff values=[0xffffffff 0x2060461]
+  d6 number values=[wide 0x0]
+  d7 number min=0x0 max=0x65462 values=[0x0 0x65462]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 number values=[wide wide]
+nvnDeviceGetSeparateSamplerHandle calls=48 sampled=48 returns_sampled=48
+  x0 constant-address distinct=1
+  x1 small min=0x100 max=0x12f values=[0x100 0x101 0x102 0x103 0x104 0x105 ...]
+  x2 address distinct=6
+  x3 address-or-null distinct=2 readable=47/48 zero=1/48
+  x4 mixed distinct=5 readable=7/48 zero=32/48
+  x5 small min=0x0 max=0x1 values=[0x0 0x1]
+  x6 address-or-null distinct=5 readable=26/48 zero=22/48
+  x7 mixed distinct=3 readable=21/48 zero=20/48
+  d0 number values=[wide 0x3f800000]
+  d1 number min=0x3f800000 max=0x4b400000 values=[0x3f800000 0x4b400000] f32=[1 12582912]
+  d2 number min=0x4b400000 max=0x4b4000ff values=[0x4b400000 0x4b4000ff] f32=[12582912 12583167]
+  d3 number min=0x4b400000 max=0x4b4000ff values=[0x4b400000 0x4b4000ff] f32=[12582912 12583167]
+  d4 number values=[0xbf000000 0x3f800000 wide 0x0 wide wide ...]
+  d5 number values=[wide wide wide wide 0x0 wide ...]
+  d6 number values=[0x0 wide wide 0x3f800000 0x1 wide ...]
+  d7 number values=[0x0 0x2 wide wide wide 0x44610000]
+  result x0 mixed distinct=6+ readable=20/48
+  result x1 small min=0x100 max=0x12f values=[0x100 0x101 0x102 0x103 0x104 0x105 ...]
+  result d0 number values=[wide 0x3f800000]
+nvnDeviceGetSeparateTextureHandle calls=13783 sampled=2048 returns_sampled=2048
+  x0 constant-address distinct=1
+  x1 small min=0x100 max=0x295 values=[0x100 0x101 0x102 0x103 0x104 0x105 ...]
+  x2 address distinct=6+
+  x3 small min=0x5 max=0xb values=[0xb 0x5]
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 small min=0x0 max=0x400 values=[0x0 0x1 0x8 0x4 0x400]
+  x7 mixed distinct=6 readable=1598/2048 zero=204/2048
+  d0 number values=[0x0 wide]
+  d1 number values=[0x0 wide wide wide wide]
+  d2 number values=[0x0 0x4b400000 wide 0x3f800000 wide wide ...]
+  d3 number values=[0x4b400000 0x3 wide 0x0 wide wide ...]
+  d4 number values=[0x3f800000 wide wide 0x0 wide 0x4304c005 ...]
+  d5 number values=[wide 0x0 wide 0xffff wide 0x40cecad2 ...]
+  d6 number values=[wide 0x1 wide 0x0 0xffffffff wide ...]
+  d7 number values=[0x0 0x2 wide wide 0xc3b40000 wide ...]
+  result x0 number values=[wide wide wide wide wide wide ...]
+  result x1 small min=0x100 max=0x295 values=[0x100 0x101 0x102 0x103 0x104 0x105 ...]
+  result d0 number values=[0x0 wide]
+nvnDeviceInitialize calls=1 sampled=1 returns_sampled=1
+  x0 constant-address distinct=1
+  x1 constant-address distinct=1
+  x2 constant-address distinct=1
+  x3 constant min=0x1 max=0x1 values=[0x1]
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant values=[wide]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant values=[wide]
+  d3 constant values=[wide]
+  d4 constant values=[wide]
+  d5 constant min=0xffffffff max=0xffffffff values=[0xffffffff]
+  d6 constant values=[wide]
+  d7 constant min=0x0 max=0x0 values=[0x0]
+  result x0 constant min=0x1 max=0x1 values=[0x1]
+  result x1 constant-address distinct=1
+  result d0 constant values=[wide]
+nvnDeviceRegisterFastClearColor calls=10 sampled=10 returns_sampled=10
+  x0 constant-address distinct=1
+  x1 constant-address distinct=1
+  x2 small min=0x25 max=0x3f values=[0x25 0x29 0x3f 0x3d]
+  x3 constant min=0x0 max=0x0 values=[0x0]
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[wide 0xa 0x2 0x9 0x1a wide ...]
+  d1 number values=[wide wide 0x0 wide wide]
+  d2 number values=[wide 0x3f800000 0x0]
+  d3 number min=0x0 max=0x3f800000 values=[0x5 0x3f800000 0x0]
+  d4 number values=[wide 0x3f800000]
+  d5 constant values=[wide]
+  d6 constant values=[wide]
+  d7 constant min=0x0 max=0x0 values=[0x0]
+  result x0 constant min=0x1 max=0x1 values=[0x1]
+  result x1 constant-address distinct=1
+  result d0 number values=[wide wide 0xff000000 0x0 0xff808080 0xffffff00]
+nvnDeviceRegisterFastClearDepth calls=2 sampled=2 returns_sampled=2
+  x0 constant-address distinct=1
+  x1 constant-address distinct=1
+  x2 constant min=0x4 max=0x4 values=[0x4]
+  x3 constant min=0x0 max=0x0 values=[0x0]
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number min=0x0 max=0x3f800000 values=[0x0 0x3f800000] f32=[0 1]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant min=0x0 max=0x0 values=[0x0]
+  d3 constant min=0x0 max=0x0 values=[0x0]
+  d4 constant min=0x3f800000 max=0x3f800000 values=[0x3f800000] f32=[1]
+  d5 constant values=[wide]
+  d6 constant values=[wide]
+  d7 constant min=0x0 max=0x0 values=[0x0]
+  result x0 constant min=0x1 max=0x1 values=[0x1]
+  result x1 constant-address distinct=1
+  result d0 number min=0x0 max=0x3f800000 values=[0x0 0x3f800000] f32=[0 1]
+nvnDeviceSetDepthMode calls=1 sampled=1 returns_sampled=1
+  x0 constant-address distinct=1
+  x1 constant min=0x1 max=0x1 values=[0x1]
+  x2 constant-address distinct=1
+  x3 constant min=0x0 max=0x0 values=[0x0]
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant values=[wide]
+  d1 constant values=[wide]
+  d2 constant min=0x0 max=0x0 values=[0x0]
+  d3 constant values=[wide]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 constant min=0x2060461 max=0x2060461 values=[0x2060461]
+  d6 constant min=0x0 max=0x0 values=[0x0]
+  d7 constant min=0x65462 max=0x65462 values=[0x65462]
+  result x0 constant-address distinct=1
+  result x1 constant min=0x1 max=0x1 values=[0x1]
+  result d0 constant values=[wide]
+nvnDeviceSetWindowOriginMode calls=1 sampled=1 returns_sampled=1
+  x0 constant-address distinct=1
+  x1 constant min=0x1 max=0x1 values=[0x1]
+  x2 constant-address distinct=1
+  x3 constant min=0x0 max=0x0 values=[0x0]
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant values=[wide]
+  d1 constant values=[wide]
+  d2 constant min=0x0 max=0x0 values=[0x0]
+  d3 constant values=[wide]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 constant min=0x2060461 max=0x2060461 values=[0x2060461]
+  d6 constant min=0x0 max=0x0 values=[0x0]
+  d7 constant min=0x65462 max=0x65462 values=[0x65462]
+  result x0 constant-address distinct=1
+  result x1 constant min=0x1 max=0x1 values=[0x1]
+  result d0 constant values=[wide]
+nvnEventBuilderSetStorage calls=2 sampled=2 returns_sampled=2
+  x0 constant-address distinct=1
+  x1 constant-address distinct=1
+  x2 small min=0x0 max=0x100 values=[0x0 0x100]
+  x3 constant-address distinct=1
+  x4 constant min=0x6 max=0x6 values=[0x6]
+  x5 constant min=0x4 max=0x4 values=[0x4]
+  x6 constant min=0x1 max=0x1 values=[0x1]
+  x7 constant min=0x1 max=0x1 values=[0x1]
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 number values=[wide 0x0]
+  d3 number values=[wide 0x0]
+  d4 number values=[wide 0x0]
+  d5 number min=0x0 max=0xffffffff values=[0xffffffff 0x0]
+  d6 number min=0x43b40000 max=0x44070000 values=[0x43b40000 0x44070000] f32=[360 540]
+  d7 number min=0xc3b40000 max=0xc4070000 values=[0xc3b40000 0xc4070000] f32=[-360 -540]
+  result x0 constant-address distinct=1
+  result x1 constant-address distinct=1
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnEventGetValue calls=4633 sampled=2048 returns_sampled=2048
+  x0 address distinct=2
+  x1 address-or-null distinct=6+ readable=78/2048 zero=1970/2048
+  x2 mixed distinct=4 readable=1/2048 zero=2/2048
+  x3 mixed distinct=3 readable=1/2048 zero=2046/2048
+  x4 address-or-null distinct=2 readable=2047/2048 zero=1/2048
+  x5 constant-address distinct=1
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[wide 0x46252b7d 0x47584eb2 0x42b7c49c 0x4411326f 0x44664b85 ...]
+  d1 number values=[wide wide]
+  d2 constant values=[wide]
+  d3 constant values=[wide]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 number values=[0xffffffff 0x0 wide wide]
+  d6 number values=[0x43b40000 0x44070000 wide]
+  d7 number min=0xc3b40000 max=0xc4070000 values=[0xc3b40000 0xc4070000] f32=[-360 -540]
+  result x0 small min=0x0 max=0x1 values=[0x0 0x1]
+  result x1 address-or-null distinct=6+ readable=78/2048 zero=1970/2048
+  result d0 number values=[wide 0x46252b7d 0x47584eb2 0x42b7c49c 0x4411326f 0x44664b85 ...]
+nvnEventInitialize calls=2 sampled=2 returns_sampled=2
+  x0 address distinct=2
+  x1 constant-address distinct=1
+  x2 small min=0x0 max=0x36f values=[0x0 0x36f]
+  x3 mixed distinct=2 readable=1/2
+  x4 constant min=0x6 max=0x6 values=[0x6]
+  x5 constant min=0x4 max=0x4 values=[0x4]
+  x6 constant min=0x1 max=0x1 values=[0x1]
+  x7 constant min=0x1 max=0x1 values=[0x1]
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 number values=[wide 0x0]
+  d3 number values=[wide 0x0]
+  d4 number values=[wide 0x0]
+  d5 number min=0x0 max=0xffffffff values=[0xffffffff 0x0]
+  d6 number min=0x43b40000 max=0x44070000 values=[0x43b40000 0x44070000] f32=[360 540]
+  d7 number min=0xc3b40000 max=0xc4070000 values=[0xc3b40000 0xc4070000] f32=[-360 -540]
+  result x0 constant min=0x1 max=0x1 values=[0x1]
+  result x1 constant-address distinct=1
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnEventSignal calls=4306 sampled=2048 returns_sampled=2048
+  x0 address distinct=2
+  x1 constant min=0x0 max=0x0 values=[0x0]
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 mixed distinct=2 readable=1/2048
+  x4 small min=0x0 max=0x6 values=[0x6 0x0]
+  x5 small min=0x0 max=0x4 values=[0x4 0x0]
+  x6 small min=0x1 max=0x2 values=[0x1 0x2]
+  x7 small min=0x0 max=0x1 values=[0x1 0x0]
+  d0 number values=[0x0 0x3f000000 wide]
+  d1 number values=[0x0 wide] f64=[0 2.000000476837158]
+  d2 number values=[wide 0x0 0x7f7fffff wide]
+  d3 number values=[wide 0x0 wide wide]
+  d4 number values=[wide 0x0 wide wide]
+  d5 number values=[0xffffffff 0x0 wide wide]
+  d6 number values=[0x43b40000 0x44070000 wide]
+  d7 number min=0xc3b40000 max=0xc4070000 values=[0xc3b40000 0xc4070000] f32=[-360 -540]
+  result x0 address distinct=2
+  result x1 constant min=0x0 max=0x0 values=[0x0]
+  result d0 number values=[0x0 0x3f000000 wide]
+nvnMemoryPoolBuilderSetDefaults calls=178 sampled=178 returns_sampled=178
+  x0 address distinct=6+
+  x1 number min=0x0 max=0x9b24cf values=[0x0 0x947bcf 0x95918f 0x956e7f 0x96150f 0x96a7df ...]
+  x2 number min=0x0 max=0x2000000 values=[0x0 0x1020000 0x400000 0x2000000 0x260000 0x200000 ...]
+  x3 address-or-null distinct=6+ readable=65/178 zero=113/178
+  x4 address-or-null distinct=6+ readable=65/178 zero=113/178
+  x5 mixed distinct=3 readable=1/178 zero=174/178
+  x6 mixed distinct=6+ readable=18/178 zero=153/178
+  x7 mixed distinct=4 readable=1/178 zero=132/178
+  d0 number values=[wide wide wide wide wide wide ...]
+  d1 number values=[wide 0x0 0x70 0x80 0x100 0x180 ...]
+  d2 number values=[0x0 wide wide wide wide 0x4b400000 ...]
+  d3 number values=[wide wide wide 0x0 wide wide ...]
+  d4 number values=[0x0 0xbf000000 wide wide wide wide ...]
+  d5 number values=[0x2060461 wide 0x0 0xffff wide wide ...]
+  d6 number values=[0x0 0xffffffff wide wide wide wide ...]
+  d7 number values=[0x65462 0x0 0xffffffff wide 0xc3b40000 wide ...]
+  result x0 address distinct=6+
+  result x1 number min=0x0 max=0x9b24cf values=[0x0 0x947bcf 0x95918f 0x956e7f 0x96150f 0x96a7df ...]
+  result d0 number values=[wide wide wide wide wide wide ...]
+nvnMemoryPoolBuilderSetDevice calls=178 sampled=178 returns_sampled=178
+  x0 address distinct=6+
+  x1 constant-address distinct=1
+  x2 number min=0x0 max=0x2000000 values=[0x0 0x1020000 0x400000 0x2000000 0x260000 0x200000 ...]
+  x3 address-or-null distinct=6+ readable=65/178 zero=113/178
+  x4 address-or-null distinct=6+ readable=65/178 zero=113/178
+  x5 mixed distinct=3 readable=1/178 zero=174/178
+  x6 mixed distinct=6+ readable=18/178 zero=153/178
+  x7 mixed distinct=4 readable=1/178 zero=132/178
+  d0 number values=[wide wide wide wide wide wide ...]
+  d1 number values=[wide 0x0 0x70 0x80 0x100 0x180 ...]
+  d2 number values=[0x0 wide wide wide wide 0x4b400000 ...]
+  d3 number values=[wide wide wide 0x0 wide wide ...]
+  d4 number values=[0x0 0xbf000000 wide wide wide wide ...]
+  d5 number values=[0x2060461 wide 0x0 0xffff wide wide ...]
+  d6 number values=[0x0 0xffffffff wide wide wide wide ...]
+  d7 number values=[0x65462 0x0 0xffffffff wide 0xc3b40000 wide ...]
+  result x0 address distinct=6+
+  result x1 constant-address distinct=1
+  result d0 number values=[wide wide wide wide wide wide ...]
+nvnMemoryPoolBuilderSetFlags calls=178 sampled=178 returns_sampled=178
+  x0 address distinct=6+
+  x1 small min=0x92 max=0x18a values=[0xe2 0x18a 0x92]
+  x2 number min=0x0 max=0x2000000 values=[0x0 0x1020000 0x400000 0x2000000 0x260000 0x200000 ...]
+  x3 address-or-null distinct=6+ readable=65/178 zero=113/178
+  x4 address-or-null distinct=6+ readable=65/178 zero=113/178
+  x5 mixed distinct=3 readable=1/178 zero=174/178
+  x6 mixed distinct=6+ readable=18/178 zero=153/178
+  x7 mixed distinct=4 readable=1/178 zero=132/178
+  d0 number values=[wide wide wide wide wide wide ...]
+  d1 number values=[wide 0x0 0x70 0x80 0x100 0x180 ...]
+  d2 number values=[0x0 wide wide wide wide 0x4b400000 ...]
+  d3 number values=[wide wide wide 0x0 wide wide ...]
+  d4 number values=[0x0 0xbf000000 wide wide wide wide ...]
+  d5 number values=[0x2060461 wide 0x0 0xffff wide wide ...]
+  d6 number values=[0x0 0xffffffff wide wide wide wide ...]
+  d7 number values=[0x65462 0x0 0xffffffff wide 0xc3b40000 wide ...]
+  result x0 address distinct=6+
+  result x1 small min=0x92 max=0x18a values=[0xe2 0x18a 0x92]
+  result d0 number values=[wide wide wide wide wide wide ...]
+nvnMemoryPoolBuilderSetStorage calls=178 sampled=178 returns_sampled=178
+  x0 address distinct=6+
+  x1 mixed distinct=6+ readable=155/178
+  x2 number min=0x100000 max=0x2000000 values=[0x200000 0x400000 0x180000 0x100000 0x1020000 0x1e9000 ...]
+  x3 address-or-null distinct=6+ readable=65/178 zero=113/178
+  x4 address-or-null distinct=6+ readable=65/178 zero=113/178
+  x5 mixed distinct=3 readable=1/178 zero=174/178
+  x6 mixed distinct=6+ readable=18/178 zero=153/178
+  x7 mixed distinct=4 readable=1/178 zero=132/178
+  d0 number values=[wide wide wide wide wide wide ...]
+  d1 number values=[wide 0x0 0x70 0x80 0x100 0x180 ...]
+  d2 number values=[0x0 wide wide wide wide 0x4b400000 ...]
+  d3 number values=[wide wide wide 0x0 wide wide ...]
+  d4 number values=[0x0 0xbf000000 wide wide wide wide ...]
+  d5 number values=[0x2060461 wide 0x0 0xffff wide wide ...]
+  d6 number values=[0x0 0xffffffff wide wide wide wide ...]
+  d7 number values=[0x65462 0x0 0xffffffff wide 0xc3b40000 wide ...]
+  result x0 address distinct=6+
+  result x1 mixed distinct=6+ readable=155/178
+  result d0 number values=[wide wide wide wide wide wide ...]
+nvnMemoryPoolFinalize calls=93 sampled=93 returns_sampled=93
+  x0 address distinct=6+
+  x1 constant min=0x0 max=0x0 values=[0x0]
+  x2 mixed distinct=6+ readable=49/93 zero=43/93
+  x3 mixed distinct=6+ readable=51/93 zero=5/93
+  x4 mixed distinct=3 readable=13/93 zero=64/93
+  x5 address-or-null distinct=3 readable=27/93 zero=66/93
+  x6 small min=0x0 max=0x1 values=[0x0 0x1]
+  x7 address-or-null distinct=2 readable=15/93 zero=78/93
+  d0 number values=[0x0 wide wide]
+  d1 number values=[wide wide 0x0]
+  d2 number values=[0x0 wide wide]
+  d3 number values=[0x0 0x44340000 wide]
+  d4 number values=[0x0 wide wide wide]
+  d5 number values=[wide 0xffffffff 0x0 wide wide]
+  d6 number values=[0x3f800000 wide wide 0x44070000 wide 0x0 ...]
+  d7 number min=0x0 max=0xffffffff values=[0x0 0xffffffff 0x3a888889 0xc4070000 0x44870000 0x44610000]
+  result x0 address distinct=3
+  result x1 address distinct=6+
+  result d0 number values=[0x0 wide wide]
+nvnMemoryPoolGetBufferAddress calls=5828 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 address distinct=6+
+  x2 small min=0x0 max=0x302 values=[0x0 0x2e2 0x2e3 0x2e4 0x2f6 0x2df ...]
+  x3 mixed distinct=2 readable=1996/2048
+  x4 mixed distinct=6+ readable=1/2048 zero=21/2048
+  x5 number values=[0x0 0x1 0x2 0x20 wide 0x4]
+  x6 mixed distinct=6+ readable=126/2048 zero=1911/2048
+  x7 mixed distinct=6+ readable=44/2048 zero=1907/2048
+  d0 number values=[0x0 wide wide wide wide wide ...]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 number values=[0x0 wide 0x4b7fffff 0x1 wide 0x4b400000 ...]
+  d3 number values=[wide wide 0x4b400000 0x4b4000ff 0x3 0x0 ...]
+  d4 number values=[0x0 0xbf000000 0x3f800000 wide wide 0x80000000 ...]
+  d5 number values=[0x2060461 wide wide wide 0x0 wide ...]
+  d6 number values=[0x0 wide wide 0x1 0x3f800000 wide ...]
+  d7 number values=[0x65462 0x0 0x2 wide wide 0xffffffff ...]
+  result x0 number values=[wide wide wide wide wide wide ...]
+  result x1 address distinct=6+
+  result d0 number values=[0x0 wide wide wide wide wide ...]
+nvnMemoryPoolGetFlags calls=11656 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 address distinct=6+
+  x2 small min=0x0 max=0x2f6 values=[0x0 0x2e2 0x2e3 0x2e4 0x2f6 0x2df ...]
+  x3 mixed distinct=2 readable=2010/2048
+  x4 small min=0x0 max=0x8 values=[0x6 0x0 0x8 0x4 0x1 0x2 ...]
+  x5 small min=0x0 max=0x2 values=[0x0 0x1 0x2]
+  x6 address-or-null distinct=6+ readable=194/2048 zero=1854/2048
+  x7 mixed distinct=3 readable=86/2048 zero=1882/2048
+  d0 number values=[0x0 wide wide wide]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 number values=[0x0 wide 0x4b7fffff 0x1 wide 0x4b400000 ...]
+  d3 number values=[wide wide 0x4b400000 0x4b4000ff 0x3 0x0 ...]
+  d4 number values=[0x0 0xbf000000 0x3f800000 wide wide 0x80000000 ...]
+  d5 number values=[0x2060461 wide wide wide 0x0 wide ...]
+  d6 number values=[0x0 wide wide 0x1 0x3f800000 wide ...]
+  d7 number values=[0x65462 0x0 0x2 wide wide 0xffffffff]
+  result x0 constant min=0xe2 max=0xe2 values=[0xe2]
+  result x1 address distinct=6+
+  result d0 number values=[0x0 wide wide wide]
+nvnMemoryPoolGetSize calls=1885 sampled=1885 returns_sampled=1885
+  x0 address distinct=6+
+  x1 address-or-null distinct=6+ readable=1617/1885 zero=268/1885
+  x2 mixed distinct=6+ readable=140/1885 zero=1648/1885
+  x3 mixed distinct=6+ readable=1761/1885 zero=18/1885
+  x4 mixed distinct=6+ readable=181/1885 zero=88/1885
+  x5 address-or-null distinct=3 readable=183/1885 zero=1702/1885
+  x6 mixed distinct=6+ readable=26/1885 zero=1824/1885
+  x7 mixed distinct=3 readable=40/1885 zero=1816/1885
+  d0 number values=[0x0 wide wide wide wide wide ...]
+  d1 number values=[0x0 wide 0x3f90 wide 0x20644 0x20f8c ...]
+  d2 number values=[0xd4bca38 0x1018 wide 0x1220 0x0 0x218 ...]
+  d3 number values=[0x945758c wide wide wide wide wide ...]
+  d4 number values=[wide wide 0x0 wide wide wide ...]
+  d5 number values=[0x0 0xffff wide 0xffffffff wide wide ...]
+  d6 number values=[0xffffffff 0x0 0x3f800000 wide wide 0x44070000 ...]
+  d7 number min=0x0 max=0xffffffff values=[0xffffffff 0x0 0x3a888889 0xc4070000 0x44870000 0x44610000]
+  result x0 number min=0x180000 max=0x2000000 values=[0x400000 0x200000 0x2000000 0x800000 0x1000000 0x3c0000 ...]
+  result x1 address-or-null distinct=6+ readable=1617/1885 zero=268/1885
+  result d0 number values=[0x0 wide wide wide wide wide ...]
+nvnMemoryPoolInitialize calls=178 sampled=178 returns_sampled=178
+  x0 address distinct=6+
+  x1 address distinct=6+
+  x2 small min=0x0 max=0x7e values=[0x0 0x9 0x65 0x66 0x67 0x68 ...]
+  x3 mixed distinct=2 readable=158/178
+  x4 address-or-null distinct=6+ readable=65/178 zero=113/178
+  x5 mixed distinct=3 readable=1/178 zero=174/178
+  x6 mixed distinct=6+ readable=18/178 zero=153/178
+  x7 mixed distinct=4 readable=1/178 zero=132/178
+  d0 number values=[wide wide wide wide wide wide ...]
+  d1 number values=[wide 0x0 0x70 0x80 0x100 0x180 ...]
+  d2 number values=[0x0 wide wide wide wide 0x4b400000 ...]
+  d3 number values=[wide wide wide 0x0 wide wide ...]
+  d4 number values=[0x0 0xbf000000 wide wide wide wide ...]
+  d5 number values=[0x2060461 wide 0x0 0xffff wide wide ...]
+  d6 number values=[0x0 0xffffffff wide wide wide wide ...]
+  d7 number values=[0x65462 0x0 0xffffffff wide 0xc3b40000 wide ...]
+  result x0 constant min=0x1 max=0x1 values=[0x1]
+  result x1 mixed distinct=6+ readable=177/178
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnMemoryPoolMap calls=5997 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 address-or-null distinct=6+ readable=2047/2048 zero=1/2048
+  x2 mixed distinct=6+ readable=1/2048 zero=1995/2048
+  x3 mixed distinct=2 readable=1996/2048
+  x4 mixed distinct=6+ readable=1/2048 zero=22/2048
+  x5 number values=[0x0 0x1 0x2 0x20 wide 0x4]
+  x6 mixed distinct=6+ readable=125/2048 zero=1912/2048
+  x7 mixed distinct=6+ readable=44/2048 zero=1907/2048
+  d0 number values=[0x0 wide wide wide wide wide ...]
+  d1 number values=[0x0 wide]
+  d2 number values=[0x0 wide 0x4b7fffff 0x1 wide 0x4b400000 ...]
+  d3 number values=[wide wide 0x4b400000 0x4b4000ff 0x3 0x0 ...]
+  d4 number values=[0x0 0xbf000000 0x3f800000 wide wide 0x80000000 ...]
+  d5 number values=[0x2060461 wide wide wide 0x0 wide ...]
+  d6 number values=[0x0 wide wide 0x1 0x3f800000 wide ...]
+  d7 number values=[0x65462 0x0 0x2 wide wide 0xffffffff ...]
+  result x0 address distinct=6+
+  result x1 address-or-null distinct=6+ readable=2047/2048 zero=1/2048
+  result d0 number values=[0x0 wide wide wide wide wide ...]
+nvnMultisampleStateSetDefaults calls=305649 sampled=2048 returns_sampled=2048
+  x0 address distinct=3
+  x1 mixed distinct=6+ readable=709/2048 zero=30/2048
+  x2 mixed distinct=6+ readable=799/2048
+  x3 address distinct=6+
+  x4 mixed distinct=6+ readable=799/2048
+  x5 mixed distinct=6 readable=59/2048 zero=740/2048
+  x6 mixed distinct=4 readable=61/2048 zero=738/2048
+  x7 mixed distinct=6+ readable=449/2048 zero=24/2048
+  d0 number values=[wide wide wide wide wide wide ...]
+  d1 number values=[0x3f800000 wide 0x0 0x7f7fffff]
+  d2 number values=[0x0 wide 0x7f7fffff]
+  d3 number values=[0x0 wide wide]
+  d4 number values=[0x0 wide wide]
+  d5 number values=[0x3f000000 wide wide]
+  d6 number values=[0x3f000000 0x43b40000 0x44000000 0x43cbc000 0x43070000 0x43800000 ...] f32=[0.5 360 512 407.5 135 256]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xbf000000 0xc3b40000 0xc4000000 0xc3cbc000 0xc3070000 0xc3800000 ...] f32=[-0.5 -360 -512 -407.5 -135 -256]
+  result x0 address distinct=3
+  result x1 mixed distinct=6+ readable=709/2048 zero=30/2048
+  result d0 number values=[wide wide wide wide wide wide ...]
+nvnPolygonStateSetCullFace calls=10 sampled=10 returns_sampled=10
+  x0 address distinct=6+
+  x1 small min=0x0 max=0x2 values=[0x0 0x2 0x1]
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant-address distinct=1
+  x4 small min=0x0 max=0x1 values=[0x1 0x0]
+  x5 constant min=0x1 max=0x1 values=[0x1]
+  x6 address-or-null distinct=2 readable=8/10 zero=2/10
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[wide 0x0 0x7000400]
+  d1 number values=[wide 0x0 0x1010102]
+  d2 number min=0x4b400000 max=0x4b7fffff values=[0x4b400000 0x4b7fffff] f32=[12582912 16777215]
+  d3 constant min=0x4b400000 max=0x4b400000 values=[0x4b400000] f32=[12582912]
+  d4 constant min=0x3f800000 max=0x3f800000 values=[0x3f800000] f32=[1]
+  d5 constant values=[wide]
+  d6 constant values=[wide]
+  d7 constant min=0x0 max=0x0 values=[0x0]
+  result x0 address distinct=6+
+  result x1 small min=0x0 max=0x2 values=[0x0 0x2 0x1]
+  result d0 number values=[wide 0x0 0x7000400]
+nvnPolygonStateSetDefaults calls=11 sampled=11 returns_sampled=11
+  x0 address distinct=6+
+  x1 small min=0x0 max=0x28 values=[0x0 0x28]
+  x2 small min=0x0 max=0x128 values=[0x128 0x0]
+  x3 mixed distinct=2 readable=10/11
+  x4 number min=0x0 max=0x17ea5678 values=[0x17ea5678 0x1 0x0]
+  x5 small min=0x0 max=0x1 values=[0x0 0x1]
+  x6 address-or-null distinct=2 readable=8/11 zero=3/11
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[0x0 wide 0x7000400]
+  d1 number values=[wide wide 0x0 0x1010102]
+  d2 number values=[wide 0x4b400000 0x4b7fffff]
+  d3 number values=[wide 0x4b400000]
+  d4 number min=0x3f800000 max=0xbf000000 values=[0xbf000000 0x3f800000] f32=[-0.5 1]
+  d5 number values=[wide wide]
+  d6 number values=[0x0 wide]
+  d7 constant min=0x0 max=0x0 values=[0x0]
+  result x0 address distinct=6+
+  result x1 small min=0x0 max=0x28 values=[0x0 0x28]
+  result d0 number values=[0x0 wide 0x7000400]
+nvnPolygonStateSetPolygonMode calls=10 sampled=10 returns_sampled=10
+  x0 address distinct=6+
+  x1 small min=0x0 max=0x2 values=[0x2 0x1 0x0]
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant-address distinct=1
+  x4 small min=0x0 max=0x1 values=[0x1 0x0]
+  x5 constant min=0x1 max=0x1 values=[0x1]
+  x6 address-or-null distinct=2 readable=8/10 zero=2/10
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[wide 0x0 0x7000400]
+  d1 number values=[wide 0x0 0x1010102]
+  d2 number min=0x4b400000 max=0x4b7fffff values=[0x4b400000 0x4b7fffff] f32=[12582912 16777215]
+  d3 constant min=0x4b400000 max=0x4b400000 values=[0x4b400000] f32=[12582912]
+  d4 constant min=0x3f800000 max=0x3f800000 values=[0x3f800000] f32=[1]
+  d5 constant values=[wide]
+  d6 constant values=[wide]
+  d7 constant min=0x0 max=0x0 values=[0x0]
+  result x0 address distinct=6+
+  result x1 small min=0x0 max=0x2 values=[0x2 0x1 0x0]
+  result d0 number values=[wide 0x0 0x7000400]
+nvnProgramInitialize calls=1564 sampled=1564 returns_sampled=1564
+  x0 address distinct=6+
+  x1 constant-address distinct=1
+  x2 small min=0x0 max=0x36b values=[0x0 0x25c 0x25d 0x25e 0x25f 0x260 ...]
+  x3 mixed distinct=2 readable=1508/1564
+  x4 address-or-null distinct=2 readable=1/1564 zero=1563/1564
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 address-or-null distinct=2 readable=10/1564 zero=1554/1564
+  d0 number values=[wide wide wide 0x944bee0 wide wide ...]
+  d1 number values=[0x94a5a7c 0x9459620 wide wide wide wide ...]
+  d2 number values=[0xd4bca38 0x1018 wide 0x1220 0x0 0x218 ...]
+  d3 number values=[0x945758c wide wide wide wide wide ...]
+  d4 number values=[wide 0x44f00000 0x0]
+  d5 number values=[0x0 wide] f64=[0 0.007812505573383532]
+  d6 number min=0x0 max=0xffffffff values=[0xffffffff 0x0]
+  d7 number min=0x44870000 max=0xffffffff values=[0xffffffff 0x44870000]
+  result x0 constant min=0x1 max=0x1 values=[0x1]
+  result x1 constant-address distinct=1
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnProgramSetShaders calls=1564 sampled=1564 returns_sampled=1564
+  x0 address distinct=6+
+  x1 constant min=0x1 max=0x1 values=[0x1]
+  x2 address distinct=2
+  x3 number min=0x0 max=0x17ea5678 values=[0x1 0x0 0x17ea5678]
+  x4 mixed distinct=4 readable=1044/1564 zero=519/1564
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 address-or-null distinct=2 readable=10/1564 zero=1554/1564
+  d0 number values=[wide wide 0x0 wide wide wide ...]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 number values=[0xd4bca38 0x1018 wide 0x1220 0x0 0x218 ...]
+  d3 number values=[0x945758c wide wide wide wide wide ...]
+  d4 number values=[wide 0x44f00000 0x0]
+  d5 number values=[0x0 wide] f64=[0 0.007812505573383532]
+  d6 number min=0x0 max=0xffffffff values=[0xffffffff 0x0]
+  d7 number min=0x44870000 max=0xffffffff values=[0xffffffff 0x44870000]
+  result x0 constant min=0x1 max=0x1 values=[0x1]
+  result x1 address distinct=6+
+  result d0 number values=[wide wide wide wide wide wide ...]
+nvnQueueBuilderSetCommandFlushThreshold calls=1 sampled=1 returns_sampled=1
+  x0 constant-address distinct=1
+  x1 constant min=0x5000 max=0x5000 values=[0x5000]
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant-address distinct=1
+  x4 constant min=0x6 max=0x6 values=[0x6]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant min=0x0 max=0x0 values=[0x0]
+  d3 constant values=[wide]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 constant min=0x2060461 max=0x2060461 values=[0x2060461]
+  d6 constant min=0x0 max=0x0 values=[0x0]
+  d7 constant min=0x65462 max=0x65462 values=[0x65462]
+  result x0 constant-address distinct=1
+  result x1 constant min=0x5000 max=0x5000 values=[0x5000]
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnQueueBuilderSetControlMemorySize calls=1 sampled=1 returns_sampled=1
+  x0 constant-address distinct=1
+  x1 constant min=0x10000 max=0x10000 values=[0x10000]
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant-address distinct=1
+  x4 constant min=0x6 max=0x6 values=[0x6]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant min=0x0 max=0x0 values=[0x0]
+  d3 constant values=[wide]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 constant min=0x2060461 max=0x2060461 values=[0x2060461]
+  d6 constant min=0x0 max=0x0 values=[0x0]
+  d7 constant min=0x65462 max=0x65462 values=[0x65462]
+  result x0 constant-address distinct=1
+  result x1 constant min=0x10000 max=0x10000 values=[0x10000]
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnQueueBuilderSetDefaults calls=1 sampled=1 returns_sampled=1
+  x0 constant-address distinct=1
+  x1 constant min=0x2010 max=0x2010 values=[0x2010]
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant-address distinct=1
+  x4 constant min=0x6 max=0x6 values=[0x6]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant min=0x0 max=0x0 values=[0x0]
+  d3 constant values=[wide]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 constant min=0x2060461 max=0x2060461 values=[0x2060461]
+  d6 constant min=0x0 max=0x0 values=[0x0]
+  d7 constant min=0x65462 max=0x65462 values=[0x65462]
+  result x0 constant-address distinct=1
+  result x1 constant min=0x2010 max=0x2010 values=[0x2010]
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnQueueBuilderSetDevice calls=1 sampled=1 returns_sampled=1
+  x0 constant-address distinct=1
+  x1 constant-address distinct=1
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant-address distinct=1
+  x4 constant min=0x6 max=0x6 values=[0x6]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant min=0x0 max=0x0 values=[0x0]
+  d3 constant values=[wide]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 constant min=0x2060461 max=0x2060461 values=[0x2060461]
+  d6 constant min=0x0 max=0x0 values=[0x0]
+  d7 constant min=0x65462 max=0x65462 values=[0x65462]
+  result x0 constant-address distinct=1
+  result x1 constant-address distinct=1
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnQueueFinish calls=7 sampled=7 returns_sampled=7
+  x0 constant-address distinct=1
+  x1 address distinct=6+
+  x2 number min=0x0 max=0x90000 values=[0x10000 0x0 0x90000 0x22f40]
+  x3 number min=0x0 max=0x10000 values=[0x10000 0x0]
+  x4 address distinct=2
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[wide 0x0]
+  d1 number values=[wide wide 0x0]
+  d2 number values=[0x0 wide wide] f64=[0 60 0.007812505573383532]
+  d3 number values=[wide wide 0x0 0x44340000 wide]
+  d4 number values=[wide 0x0 wide wide wide]
+  d5 number values=[0xffff wide 0xffffffff 0x0 wide]
+  d6 number values=[0xffffffff 0x3f800000 wide wide 0x44c80000]
+  d7 number min=0x0 max=0xffffffff values=[0x0 0xffffffff 0x3a888889 0x44610000]
+  result x0 address distinct=6+
+  result x1 number values=[0x176a0dce wide 0x29ca57ce 0x2a442eca 0x2ac875f6 0x2ae09793]
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnQueueFlush calls=17241 sampled=2048 returns_sampled=2048
+  x0 constant-address distinct=1
+  x1 constant min=0x1 max=0x1 values=[0x1]
+  x2 address distinct=6+
+  x3 constant min=0x1 max=0x1 values=[0x1]
+  x4 mixed distinct=6+ readable=515/2048 zero=510/2048
+  x5 small min=0x0 max=0x4 values=[0x0 0x4 0x1]
+  x6 small min=0x0 max=0x2 values=[0x0 0x1 0x2]
+  x7 mixed distinct=4 readable=510/2048 zero=1017/2048
+  d0 number values=[wide wide wide wide 0x0 wide ...]
+  d1 number values=[wide wide wide 0x0 wide wide]
+  d2 number values=[0x0 wide wide 0x3f800000 0x7f7fffff]
+  d3 number values=[wide wide wide wide 0x0 0x44340000 ...]
+  d4 number values=[wide 0x0 wide wide]
+  d5 number values=[0xffff 0xffffffff wide 0x0 0x3f000000 wide]
+  d6 number values=[0xffffffff 0x43b40000 0x3f800000 wide 0x0 0x43870000 ...]
+  d7 number min=0x0 max=0xffffffff values=[0x0 0xc3b40000 0xffffffff 0xc3870000 0x3a888889 0xc3ca8000 ...]
+  result x0 constant-address distinct=1
+  result x1 constant-address distinct=1
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnQueueInitialize calls=1 sampled=1 returns_sampled=1
+  x0 constant-address distinct=1
+  x1 constant-address distinct=1
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant-address distinct=1
+  x4 constant min=0x6 max=0x6 values=[0x6]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant min=0x0 max=0x0 values=[0x0]
+  d3 constant values=[wide]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 constant min=0x2060461 max=0x2060461 values=[0x2060461]
+  d6 constant min=0x0 max=0x0 values=[0x0]
+  d7 constant min=0x65462 max=0x65462 values=[0x65462]
+  result x0 constant min=0x1 max=0x1 values=[0x1]
+  result x1 constant-address distinct=1
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnQueuePresentTexture calls=4312 sampled=2048 returns_sampled=2048
+  x0 constant-address distinct=1
+  x1 constant-address distinct=1
+  x2 small min=0x0 max=0x2 values=[0x0 0x1 0x2]
+  x3 constant min=0x10000 max=0x10000 values=[0x10000]
+  x4 constant-address distinct=1
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[wide 0x0]
+  d1 number values=[wide wide 0x0 wide wide wide]
+  d2 number values=[0x0 wide 0x7f7fffff wide]
+  d3 number values=[wide wide wide wide 0x0 wide ...]
+  d4 number values=[0x0 wide wide wide]
+  d5 number values=[0xffff 0xffffffff 0x0 wide wide]
+  d6 number values=[0xffffffff 0x43b40000 wide 0x44070000 wide]
+  d7 number min=0x0 max=0xc4070000 values=[0x0 0xc3b40000 0x3a888889 0xc4070000] f32=[0 -360 0.0010416667209938169 -540]
+  result x0 constant min=0x3 max=0x3 values=[0x3]
+  result x1 address distinct=5
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnQueueSubmitCommands calls=17241 sampled=2048 returns_sampled=2048
+  x0 constant-address distinct=1
+  x1 constant min=0x1 max=0x1 values=[0x1]
+  x2 address distinct=6+
+  x3 mixed distinct=5 readable=510/2048 zero=1023/2048
+  x4 mixed distinct=6+ readable=515/2048 zero=510/2048
+  x5 small min=0x0 max=0x4 values=[0x0 0x4 0x1]
+  x6 small min=0x0 max=0x2 values=[0x0 0x1 0x2]
+  x7 mixed distinct=4 readable=510/2048 zero=1017/2048
+  d0 number values=[wide wide 0x0 wide wide 0x3f000000 ...]
+  d1 number values=[0x0 wide wide wide wide 0x3f800000 ...]
+  d2 number values=[0x0 wide wide 0x3f800000 0x7f7fffff]
+  d3 number values=[wide wide wide wide 0x0 0x44340000 ...]
+  d4 number values=[wide 0x0 wide wide]
+  d5 number values=[0xffff 0xffffffff wide wide 0x3f000000 0x0 ...]
+  d6 number values=[0xffffffff 0x43b40000 0x3f800000 wide 0x0 0x43870000 ...]
+  d7 number min=0x0 max=0xffffffff values=[0x0 0xc3b40000 0xffffffff 0xc3870000 0x3a888889 0xc3ca8000 ...]
+  result x0 constant-address distinct=1
+  result x1 constant min=0x1 max=0x1 values=[0x1]
+  result d0 number values=[wide wide wide wide 0x0 wide ...]
+nvnQueueWaitSync calls=4313 sampled=2048 returns_sampled=2048
+  x0 constant-address distinct=1
+  x1 address distinct=6+
+  x2 number min=0x0 max=0x1c0000 values=[0x20000 0x30000 0x1c0000 0x0 0x18 0x52b40 ...]
+  x3 mixed distinct=3 readable=2041/2048 zero=1/2048
+  x4 address-or-null distinct=2 readable=6/2048 zero=2042/2048
+  x5 address-or-null distinct=2 readable=2041/2048 zero=7/2048
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[wide 0x0 wide wide]
+  d1 number values=[wide wide 0x0 wide]
+  d2 constant min=0x0 max=0x0 values=[0x0]
+  d3 number values=[wide wide 0x0 wide wide wide ...]
+  d4 number values=[0x0 wide wide]
+  d5 number values=[0xffff 0x0 0xffffffff wide wide]
+  d6 number values=[0xffffffff 0x0 0x43b40000 wide wide 0x44070000]
+  d7 number min=0x0 max=0xc4070000 values=[0x0 0xc3b40000 0x3a888889 0xc4070000] f32=[0 -360 0.0010416667209938169 -540]
+  result x0 constant min=0x1 max=0x1 values=[0x1]
+  result x1 address distinct=6+
+  result d0 number values=[wide 0x0 wide wide]
+nvnSamplerBuilderSetBorderColor calls=48 sampled=48 returns_sampled=48
+  x0 address distinct=6
+  x1 address distinct=6
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant-address distinct=1
+  x4 mixed distinct=6 readable=5/48 zero=32/48
+  x5 small min=0x0 max=0x1 values=[0x0 0x1]
+  x6 address-or-null distinct=5 readable=26/48 zero=22/48
+  x7 mixed distinct=3 readable=21/48 zero=20/48
+  d0 number min=0x0 max=0x3f800000 values=[0x0 0x3f800000] f32=[0 1]
+  d1 constant min=0x3b808081 max=0x3b808081 values=[0x3b808081] f32=[0.003921568859368563]
+  d2 number values=[0x4b400000 0x0 0x4b7fffff 0x4b4000ff 0xb3bbbd2e wide ...]
+  d3 number values=[0x4b400000 0x0 0x4b4000ff 0x80000000 0x3 wide ...]
+  d4 number values=[0xbf000000 0x3f800000 wide 0x0 wide wide ...]
+  d5 number values=[wide wide wide wide 0x0 wide ...]
+  d6 number values=[0x0 wide wide 0x3f800000 0x1 wide ...]
+  d7 number values=[0x0 0x2 wide wide wide 0x44610000]
+  result x0 address distinct=6
+  result x1 address distinct=6
+  result d0 number min=0x0 max=0x3f800000 values=[0x0 0x3f800000] f32=[0 1]
+nvnSamplerBuilderSetCompare calls=1 sampled=1 returns_sampled=1
+  x0 constant-address distinct=1
+  x1 constant min=0x1 max=0x1 values=[0x1]
+  x2 constant min=0x2 max=0x2 values=[0x2]
+  x3 constant-address distinct=1
+  x4 constant min=0x3 max=0x3 values=[0x3]
+  x5 constant min=0x1 max=0x1 values=[0x1]
+  x6 constant-address distinct=1
+  x7 constant-address distinct=1
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 constant min=0x3b808081 max=0x3b808081 values=[0x3b808081] f32=[0.003921568859368563]
+  d2 constant values=[wide]
+  d3 constant values=[wide]
+  d4 constant values=[wide]
+  d5 constant values=[wide]
+  d6 constant values=[wide]
+  d7 constant values=[wide]
+  result x0 constant-address distinct=1
+  result x1 constant min=0x1 max=0x1 values=[0x1]
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnSamplerBuilderSetDefaults calls=48 sampled=48 returns_sampled=48
+  x0 address distinct=6
+  x1 address distinct=6+
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant-address distinct=1
+  x4 mixed distinct=6 readable=5/48 zero=32/48
+  x5 small min=0x0 max=0x1 values=[0x0 0x1]
+  x6 address-or-null distinct=5 readable=26/48 zero=22/48
+  x7 mixed distinct=3 readable=21/48 zero=20/48
+  d0 number values=[0x4b400002 0x1 0x7f7fffff 0x0 wide 0x7000101 ...]
+  d1 number values=[0x4b400000 0x0 0x7f7fffff 0x1 0x1010001 0x1000101 ...]
+  d2 number values=[0x4b400000 0x0 0x4b7fffff 0x4b4000ff 0xb3bbbd2e wide ...]
+  d3 number values=[0x4b400000 0x0 0x4b4000ff 0x80000000 0x3 wide ...]
+  d4 number values=[0xbf000000 0x3f800000 wide 0x0 wide wide ...]
+  d5 number values=[wide wide wide wide 0x0 wide ...]
+  d6 number values=[0x0 wide wide 0x3f800000 0x1 wide ...]
+  d7 number values=[0x0 0x2 wide wide wide 0x44610000]
+  result x0 address distinct=6
+  result x1 address distinct=6+
+  result d0 constant values=[wide]
+nvnSamplerBuilderSetDevice calls=48 sampled=48 returns_sampled=48
+  x0 address distinct=6
+  x1 constant-address distinct=1
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant-address distinct=1
+  x4 mixed distinct=6 readable=5/48 zero=32/48
+  x5 small min=0x0 max=0x1 values=[0x0 0x1]
+  x6 address-or-null distinct=5 readable=26/48 zero=22/48
+  x7 mixed distinct=3 readable=21/48 zero=20/48
+  d0 constant values=[wide]
+  d1 number values=[0x4b400000 0x0 0x7f7fffff 0x1 0x1010001 0x1000101 ...]
+  d2 number values=[0x4b400000 0x0 0x4b7fffff 0x4b4000ff 0xb3bbbd2e wide ...]
+  d3 number values=[0x4b400000 0x0 0x4b4000ff 0x80000000 0x3 wide ...]
+  d4 number values=[0xbf000000 0x3f800000 wide 0x0 wide wide ...]
+  d5 number values=[wide wide wide wide 0x0 wide ...]
+  d6 number values=[0x0 wide wide 0x3f800000 0x1 wide ...]
+  d7 number values=[0x0 0x2 wide wide wide 0x44610000]
+  result x0 address distinct=6
+  result x1 constant-address distinct=1
+  result d0 constant values=[wide]
+nvnSamplerBuilderSetLodBias calls=48 sampled=48 returns_sampled=48
+  x0 address distinct=6
+  x1 small min=0x1 max=0x7 values=[0x7 0x1 0x5]
+  x2 small min=0x1 max=0x7 values=[0x7 0x1 0x5]
+  x3 small min=0x1 max=0x7 values=[0x7 0x1 0x5]
+  x4 mixed distinct=6 readable=6/48 zero=32/48
+  x5 small min=0x0 max=0x1 values=[0x0 0x1]
+  x6 address-or-null distinct=5 readable=26/48 zero=22/48
+  x7 mixed distinct=3 readable=21/48 zero=20/48
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 constant min=0x3b808081 max=0x3b808081 values=[0x3b808081] f32=[0.003921568859368563]
+  d2 number values=[0x4b400000 0x0 0x4b7fffff 0x4b4000ff 0xb3bbbd2e wide ...]
+  d3 number values=[0x4b400000 0x0 0x4b4000ff 0x80000000 0x3 wide ...]
+  d4 number values=[0xbf000000 0x3f800000 wide 0x0 wide wide ...]
+  d5 number values=[wide wide wide wide 0x0 wide ...]
+  d6 number values=[0x0 wide wide 0x3f800000 0x1 wide ...]
+  d7 number values=[0x0 0x2 wide wide wide 0x44610000]
+  result x0 address distinct=6
+  result x1 small min=0x1 max=0x7 values=[0x7 0x1 0x5]
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnSamplerBuilderSetLodClamp calls=48 sampled=48 returns_sampled=48
+  x0 address distinct=6
+  x1 small min=0x1 max=0x7 values=[0x7 0x1 0x5]
+  x2 small min=0x1 max=0x7 values=[0x7 0x1 0x5]
+  x3 small min=0x1 max=0x7 values=[0x7 0x1 0x5]
+  x4 mixed distinct=6 readable=6/48 zero=32/48
+  x5 small min=0x0 max=0x1 values=[0x0 0x1]
+  x6 address-or-null distinct=5 readable=26/48 zero=22/48
+  x7 mixed distinct=3 readable=21/48 zero=20/48
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 number min=0x0 max=0x7f7fffff values=[0x7f7fffff 0x40000000 0x0]
+  d2 number values=[0x4b400000 0x0 0x4b7fffff 0x4b4000ff 0xb3bbbd2e wide ...]
+  d3 number values=[0x4b400000 0x0 0x4b4000ff 0x80000000 0x3 wide ...]
+  d4 number values=[0xbf000000 0x3f800000 wide 0x0 wide wide ...]
+  d5 number values=[wide wide wide wide 0x0 wide ...]
+  d6 number values=[0x0 wide wide 0x3f800000 0x1 wide ...]
+  d7 number values=[0x0 0x2 wide wide wide 0x44610000]
+  result x0 address distinct=6
+  result x1 small min=0x1 max=0x7 values=[0x7 0x1 0x5]
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnSamplerBuilderSetMaxAnisotropy calls=48 sampled=48 returns_sampled=48
+  x0 address distinct=6
+  x1 small min=0x2 max=0x5 values=[0x2 0x3 0x5]
+  x2 small min=0x0 max=0x1 values=[0x0 0x1]
+  x3 address-or-null distinct=2 readable=47/48 zero=1/48
+  x4 mixed distinct=6 readable=6/48 zero=32/48
+  x5 small min=0x0 max=0x1 values=[0x0 0x1]
+  x6 address-or-null distinct=5 readable=26/48 zero=22/48
+  x7 mixed distinct=3 readable=21/48 zero=20/48
+  d0 number min=0x3f800000 max=0x41000000 values=[0x3f800000 0x41000000 0x40800000] f32=[1 8 4]
+  d1 constant min=0x3b808081 max=0x3b808081 values=[0x3b808081] f32=[0.003921568859368563]
+  d2 number values=[0x4b400000 0x0 0x4b7fffff 0x4b4000ff 0xb3bbbd2e wide ...]
+  d3 number values=[0x4b400000 0x0 0x4b4000ff 0x80000000 0x3 wide ...]
+  d4 number values=[0xbf000000 0x3f800000 wide 0x0 wide wide ...]
+  d5 number values=[wide wide wide wide 0x0 wide ...]
+  d6 number values=[0x0 wide wide 0x3f800000 0x1 wide ...]
+  d7 number values=[0x0 0x2 wide wide wide 0x44610000]
+  result x0 address distinct=6
+  result x1 small min=0x2 max=0x5 values=[0x2 0x3 0x5]
+  result d0 number min=0x3f800000 max=0x41000000 values=[0x3f800000 0x41000000 0x40800000] f32=[1 8 4]
+nvnSamplerBuilderSetMinMagFilter calls=48 sampled=48 returns_sampled=48
+  x0 address distinct=6
+  x1 small min=0x2 max=0x5 values=[0x2 0x3 0x5]
+  x2 small min=0x0 max=0x1 values=[0x0 0x1]
+  x3 address-or-null distinct=2 readable=47/48 zero=1/48
+  x4 mixed distinct=6 readable=6/48 zero=32/48
+  x5 small min=0x0 max=0x1 values=[0x0 0x1]
+  x6 address-or-null distinct=5 readable=26/48 zero=22/48
+  x7 mixed distinct=3 readable=21/48 zero=20/48
+  d0 number values=[0x0 0x3f800000 wide]
+  d1 constant min=0x3b808081 max=0x3b808081 values=[0x3b808081] f32=[0.003921568859368563]
+  d2 number values=[0x4b400000 0x0 0x4b7fffff 0x4b4000ff 0xb3bbbd2e wide ...]
+  d3 number values=[0x4b400000 0x0 0x4b4000ff 0x80000000 0x3 wide ...]
+  d4 number values=[0xbf000000 0x3f800000 wide 0x0 wide wide ...]
+  d5 number values=[wide wide wide wide 0x0 wide ...]
+  d6 number values=[0x0 wide wide 0x3f800000 0x1 wide ...]
+  d7 number values=[0x0 0x2 wide wide wide 0x44610000]
+  result x0 address distinct=6
+  result x1 small min=0x2 max=0x5 values=[0x2 0x3 0x5]
+  result d0 number values=[0x0 0x3f800000 wide]
+nvnSamplerBuilderSetWrapMode calls=48 sampled=48 returns_sampled=48
+  x0 address distinct=6
+  x1 small min=0x1 max=0x7 values=[0x7 0x1 0x5]
+  x2 small min=0x1 max=0x7 values=[0x7 0x1 0x5]
+  x3 small min=0x1 max=0x7 values=[0x7 0x1 0x5]
+  x4 mixed distinct=6 readable=6/48 zero=32/48
+  x5 small min=0x0 max=0x1 values=[0x0 0x1]
+  x6 address-or-null distinct=5 readable=26/48 zero=22/48
+  x7 mixed distinct=3 readable=21/48 zero=20/48
+  d0 number min=0x3f800000 max=0x41000000 values=[0x3f800000 0x41000000 0x40800000] f32=[1 8 4]
+  d1 constant min=0x3b808081 max=0x3b808081 values=[0x3b808081] f32=[0.003921568859368563]
+  d2 number values=[0x4b400000 0x0 0x4b7fffff 0x4b4000ff 0xb3bbbd2e wide ...]
+  d3 number values=[0x4b400000 0x0 0x4b4000ff 0x80000000 0x3 wide ...]
+  d4 number values=[0xbf000000 0x3f800000 wide 0x0 wide wide ...]
+  d5 number values=[wide wide wide wide 0x0 wide ...]
+  d6 number values=[0x0 wide wide 0x3f800000 0x1 wide ...]
+  d7 number values=[0x0 0x2 wide wide wide 0x44610000]
+  result x0 address distinct=6
+  result x1 small min=0x1 max=0x7 values=[0x7 0x1 0x5]
+  result d0 number min=0x3f800000 max=0x41000000 values=[0x3f800000 0x41000000 0x40800000] f32=[1 8 4]
+nvnSamplerInitialize calls=48 sampled=48 returns_sampled=48
+  x0 address distinct=6+
+  x1 address distinct=6
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant-address distinct=1
+  x4 mixed distinct=6 readable=6/48 zero=32/48
+  x5 small min=0x0 max=0x1 values=[0x0 0x1]
+  x6 address-or-null distinct=5 readable=26/48 zero=22/48
+  x7 mixed distinct=3 readable=21/48 zero=20/48
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 number min=0x0 max=0x7f7fffff values=[0x7f7fffff 0x40000000 0x0]
+  d2 number values=[0x4b400000 0x0 0x4b7fffff 0x4b4000ff 0xb3bbbd2e wide ...]
+  d3 number values=[0x4b400000 0x0 0x4b4000ff 0x80000000 0x3 wide ...]
+  d4 number values=[0xbf000000 0x3f800000 wide 0x0 wide wide ...]
+  d5 number values=[wide wide wide wide 0x0 wide ...]
+  d6 number values=[0x0 wide wide 0x3f800000 0x1 wide ...]
+  d7 number values=[0x0 0x2 wide wide wide 0x44610000]
+  result x0 constant min=0x1 max=0x1 values=[0x1]
+  result x1 address distinct=6
+  result d0 constant values=[wide]
+nvnSamplerPoolInitialize calls=1 sampled=1 returns_sampled=1
+  x0 constant-address distinct=1
+  x1 constant-address distinct=1
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant min=0x1000 max=0x1000 values=[0x1000]
+  x4 constant min=0x4 max=0x4 values=[0x4]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant values=[wide]
+  d3 constant values=[wide]
+  d4 constant min=0xbf000000 max=0xbf000000 values=[0xbf000000] f32=[-0.5]
+  d5 constant values=[wide]
+  d6 constant min=0x0 max=0x0 values=[0x0]
+  d7 constant min=0x0 max=0x0 values=[0x0]
+  result x0 constant min=0x1 max=0x1 values=[0x1]
+  result x1 constant-address distinct=1
+  result d0 constant min=0x4b400002 max=0x4b400002 values=[0x4b400002] f32=[12582914]
+nvnSamplerPoolRegisterSampler calls=48 sampled=48 returns_sampled=48
+  x0 constant-address distinct=1
+  x1 small min=0x100 max=0x12f values=[0x100 0x101 0x102 0x103 0x104 0x105 ...]
+  x2 address distinct=6+
+  x3 constant-address distinct=1
+  x4 mixed distinct=6 readable=6/48 zero=32/48
+  x5 small min=0x0 max=0x1 values=[0x0 0x1]
+  x6 address-or-null distinct=5 readable=26/48 zero=22/48
+  x7 mixed distinct=3 readable=21/48 zero=20/48
+  d0 constant values=[wide]
+  d1 number values=[wide wide wide] f64=[0.0078125 131072 512]
+  d2 number values=[0x0 wide] f64=[0 0.007812501848093234]
+  d3 number values=[0x4b400000 0x0 0x4b4000ff 0x80000000 0x3 wide ...]
+  d4 number values=[0xbf000000 0x3f800000 wide 0x0 wide wide ...]
+  d5 number values=[wide wide wide wide 0x0 wide ...]
+  d6 number values=[0x0 wide wide 0x3f800000 0x1 wide ...]
+  d7 number values=[0x0 0x2 wide wide wide 0x44610000]
+  result x0 constant-address distinct=1
+  result x1 address distinct=6+
+  result d0 number min=0x3f800000 max=0x4b400008 values=[0x3f800000 0x4b400008 0x4b400004] f32=[1 12582920 12582916]
+nvnSyncFinalize calls=8623 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 mixed distinct=6+ readable=1031/2048
+  x2 mixed distinct=6+ readable=1026/2048 zero=3/2048
+  x3 mixed distinct=5 readable=22/2048 zero=2021/2048
+  x4 mixed distinct=3 readable=1016/2048 zero=1027/2048
+  x5 address-or-null distinct=2 readable=1016/2048 zero=1032/2048
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[0x0 wide wide wide wide 0x200181c7 ...]
+  d1 number values=[wide wide 0x0 wide wide wide ...]
+  d2 number values=[0x0 wide wide wide]
+  d3 number values=[wide wide 0x0 0x44340000 wide wide ...]
+  d4 number values=[wide 0x0 wide wide wide]
+  d5 number values=[0xffff 0xffffffff wide 0x0 wide wide ...]
+  d6 number values=[0xffffffff 0x43b40000 0x3f800000 wide wide wide ...]
+  d7 number min=0x0 max=0xffffffff values=[0x0 0xc3b40000 0xffffffff 0x3a888889 0xc4070000]
+  result x0 address distinct=6+
+  result x1 mixed distinct=6+ readable=1031/2048
+  result d0 number values=[0x0 wide wide wide wide 0x200181c7 ...]
+nvnSyncInitialize calls=8645 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant-address distinct=1
+  x2 mixed distinct=6 readable=8/2048 zero=1032/2048
+  x3 mixed distinct=3 readable=1036/2048 zero=1006/2048
+  x4 mixed distinct=5 readable=1014/2048 zero=1009/2048
+  x5 address-or-null distinct=2 readable=1003/2048 zero=1045/2048
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 small min=0x0 max=0x1 values=[0x0 0x1]
+  d0 number values=[wide 0x0 wide wide wide wide ...]
+  d1 number values=[0x0 wide wide wide wide wide ...]
+  d2 number values=[0x0 0x3acccccd wide wide wide wide]
+  d3 number values=[wide wide wide wide 0x0 0x44340000 ...]
+  d4 number values=[wide wide 0x0 wide wide wide ...]
+  d5 number values=[0xffff wide 0xffffffff wide 0x0 wide ...]
+  d6 number values=[0xffffffff 0x0 0x43b40000 0x3f800000 wide wide ...]
+  d7 number values=[0x0 wide 0xc3b40000 0xffffffff 0x3a888889 0xc4070000]
+  result x0 constant min=0x1 max=0x1 values=[0x1]
+  result x1 constant-address distinct=1
+  result d0 number values=[wide 0x0 wide wide wide wide ...]
+nvnSyncWait calls=12932 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 number values=[0x0 wide wide]
+  x2 mixed distinct=6+ readable=685/2048 zero=56/2048
+  x3 mixed distinct=5 readable=7/2048 zero=737/2048
+  x4 address-or-null distinct=3 readable=1353/2048 zero=695/2048
+  x5 address-or-null distinct=3 readable=684/2048 zero=1364/2048
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[0x0 wide wide]
+  d1 number values=[wide 0x0 wide wide]
+  d2 number values=[0x0 wide wide 0x7f7fffff]
+  d3 number values=[wide wide 0x0 0x44340000 wide]
+  d4 number values=[wide 0x0 wide wide]
+  d5 number values=[0xffff 0x0 0xffffffff wide wide]
+  d6 number values=[0xffffffff 0x0 0x43b40000 0x3f800000 wide wide ...]
+  d7 number min=0x0 max=0xffffffff values=[0x0 0xc3b40000 0xffffffff 0x3a888889 0xc4070000]
+  result x0 constant min=0x0 max=0x0 values=[0x0]
+  result x1 mixed distinct=6+ readable=686/2048 zero=686/2048
+  result d0 number values=[0x0 wide wide]
+nvnTextureBuilderGetStorageAlignment calls=1479 sampled=1479 returns_sampled=1479
+  x0 address distinct=6+
+  x1 small min=0x1 max=0x800 values=[0x1 0x200 0x100 0x4a 0x40 0x20 ...]
+  x2 number min=0x1 max=0x80000000 values=[0x80000000 0x8 0x2 0x4 0x10 0x20 ...]
+  x3 small min=0x0 max=0x38 values=[0x0 0x7 0x3 0x17 0x34 0x27 ...]
+  x4 small min=0x1 max=0xb values=[0x2 0x3 0x1 0x4 0x5 0x6 ...]
+  x5 small min=0x1 max=0x10 values=[0x4 0x10 0x8 0x2 0x1]
+  x6 number min=0x0 max=0x8080010 values=[0x0 0x7 0x3 0x8080000 0x8080010 0x1]
+  x7 mixed distinct=6+ readable=973/1479
+  d0 number values=[0x0 wide wide wide]
+  d1 number values=[0x1 wide 0x0 wide wide wide ...]
+  d2 number values=[0x0 0x4b400000 wide 0x3f800000 wide wide ...]
+  d3 number values=[0x4b400000 0x3 0x0 wide wide wide ...]
+  d4 number values=[0x3f800000 wide 0x0 wide 0x4304c005 wide ...]
+  d5 number values=[wide 0x0 0xffff wide 0x40cecad2 wide ...]
+  d6 number values=[wide 0x1 0x0 0xffffffff wide wide ...]
+  d7 number values=[0x0 0x2 wide wide 0xffffffff wide ...]
+  result x0 number min=0x20 max=0x10000 values=[0x200 0x10000 0x20]
+  result x1 mixed distinct=6+ readable=1464/1479
+  result d0 number values=[0x0 wide wide wide]
+nvnTextureBuilderGetStorageSize calls=1479 sampled=1479 returns_sampled=1479
+  x0 address distinct=6+
+  x1 mixed distinct=6+ readable=973/1479
+  x2 address distinct=2
+  x3 small min=0x0 max=0x40 values=[0x1 0x6 0x10 0x4 0x40 0x20 ...]
+  x4 small min=0x0 max=0x5 values=[0x5 0x2 0x0]
+  x5 mixed distinct=6+ readable=1/1479 zero=1009/1479
+  x6 mixed distinct=6+ readable=5/1479 zero=37/1479
+  x7 mixed distinct=6+ readable=978/1479 zero=40/1479
+  d0 number values=[wide wide wide wide 0x0]
+  d1 number values=[0x1 0x0 wide wide wide wide ...]
+  d2 number values=[0x0 0x4b400000 wide 0x3f800000 wide wide ...]
+  d3 number values=[0x4b400000 0x3 0x0 wide wide wide ...]
+  d4 number values=[0x3f800000 wide 0x0 wide 0x4304c005 wide ...]
+  d5 number values=[wide 0x0 0xffff wide 0x40cecad2 wide ...]
+  d6 number values=[wide 0x1 0x0 0xffffffff wide wide ...]
+  d7 number values=[0x0 0x2 wide wide 0xffffffff wide ...]
+  result x0 number min=0x200 max=0x2000000 values=[0x200 0xc00 0x10000 0x100000 0x1200 0x40000 ...]
+  result x1 small min=0x1 max=0x800 values=[0x1 0x200 0x100 0x4a 0x40 0x20 ...]
+  result d0 number values=[0x0 wide wide wide]
+nvnTextureBuilderSetDefaults calls=14760 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 mixed distinct=6+ readable=1276/2048
+  x2 mixed distinct=6+ readable=1618/2048
+  x3 mixed distinct=6+ readable=8/2048 zero=334/2048
+  x4 number min=0x0 max=0x12b000 values=[0x1 0x2 0x3c 0x8 0x4 0x3 ...]
+  x5 mixed distinct=6+ readable=1/2048 zero=1306/2048
+  x6 mixed distinct=6+ readable=4/2048 zero=127/2048
+  x7 mixed distinct=6+ readable=1615/2048 zero=129/2048
+  d0 number values=[wide wide wide wide wide wide ...]
+  d1 number values=[0x1 0x0 wide wide wide wide ...]
+  d2 number values=[0x0 0x4b400000 wide 0x3f800000 wide wide ...]
+  d3 number values=[0x4b400000 0x3 wide 0x0 wide wide ...]
+  d4 number values=[0x3f800000 wide wide 0x0 wide 0x4304c005 ...]
+  d5 number values=[wide 0x0 wide 0xffff wide 0x40cecad2 ...]
+  d6 number values=[wide 0x1 wide 0x0 0xffffffff wide ...]
+  d7 number values=[0x0 0x2 wide wide 0xc3b40000 wide ...]
+  result x0 address distinct=6+
+  result x1 mixed distinct=6+ readable=1276/2048
+  result d0 constant values=[wide]
+nvnTextureBuilderSetDepthStencilMode calls=18 sampled=18 returns_sampled=18
+  x0 address distinct=6+
+  x1 small min=0x0 max=0x1 values=[0x1 0x0]
+  x2 address distinct=6+
+  x3 constant min=0x5 max=0x5 values=[0x5]
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 constant values=[wide]
+  d2 constant values=[wide]
+  d3 number values=[0x0 wide 0x444b0000]
+  d4 number values=[0x0 wide 0x358637bd]
+  d5 number values=[0x0 wide wide] f64=[0 0.6931471805599453 0.0013332074570119598]
+  d6 number values=[0x0 0x39ccccce wide]
+  d7 number values=[0x0 0x41d5fbe8 wide]
+  result x0 address distinct=6+
+  result x1 small min=0x0 max=0x1 values=[0x1 0x0]
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnTextureBuilderSetDevice calls=14760 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant-address distinct=1
+  x2 mixed distinct=6+ readable=1276/2048
+  x3 small min=0x1 max=0x3d values=[0x4 0x11 0x1d 0x25 0x1c 0x1 ...]
+  x4 number min=0x1 max=0x12b000 values=[0x5 0x4 0x1 0x3 0x2 0x40 ...]
+  x5 mixed distinct=6+ readable=1/2048 zero=1309/2048
+  x6 mixed distinct=6+ readable=4/2048 zero=130/2048
+  x7 mixed distinct=6+ readable=1615/2048 zero=132/2048
+  d0 number values=[wide wide wide wide]
+  d1 number values=[0x1 0x0 wide wide wide wide ...]
+  d2 number values=[0x0 0x4b400000 wide 0x3f800000 wide wide ...]
+  d3 number values=[0x4b400000 0x3 wide 0x0 wide wide ...]
+  d4 number values=[0x3f800000 wide wide 0x0 wide 0x4304c005 ...]
+  d5 number values=[wide 0x0 wide 0xffff wide 0x40cecad2 ...]
+  d6 number values=[wide 0x1 wide 0x0 0xffffffff wide ...]
+  d7 number values=[0x0 0x2 wide wide 0xc3b40000 wide ...]
+  result x0 address distinct=6+
+  result x1 constant-address distinct=1
+  result d0 number values=[wide wide wide wide]
+nvnTextureBuilderSetFlags calls=14760 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 small min=0x0 max=0x20 values=[0x0 0x4 0x8 0x9 0x20 0xc]
+  x2 mixed distinct=6+ readable=1276/2048
+  x3 small min=0x1 max=0x3d values=[0x4 0x11 0x1d 0x25 0x1c 0x1 ...]
+  x4 number min=0x1 max=0x12b000 values=[0x5 0x4 0x1 0x3 0x2 0x40 ...]
+  x5 mixed distinct=6+ readable=1/2048 zero=1309/2048
+  x6 mixed distinct=6+ readable=4/2048 zero=130/2048
+  x7 mixed distinct=6+ readable=1615/2048 zero=132/2048
+  d0 number values=[wide wide wide wide]
+  d1 number values=[0x1 0x0 wide wide wide wide ...]
+  d2 number values=[0x0 0x4b400000 wide 0x3f800000 wide wide ...]
+  d3 number values=[0x4b400000 0x3 wide 0x0 wide wide ...]
+  d4 number values=[0x3f800000 wide wide 0x0 wide 0x4304c005 ...]
+  d5 number values=[wide 0x0 wide 0xffff wide 0x40cecad2 ...]
+  d6 number values=[wide 0x1 wide 0x0 0xffffffff wide ...]
+  d7 number values=[0x0 0x2 wide wide 0xc3b40000 wide ...]
+  result x0 address distinct=6+
+  result x1 small min=0x0 max=0x20 values=[0x0 0x4 0x8 0x9 0x20 0xc]
+  result d0 number values=[wide wide wide wide]
+nvnTextureBuilderSetFormat calls=14760 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 small min=0x1 max=0x9c values=[0x25 0x9a 0x27 0x16 0xc 0xb ...]
+  x2 mixed distinct=6+ readable=1276/2048 zero=322/2048
+  x3 mixed distinct=6+ readable=321/2048 zero=1/2048
+  x4 mixed distinct=6+ readable=1/2048 zero=34/2048
+  x5 mixed distinct=6+ readable=1/2048 zero=1309/2048
+  x6 mixed distinct=6+ readable=4/2048 zero=130/2048
+  x7 mixed distinct=6+ readable=1615/2048 zero=132/2048
+  d0 number values=[wide wide wide wide wide]
+  d1 number values=[0x1 0x0 wide wide wide wide ...]
+  d2 number values=[0x0 0x4b400000 wide 0x3f800000 wide wide ...]
+  d3 number values=[0x4b400000 0x3 wide 0x0 wide wide ...]
+  d4 number values=[0x3f800000 wide wide 0x0 wide 0x4304c005 ...]
+  d5 number values=[wide 0x0 wide 0xffff wide 0x40cecad2 ...]
+  d6 number values=[wide 0x1 wide 0x0 0xffffffff wide ...]
+  d7 number values=[0x0 0x2 wide wide 0xc3b40000 wide ...]
+  result x0 address distinct=6+
+  result x1 small min=0x1 max=0x9c values=[0x25 0x9a 0x27 0x16 0xc 0xb ...]
+  result d0 number values=[wide wide wide wide wide]
+nvnTextureBuilderSetLevels calls=14760 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 small min=0x1 max=0xb values=[0x1 0x6 0x7 0x8 0x2 0x9 ...]
+  x2 mixed distinct=6+ readable=1618/2048
+  x3 small min=0x1 max=0x40 values=[0x1 0x6 0x11 0x1d 0x25 0x1c ...]
+  x4 number min=0x1 max=0x12b000 values=[0x5 0x4 0x1 0x3 0x2 0x40 ...]
+  x5 mixed distinct=6+ readable=1/2048 zero=1309/2048
+  x6 mixed distinct=6+ readable=4/2048 zero=130/2048
+  x7 mixed distinct=6+ readable=1615/2048 zero=132/2048
+  d0 number values=[wide wide wide wide wide]
+  d1 number values=[0x1 0x0 wide wide wide wide ...]
+  d2 number values=[0x0 0x4b400000 wide 0x3f800000 wide wide ...]
+  d3 number values=[0x4b400000 0x3 wide 0x0 wide wide ...]
+  d4 number values=[0x3f800000 wide wide 0x0 wide 0x4304c005 ...]
+  d5 number values=[wide 0x0 wide 0xffff wide 0x40cecad2 ...]
+  d6 number values=[wide 0x1 wide 0x0 0xffffffff wide ...]
+  d7 number values=[0x0 0x2 wide wide 0xc3b40000 wide ...]
+  result x0 address distinct=6+
+  result x1 small min=0x1 max=0xb values=[0x1 0x6 0x7 0x8 0x2 0x9 ...]
+  result d0 number values=[wide wide wide wide wide]
+nvnTextureBuilderSetSize1D calls=13281 sampled=2048 returns_sampled=2048
+  x0 address distinct=4
+  x1 number min=0x1 max=0x12b000 values=[0x4 0x1 0x3 0x40 0x8 0x400 ...]
+  x2 address distinct=6+
+  x3 small min=0x1 max=0x3d values=[0x11 0x1d 0x25 0x1c 0x1 0xd ...]
+  x4 number min=0x1 max=0x12b000 values=[0x4 0x1 0x3 0x40 0x8 0x400 ...]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 small min=0x0 max=0x400 values=[0x1 0x0 0x400]
+  x7 address-or-null distinct=3 readable=1945/2048 zero=103/2048
+  d0 constant values=[wide]
+  d1 number values=[0x0 wide wide wide]
+  d2 number values=[wide wide 0x0]
+  d3 number values=[0x4b400000 wide wide 0x0 wide]
+  d4 number values=[0x3f800000 wide 0x0]
+  d5 number values=[wide wide 0xffffffff 0x3f000000 wide]
+  d6 number values=[wide wide 0x43b40000 0x43870000 0x43cb0000 wide]
+  d7 number values=[0x0 wide 0xc3b40000 0xc3870000 0xc3cb0000 0xc4070000]
+  result x0 address distinct=4
+  result x1 number min=0x1 max=0x12b000 values=[0x4 0x1 0x3 0x40 0x8 0x400 ...]
+  result d0 constant values=[wide]
+nvnTextureBuilderSetSize2D calls=973 sampled=973 returns_sampled=973
+  x0 constant-address distinct=1
+  x1 small min=0x1 max=0x400 values=[0x4 0x8 0x10 0x20 0x40 0x80 ...]
+  x2 small min=0x1 max=0x400 values=[0x4 0x8 0x10 0x20 0x40 0x80 ...]
+  x3 small min=0x2 max=0x38 values=[0x17 0x34 0x27 0x38 0x2]
+  x4 small min=0x1 max=0xb values=[0x1 0x2 0x3 0x4 0x5 0x6 ...]
+  x5 constant min=0x1 max=0x1 values=[0x1]
+  x6 number min=0x8080000 max=0x8080010 values=[0x8080000 0x8080010]
+  x7 constant-address distinct=1
+  d0 constant values=[wide]
+  d1 constant min=0x3f800000 max=0x3f800000 values=[0x3f800000] f32=[1]
+  d2 number min=0x3f800000 max=0x7f7fffff values=[0x3f800000 0x7f7fffff]
+  d3 constant min=0x0 max=0x0 values=[0x0]
+  d4 constant values=[wide] f64=[0.06533604395260377]
+  d5 constant values=[wide] f64=[0.3402609812457511]
+  d6 constant values=[wide] f64=[0.13339200271297674]
+  d7 constant values=[wide] f64=[0.024528318116654728]
+  result x0 constant-address distinct=1
+  result x1 small min=0x1 max=0x400 values=[0x4 0x8 0x10 0x20 0x40 0x80 ...]
+  result d0 constant values=[wide]
+nvnTextureBuilderSetSize3D calls=506 sampled=506 returns_sampled=506
+  x0 address distinct=6+
+  x1 small min=0x1 max=0x800 values=[0x1 0x200 0x24 0x100 0x4a 0x40 ...]
+  x2 small min=0x1 max=0x800 values=[0x1 0x200 0x100 0x4a 0x40 0x20 ...]
+  x3 small min=0x1 max=0x40 values=[0x1 0x6 0x10 0x4 0x40 0x20 ...]
+  x4 small min=0x2 max=0x5 values=[0x5 0x2]
+  x5 mixed distinct=6+ readable=1/506 zero=36/506
+  x6 mixed distinct=6+ readable=5/506 zero=37/506
+  x7 mixed distinct=6+ readable=5/506 zero=40/506
+  d0 number values=[wide wide wide wide]
+  d1 number values=[0x1 0x0 wide wide wide wide ...]
+  d2 number values=[0x0 0x4b400000 wide 0x3f800000 wide wide ...]
+  d3 number values=[0x4b400000 0x3 0x0 wide wide wide ...]
+  d4 number values=[0x3f800000 wide 0x0 wide 0x4304c005 wide ...]
+  d5 number values=[wide 0x0 0xffff wide 0x40cecad2 wide ...]
+  d6 number values=[wide 0x1 0x0 0xffffffff wide wide ...]
+  d7 number values=[0x0 0x2 wide wide 0xffffffff wide ...]
+  result x0 address distinct=6+
+  result x1 small min=0x1 max=0x800 values=[0x1 0x200 0x24 0x100 0x4a 0x40 ...]
+  result d0 number values=[wide wide wide wide]
+nvnTextureBuilderSetStorage calls=13787 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 address distinct=6+
+  x2 number min=0x0 max=0x3f9a00 values=[0xd400 0xd600 0xd800 0xda00 0xde00 0xe000 ...]
+  x3 mixed distinct=6+ readable=343/2048
+  x4 number min=0x1 max=0x12b000 values=[0x4 0x1 0x3 0x5 0x40 0x8 ...]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 small min=0x0 max=0x400 values=[0x0 0x1 0x7 0x3 0x400]
+  x7 mixed distinct=6+ readable=1601/2048 zero=166/2048
+  d0 number values=[0x0 wide]
+  d1 number values=[0x0 wide wide wide]
+  d2 number values=[0x0 0x4b400000 wide 0x3f800000 wide wide ...]
+  d3 number values=[0x4b400000 0x3 wide 0x0 wide wide ...]
+  d4 number values=[0x3f800000 wide wide 0x0 wide 0x4304c005 ...]
+  d5 number values=[wide 0x0 wide 0xffff wide 0x40cecad2 ...]
+  d6 number values=[wide 0x1 wide 0x0 0xffffffff wide ...]
+  d7 number values=[0x0 0x2 wide wide 0xc3b40000 wide ...]
+  result x0 address distinct=6+
+  result x1 address distinct=6+
+  result d0 number values=[0x0 wide]
+nvnTextureBuilderSetStride calls=15 sampled=15 returns_sampled=15
+  x0 constant-address distinct=1
+  x1 small min=0x3c0 max=0x780 values=[0x780 0x3c0]
+  x2 constant min=0x3 max=0x3 values=[0x3]
+  x3 constant min=0x4 max=0x4 values=[0x4]
+  x4 constant min=0x5 max=0x5 values=[0x5]
+  x5 constant min=0x1 max=0x1 values=[0x1]
+  x6 constant min=0x1 max=0x1 values=[0x1]
+  x7 constant min=0x140 max=0x140 values=[0x140]
+  d0 constant values=[wide]
+  d1 number values=[wide wide]
+  d2 number min=0x0 max=0x42604691 values=[0x0 0x42604691 0x422f3d68] f32=[0 56.068912506103516 43.809967041015625]
+  d3 number min=0x0 max=0x411836d4 values=[0x0 0x411836d4 0x40c91eb8] f32=[0 9.513385772705078 6.284999847412109]
+  d4 number values=[0x0 wide]
+  d5 constant min=0x0 max=0x0 values=[0x0]
+  d6 number min=0x0 max=0x44c80000 values=[0x44c80000 0x0] f32=[1600 0]
+  d7 number min=0x44610000 max=0x44870000 values=[0x44610000 0x44870000] f32=[900 1080]
+  result x0 constant-address distinct=1
+  result x1 small min=0x3c0 max=0x780 values=[0x780 0x3c0]
+  result d0 constant values=[wide]
+nvnTextureBuilderSetSwizzle calls=506 sampled=506 returns_sampled=506
+  x0 address distinct=6+
+  x1 constant min=0x2 max=0x2 values=[0x2]
+  x2 small min=0x2 max=0x3 values=[0x3 0x2]
+  x3 small min=0x2 max=0x4 values=[0x4 0x2]
+  x4 small min=0x2 max=0x5 values=[0x5 0x2]
+  x5 mixed distinct=6+ readable=1/506 zero=36/506
+  x6 mixed distinct=6+ readable=5/506 zero=37/506
+  x7 mixed distinct=6+ readable=5/506 zero=40/506
+  d0 number values=[wide wide wide wide]
+  d1 number values=[0x1 0x0 wide wide wide wide ...]
+  d2 number values=[0x0 0x4b400000 wide 0x3f800000 wide wide ...]
+  d3 number values=[0x4b400000 0x3 0x0 wide wide wide ...]
+  d4 number values=[0x3f800000 wide 0x0 wide 0x4304c005 wide ...]
+  d5 number values=[wide 0x0 0xffff wide 0x40cecad2 wide ...]
+  d6 number values=[wide 0x1 0x0 0xffffffff wide wide ...]
+  d7 number values=[0x0 0x2 wide wide 0xffffffff wide ...]
+  result x0 address distinct=6+
+  result x1 constant min=0x2 max=0x2 values=[0x2]
+  result d0 number values=[wide wide wide wide]
+nvnTextureBuilderSetTarget calls=14760 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 small min=0x1 max=0xa values=[0x1 0x2 0x4 0x8 0xa]
+  x2 mixed distinct=6+ readable=1276/2048
+  x3 small min=0x1 max=0x3d values=[0x4 0x11 0x1d 0x25 0x1c 0x1 ...]
+  x4 number min=0x1 max=0x12b000 values=[0x5 0x4 0x1 0x3 0x2 0x40 ...]
+  x5 mixed distinct=6+ readable=1/2048 zero=1309/2048
+  x6 mixed distinct=6+ readable=4/2048 zero=130/2048
+  x7 mixed distinct=6+ readable=1615/2048 zero=132/2048
+  d0 number values=[wide wide wide wide]
+  d1 number values=[0x1 0x0 wide wide wide wide ...]
+  d2 number values=[0x0 0x4b400000 wide 0x3f800000 wide wide ...]
+  d3 number values=[0x4b400000 0x3 wide 0x0 wide wide ...]
+  d4 number values=[0x3f800000 wide wide 0x0 wide 0x4304c005 ...]
+  d5 number values=[wide 0x0 wide 0xffff wide 0x40cecad2 ...]
+  d6 number values=[wide 0x1 wide 0x0 0xffffffff wide ...]
+  d7 number values=[0x0 0x2 wide wide 0xc3b40000 wide ...]
+  result x0 address distinct=6+
+  result x1 small min=0x1 max=0xa values=[0x1 0x2 0x4 0x8 0xa]
+  result d0 number values=[wide wide wide wide]
+nvnTextureFinalize calls=13369 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 address-or-null distinct=6+ readable=2047/2048 zero=1/2048
+  x2 mixed distinct=6+ readable=2046/2048 zero=1/2048
+  x3 mixed distinct=6+ readable=16/2048 zero=2/2048
+  x4 mixed distinct=3 readable=3/2048 zero=2032/2048
+  x5 address-or-null distinct=2 readable=1/2048 zero=2047/2048
+  x6 small min=0x0 max=0x400 values=[0x1 0x0 0x400]
+  x7 address-or-null distinct=3 readable=1900/2048 zero=148/2048
+  d0 number values=[wide 0x0 wide]
+  d1 number values=[0x0 wide wide wide wide wide]
+  d2 number values=[wide wide 0x0 wide wide]
+  d3 number values=[0x4b400000 wide wide 0x44340000 0x0 wide]
+  d4 number values=[0x3f800000 wide 0x0 wide]
+  d5 number values=[wide wide 0xffffffff 0x3f000000 0x0 wide]
+  d6 number values=[wide wide 0x43b40000 0x43870000 wide 0x43cb0000 ...]
+  d7 number values=[0x0 wide 0xc3b40000 0xffffffff 0xc3870000 0x3a888889 ...]
+  result x0 address distinct=6+
+  result x1 address-or-null distinct=6+ readable=2047/2048 zero=1/2048
+  result d0 number values=[wide 0x0 wide]
+nvnTextureGetFlags calls=590 sampled=590 returns_sampled=590
+  x0 address distinct=6+
+  x1 mixed distinct=6+ readable=475/590
+  x2 mixed distinct=6+ readable=567/590 zero=11/590
+  x3 mixed distinct=5 readable=9/590 zero=73/590
+  x4 mixed distinct=3 readable=84/590 zero=497/590
+  x5 mixed distinct=3 readable=4/590 zero=577/590
+  x6 mixed distinct=6 readable=4/590 zero=254/590
+  x7 mixed distinct=6+ readable=9/590 zero=208/590
+  d0 number values=[wide 0x0 wide wide wide wide ...]
+  d1 number values=[0x0 wide wide wide wide wide ...]
+  d2 number values=[0x0 0x4b400000 wide 0x3f800000 wide wide ...]
+  d3 number values=[0x4b400000 0x3 0x0 wide wide wide ...]
+  d4 number values=[0x3f800000 wide 0x0 wide 0x4304c005 wide ...]
+  d5 number values=[wide 0x0 0xffff wide 0x40cecad2 wide ...]
+  d6 number values=[wide 0x1 0x0 0xffffffff wide wide ...]
+  d7 number values=[0x0 0x2 wide wide 0xffffffff wide ...]
+  result x0 small min=0x0 max=0x20 values=[0x0 0x4 0x8 0x9 0x20 0xc ...]
+  result x1 mixed distinct=6+ readable=475/590
+  result d0 number values=[wide 0x0 wide wide wide wide ...]
+nvnTextureGetLevels calls=506 sampled=506 returns_sampled=506
+  x0 address distinct=6+
+  x1 mixed distinct=6+ readable=491/506
+  x2 number min=0x1 max=0x80000000 values=[0x80000000 0x4 0x8 0x2 0x1]
+  x3 mixed distinct=4 readable=15/506 zero=197/506
+  x4 small min=0x0 max=0x4 values=[0x2 0x3 0x0 0x4]
+  x5 small min=0x0 max=0x10 values=[0x4 0x0 0x10 0x2 0x8 0x1]
+  x6 small min=0x0 max=0x7 values=[0x0 0x7 0x3 0x1]
+  x7 small min=0x0 max=0x140 values=[0x1 0x0 0x6 0x7 0x8 0x2 ...]
+  d0 number values=[0x0 wide]
+  d1 number values=[0x0 wide]
+  d2 number values=[0x0 0x4b400000 wide 0x3f800000 wide wide ...]
+  d3 number values=[0x4b400000 0x3 0x0 wide wide wide ...]
+  d4 number values=[0x3f800000 wide 0x0 wide 0x4304c005 wide ...]
+  d5 number values=[wide 0x0 0xffff wide 0x40cecad2 wide ...]
+  d6 number values=[wide 0x1 0x0 0xffffffff wide wide ...]
+  d7 number values=[0x0 0x2 wide wide 0xffffffff wide ...]
+  result x0 small min=0x1 max=0xb values=[0x1 0x6 0x7 0x8 0x2 0x9 ...]
+  result x1 mixed distinct=6+ readable=491/506
+  result d0 number values=[0x0 wide]
+nvnTextureGetSamples calls=176816 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 constant min=0xffff max=0xffff values=[0xffff]
+  x2 constant min=0x1 max=0x1 values=[0x1]
+  x3 address distinct=2
+  x4 small min=0x1 max=0x438 values=[0x1 0x2d0 0x400 0x32f 0x10e 0x200 ...]
+  x5 small min=0x4 max=0x20 values=[0x4 0x8 0x20 0x10]
+  x6 small min=0x1 max=0x400 values=[0x1 0x400]
+  x7 mixed distinct=2 readable=651/2048
+  d0 number values=[wide wide wide wide wide wide ...]
+  d1 constant min=0x3f800000 max=0x3f800000 values=[0x3f800000] f32=[1]
+  d2 constant min=0x0 max=0x0 values=[0x0]
+  d3 constant min=0x0 max=0x0 values=[0x0]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 constant min=0x3f000000 max=0x3f000000 values=[0x3f000000] f32=[0.5]
+  d6 number min=0x3f000000 max=0x44070000 values=[0x3f000000 0x43b40000 0x44000000 0x43cbc000 0x43070000 0x43800000 ...] f32=[0.5 360 512 407.5 135 256]
+  d7 number min=0xbf000000 max=0xc4070000 values=[0xbf000000 0xc3b40000 0xc4000000 0xc3cbc000 0xc3070000 0xc3800000 ...] f32=[-0.5 -360 -512 -407.5 -135 -256]
+  result x0 constant min=0x0 max=0x0 values=[0x0]
+  result x1 constant min=0xffff max=0xffff values=[0xffff]
+  result d0 number values=[wide wide wide wide wide wide ...]
+nvnTextureGetTarget calls=590 sampled=590 returns_sampled=590
+  x0 address distinct=6+
+  x1 mixed distinct=6+ readable=475/590
+  x2 mixed distinct=6+ readable=567/590 zero=11/590
+  x3 mixed distinct=5 readable=9/590 zero=73/590
+  x4 mixed distinct=3 readable=84/590 zero=497/590
+  x5 mixed distinct=3 readable=4/590 zero=577/590
+  x6 mixed distinct=6 readable=4/590 zero=254/590
+  x7 mixed distinct=6+ readable=9/590 zero=208/590
+  d0 number values=[wide 0x0 wide wide wide wide ...]
+  d1 number values=[0x0 wide wide wide wide wide ...]
+  d2 number values=[0x0 0x4b400000 wide 0x3f800000 wide wide ...]
+  d3 number values=[0x4b400000 0x3 0x0 wide wide wide ...]
+  d4 number values=[0x3f800000 wide 0x0 wide 0x4304c005 wide ...]
+  d5 number values=[wide 0x0 0xffff wide 0x40cecad2 wide ...]
+  d6 number values=[wide 0x1 0x0 0xffffffff wide wide ...]
+  d7 number values=[0x0 0x2 wide wide 0xffffffff wide ...]
+  result x0 small min=0x1 max=0x8 values=[0x1 0x2 0x4 0x8]
+  result x1 mixed distinct=6+ readable=475/590
+  result d0 number values=[wide 0x0 wide wide wide wide ...]
+nvnTextureGetTextureAddress calls=28 sampled=28 returns_sampled=28
+  x0 address distinct=6+
+  x1 constant-address distinct=1
+  x2 address distinct=6+
+  x3 address distinct=6+
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 mixed distinct=2 readable=2/28
+  d0 constant values=[wide] f64=[2.000000476837158]
+  d1 constant values=[wide] f64=[2.000000476837158]
+  d2 constant min=0x0 max=0x0 values=[0x0]
+  d3 constant min=0x0 max=0x0 values=[0x0]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 constant min=0x3f000000 max=0x3f000000 values=[0x3f000000] f32=[0.5]
+  d6 number min=0x3f000000 max=0x44000000 values=[0x3f000000 0x44000000] f32=[0.5 512]
+  d7 number min=0xbf000000 max=0xc4000000 values=[0xbf000000 0xc4000000] f32=[-0.5 -512]
+  result x0 number values=[wide wide wide wide wide wide ...]
+  result x1 constant-address distinct=1
+  result d0 constant values=[wide] f64=[2.000000476837158]
+nvnTextureGetViewOffset calls=1439 sampled=1439 returns_sampled=1439
+  x0 address distinct=6+
+  x1 address distinct=5
+  x2 constant min=0x1 max=0x1 values=[0x1]
+  x3 small min=0x0 max=0x100 values=[0x0 0x4 0x10 0x100 0x20 0x40 ...]
+  x4 mixed distinct=3 readable=316/1439
+  x5 small min=0x0 max=0x10 values=[0x10 0x4 0x1 0x8 0x0]
+  x6 small min=0x0 max=0x8 values=[0x7 0x8 0x0 0x1 0x3 0x4]
+  x7 small min=0x0 max=0xb values=[0x6 0x8 0x1 0x7 0x4 0x2 ...]
+  d0 small min=0x0 max=0x2 values=[0x0 0x2]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 number values=[0x4b400000 wide wide wide wide wide ...]
+  d3 number values=[0x4b400000 0x0 0x40d02f5c wide 0x41533444 0x41029222 ...]
+  d4 number values=[wide wide wide wide wide 0x0]
+  d5 number values=[wide wide wide wide wide wide ...]
+  d6 number values=[wide wide wide wide wide wide ...]
+  d7 number values=[wide wide 0x44870000 0x44610000]
+  result x0 number min=0x200 max=0x2000000 values=[0x200 0x400 0x600 0x800 0xa00 0xc00 ...]
+  result x1 constant min=0x40 max=0x40 values=[0x40]
+  result d0 constant min=0x2 max=0x2 values=[0x2]
+nvnTextureGetZCullStorageSize calls=9 sampled=9 returns_sampled=9
+  x0 address distinct=6+
+  x1 constant min=0x0 max=0x0 values=[0x0]
+  x2 address distinct=6+
+  x3 constant min=0x5 max=0x5 values=[0x5]
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 constant values=[wide]
+  d2 constant values=[wide]
+  d3 number values=[0x0 wide 0x444b0000]
+  d4 number values=[0x0 wide 0x358637bd]
+  d5 number values=[0x0 wide wide] f64=[0 0.6931471805599453 0.0013332074570119598]
+  d6 number values=[0x0 0x39ccccce wide]
+  d7 number values=[0x0 0x41d5fbe8 wide]
+  result x0 small min=0x100 max=0x9320 values=[0x100 0x40a0 0x11c0 0x9320 0x2640]
+  result x1 small min=0x1 max=0x32c values=[0x1 0x21c 0x10e 0x32c 0x196]
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnTextureInitialize calls=13796 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 address distinct=6+
+  x2 number min=0x0 max=0x3f9a00 values=[0xd400 0xd600 0xd800 0xda00 0xde00 0xe000 ...]
+  x3 mixed distinct=6+ readable=351/2048
+  x4 number min=0x0 max=0x12b000 values=[0x4 0x1 0x3 0x5 0x40 0x8 ...]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 small min=0x0 max=0x400 values=[0x0 0x1 0x7 0x3 0x400]
+  x7 mixed distinct=6+ readable=1592/2048 zero=175/2048
+  d0 number values=[0x0 wide]
+  d1 number values=[0x0 wide wide wide wide]
+  d2 number values=[0x0 0x4b400000 wide 0x3f800000 wide wide ...]
+  d3 number values=[0x4b400000 0x3 wide 0x0 wide wide ...]
+  d4 number values=[0x3f800000 wide wide 0x0 wide 0x4304c005 ...]
+  d5 number values=[wide 0x0 wide 0xffff wide 0x40cecad2 ...]
+  d6 number values=[wide 0x1 wide 0x0 0xffffffff wide ...]
+  d7 number values=[0x0 0x2 wide wide 0xc3b40000 wide ...]
+  result x0 constant min=0x1 max=0x1 values=[0x1]
+  result x1 address distinct=6+
+  result d0 number values=[0x0 wide]
+nvnTexturePoolInitialize calls=1 sampled=1 returns_sampled=1
+  x0 constant-address distinct=1
+  x1 constant-address distinct=1
+  x2 constant min=0x20000 max=0x20000 values=[0x20000]
+  x3 constant min=0x80000 max=0x80000 values=[0x80000]
+  x4 constant min=0x4 max=0x4 values=[0x4]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant min=0x4b400002 max=0x4b400002 values=[0x4b400002] f32=[12582914]
+  d1 constant min=0x4b400000 max=0x4b400000 values=[0x4b400000] f32=[12582912]
+  d2 constant min=0x4b400000 max=0x4b400000 values=[0x4b400000] f32=[12582912]
+  d3 constant min=0x4b400000 max=0x4b400000 values=[0x4b400000] f32=[12582912]
+  d4 constant min=0xbf000000 max=0xbf000000 values=[0xbf000000] f32=[-0.5]
+  d5 constant values=[wide]
+  d6 constant min=0x0 max=0x0 values=[0x0]
+  d7 constant min=0x0 max=0x0 values=[0x0]
+  result x0 constant min=0x1 max=0x1 values=[0x1]
+  result x1 constant-address distinct=1
+  result d0 constant min=0x4b400002 max=0x4b400002 values=[0x4b400002] f32=[12582914]
+nvnTexturePoolRegisterImage calls=13 sampled=13 returns_sampled=13
+  x0 constant-address distinct=1
+  x1 small min=0x10e max=0x258 values=[0x10e 0x11d 0x11f 0x21d 0x21f 0x223 ...]
+  x2 address distinct=3
+  x3 constant min=0x0 max=0x0 values=[0x0]
+  x4 number min=0x1 max=0x12b000 values=[0x4 0x400 0x4380 0x43800 0x21c0 0x1 ...]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 small min=0x0 max=0x400 values=[0x1 0x0 0x400]
+  x7 address-or-null distinct=3 readable=7/13 zero=6/13
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 number values=[0x0 wide wide]
+  d2 number values=[wide wide 0x0]
+  d3 number values=[0x4b400000 wide 0x0]
+  d4 number values=[0x3f800000 wide 0x0]
+  d5 number values=[wide wide 0x3f000000]
+  d6 number values=[wide wide 0x43870000 0x43cb0000]
+  d7 number values=[0x0 wide 0xc3870000 0xc3cb0000]
+  result x0 constant-address distinct=1
+  result x1 address distinct=2
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnTexturePoolRegisterTexture calls=13783 sampled=2048 returns_sampled=2048
+  x0 constant-address distinct=1
+  x1 small min=0x100 max=0x295 values=[0x100 0x101 0x102 0x103 0x104 0x105 ...]
+  x2 address distinct=6+
+  x3 constant min=0x0 max=0x0 values=[0x0]
+  x4 number min=0x0 max=0x12b000 values=[0x2 0x3 0x4 0x1 0x0 0x40 ...]
+  x5 small min=0x0 max=0x10 values=[0x4 0x0 0x10 0x2 0x8 0x1]
+  x6 small min=0x0 max=0x400 values=[0x0 0x1 0x8 0x4 0x400]
+  x7 mixed distinct=6 readable=1598/2048 zero=204/2048
+  d0 number values=[0x0 wide 0x2]
+  d1 number values=[0x0 wide wide wide wide]
+  d2 number values=[0x0 0x4b400000 wide 0x3f800000 wide wide ...]
+  d3 number values=[0x4b400000 0x3 wide 0x0 wide wide ...]
+  d4 number values=[0x3f800000 wide wide 0x0 wide 0x4304c005 ...]
+  d5 number values=[wide 0x0 wide 0xffff wide 0x40cecad2 ...]
+  d6 number values=[wide 0x1 wide 0x0 0xffffffff wide ...]
+  d7 number values=[0x0 0x2 wide wide 0xc3b40000 wide ...]
+  result x0 constant-address distinct=1
+  result x1 address distinct=6+
+  result d0 constant min=0x0 max=0x0 values=[0x0]
+nvnTextureViewSetDefaults calls=153061 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 mixed distinct=6+ readable=130/2048 zero=1754/2048
+  x2 mixed distinct=6+ readable=8/2048 zero=530/2048
+  x3 mixed distinct=6+ readable=1747/2048 zero=261/2048
+  x4 mixed distinct=6+ readable=204/2048 zero=1384/2048
+  x5 small min=0x0 max=0x10 values=[0x0 0x1 0x10 0x4 0x8]
+  x6 mixed distinct=6 readable=43/2048 zero=854/2048
+  x7 mixed distinct=6+ readable=90/2048 zero=717/2048
+  d0 number values=[wide wide wide wide wide wide ...]
+  d1 number values=[wide 0x0 wide wide 0x3f800000 wide ...]
+  d2 number values=[0x0 0x4b400000 wide wide wide wide ...]
+  d3 number values=[0x4b400000 0x0 wide wide wide]
+  d4 number values=[0x3f800000 0x0 wide wide wide wide ...]
+  d5 number values=[wide 0x0 wide 0x3f000000 0xffffffff wide ...]
+  d6 number values=[wide 0x0 wide 0x3f000000 0x43b40000 wide ...]
+  d7 number values=[0x0 wide 0xbf000000 0xc3b40000 wide 0xc4000000 ...]
+  result x0 address distinct=6+
+  result x1 mixed distinct=6+ readable=130/2048 zero=1754/2048
+  result d0 number values=[wide wide wide wide wide wide ...]
+nvnTextureViewSetLayers calls=151597 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 small min=0x0 max=0x1 values=[0x0 0x1]
+  x2 small min=0x0 max=0x1 values=[0x1 0x0]
+  x3 mixed distinct=6+ readable=1717/2048 zero=188/2048
+  x4 mixed distinct=6+ readable=211/2048 zero=1552/2048
+  x5 small min=0x0 max=0x10 values=[0x10 0x4 0x0 0x1 0x8]
+  x6 mixed distinct=6+ readable=50/2048 zero=543/2048
+  x7 mixed distinct=6+ readable=102/2048 zero=405/2048
+  d0 small min=0x0 max=0x2 values=[0x0 0x2]
+  d1 number values=[0x0 wide wide wide 0x3f800000 wide ...]
+  d2 number values=[0x4b400000 wide wide 0x0 wide wide ...]
+  d3 number values=[0x4b400000 0x0 wide wide wide]
+  d4 number values=[wide 0x0 wide wide wide wide]
+  d5 number values=[wide 0x0 0x3f000000 wide wide wide ...]
+  d6 number values=[wide 0x0 0x3f000000 wide wide wide ...]
+  d7 number values=[wide 0x0 0xbf000000 wide 0xc3b40000 0xc4000000 ...]
+  result x0 address distinct=6+
+  result x1 number min=0x0 max=0x10001 values=[0x10000 0x10001 0x0]
+  result d0 small min=0x0 max=0x2 values=[0x0 0x2]
+nvnTextureViewSetLevels calls=154500 sampled=2048 returns_sampled=2048
+  x0 address distinct=6+
+  x1 small min=0x0 max=0xb values=[0x0 0x1 0x2 0x3 0x4 0x5 ...]
+  x2 small min=0x0 max=0x1 values=[0x0 0x1]
+  x3 mixed distinct=6+ readable=1349/2048 zero=388/2048
+  x4 mixed distinct=6+ readable=326/2048 zero=1029/2048
+  x5 small min=0x0 max=0x10 values=[0x0 0x1 0x10 0x4 0x8]
+  x6 mixed distinct=6+ readable=31/2048 zero=753/2048
+  x7 mixed distinct=6+ readable=66/2048 zero=621/2048
+  d0 number values=[wide wide wide wide wide wide ...]
+  d1 number values=[wide 0x0 wide wide 0x3f800000 wide ...]
+  d2 number values=[0x0 0x4b400000 wide wide wide wide ...]
+  d3 number values=[0x4b400000 0x0 wide wide wide]
+  d4 number values=[0x3f800000 0x0 wide wide wide wide ...]
+  d5 number values=[wide 0x0 wide 0x3f000000 0xffffffff wide ...]
+  d6 number values=[wide 0x0 wide 0x3f000000 0x43b40000 wide ...]
+  d7 number values=[0x0 wide 0xbf000000 0xc3b40000 wide 0xc4000000 ...]
+  result x0 address distinct=6+
+  result x1 small min=0x0 max=0xb values=[0x0 0x1 0x2 0x3 0x4 0x5 ...]
+  result d0 number values=[wide wide wide wide wide wide ...]
+nvnVertexAttribStateSetDefaults calls=137 sampled=137 returns_sampled=137
+  x0 address distinct=6+
+  x1 mixed distinct=6+ readable=64/137
+  x2 small min=0x0 max=0x20 values=[0x20 0x0]
+  x3 constant min=0x0 max=0x0 values=[0x0]
+  x4 constant-address distinct=1
+  x5 number values=[0x1 0x0 0x2 wide wide]
+  x6 mixed distinct=6+ readable=61/137 zero=12/137
+  x7 mixed distinct=6+ readable=51/137 zero=17/137
+  d0 number values=[wide 0x2]
+  d1 number values=[0x1 0x0 0x4 0x5 wide wide ...]
+  d2 number values=[0x1 0x0 0x4 0x5 wide 0x3 ...]
+  d3 number values=[0x4b400000 0x3 0x4 wide wide wide]
+  d4 number values=[0x3f800000 wide wide]
+  d5 number values=[wide 0x0 0x4 wide wide]
+  d6 number values=[wide 0x1 wide wide wide]
+  d7 number values=[0x0 0x2 wide wide wide]
+  result x0 address distinct=6+
+  result x1 mixed distinct=6+ readable=64/137
+  result d0 number values=[wide 0x2]
+nvnVertexAttribStateSetFormat calls=108 sampled=108 returns_sampled=108
+  x0 address distinct=6+
+  x1 small min=0xa max=0x2e values=[0x2e 0x16 0x22 0xa 0x25 0x14 ...]
+  x2 small min=0x0 max=0x40 values=[0x0 0x10 0x20 0x30 0x40 0x8 ...]
+  x3 small min=0x1 max=0xf values=[0x4 0x2 0x3 0x1 0x8 0xf ...]
+  x4 address-or-null distinct=2 readable=20/108 zero=88/108
+  x5 number values=[0x1 0x0 0x2 wide wide]
+  x6 mixed distinct=6+ readable=60/108 zero=12/108
+  x7 mixed distinct=6+ readable=51/108 zero=17/108
+  d0 constant values=[wide]
+  d1 number values=[0x1 0x0 0x4 0x5 wide wide ...]
+  d2 number values=[0x1 0x0 0x4 0x5 wide 0x3 ...]
+  d3 number values=[0x4b400000 0x3 0x4 wide wide wide]
+  d4 number values=[0x3f800000 wide wide]
+  d5 number values=[wide 0x0 0x4 wide wide]
+  d6 number values=[wide 0x1 wide wide wide]
+  d7 number values=[0x0 0x2 wide wide wide]
+  result x0 address distinct=6+
+  result x1 small min=0xa max=0x2e values=[0x2e 0x16 0x22 0xa 0x25 0x14 ...]
+  result d0 constant values=[wide]
+nvnVertexAttribStateSetStreamIndex calls=108 sampled=108 returns_sampled=108
+  x0 address distinct=6+
+  x1 small min=0x0 max=0x3 values=[0x0 0x1 0x2 0x3]
+  x2 small min=0x0 max=0x40 values=[0x0 0x10 0x20 0x30 0x40 0x8 ...]
+  x3 small min=0x1 max=0xf values=[0x4 0x2 0x3 0x1 0x8 0xf ...]
+  x4 address-or-null distinct=2 readable=20/108 zero=88/108
+  x5 number values=[0x1 0x0 0x2 wide wide]
+  x6 mixed distinct=6+ readable=60/108 zero=12/108
+  x7 mixed distinct=6+ readable=51/108 zero=17/108
+  d0 constant values=[wide]
+  d1 number values=[0x1 0x0 0x4 0x5 wide wide ...]
+  d2 number values=[0x1 0x0 0x4 0x5 wide 0x3 ...]
+  d3 number values=[0x4b400000 0x3 0x4 wide wide wide]
+  d4 number values=[0x3f800000 wide wide]
+  d5 number values=[wide 0x0 0x4 wide wide]
+  d6 number values=[wide 0x1 wide wide wide]
+  d7 number values=[0x0 0x2 wide wide wide]
+  result x0 address distinct=6+
+  result x1 small min=0x0 max=0x3 values=[0x0 0x1 0x2 0x3]
+  result d0 constant values=[wide]
+nvnVertexStreamStateSetDefaults calls=48 sampled=48 returns_sampled=48
+  x0 address distinct=6+
+  x1 mixed distinct=6+ readable=16/48
+  x2 small min=0x0 max=0x20 values=[0x20 0x0]
+  x3 constant min=0x0 max=0x0 values=[0x0]
+  x4 constant-address distinct=1
+  x5 number values=[0x1 0x0 0x2 wide wide]
+  x6 mixed distinct=6+ readable=24/48 zero=8/48
+  x7 mixed distinct=6+ readable=18/48 zero=11/48
+  d0 number values=[wide 0x2]
+  d1 number values=[0x1 0x0 0x4 0x5 wide wide ...]
+  d2 number values=[0x1 0x0 0x4 0x5 wide 0x3 ...]
+  d3 number values=[0x4b400000 0x3 0x4 wide wide wide]
+  d4 number values=[0x3f800000 wide wide]
+  d5 number values=[wide 0x0 0x4 wide wide]
+  d6 number values=[wide 0x1 wide wide wide]
+  d7 number values=[0x0 0x2 wide wide wide]
+  result x0 address distinct=6+
+  result x1 mixed distinct=6+ readable=16/48
+  result d0 number values=[wide 0x2]
+nvnVertexStreamStateSetDivisor calls=48 sampled=48 returns_sampled=48
+  x0 address distinct=6+
+  x1 small min=0x0 max=0x1 values=[0x0 0x1]
+  x2 small min=0x0 max=0x40 values=[0x20 0x0 0x40 0x30 0x4]
+  x3 small min=0x0 max=0x8 values=[0x0 0x8 0x2 0x4 0x3 0x5]
+  x4 address-or-null distinct=2 readable=25/48 zero=23/48
+  x5 number values=[0x1 0x0 0x2 wide wide]
+  x6 mixed distinct=6+ readable=24/48 zero=8/48
+  x7 mixed distinct=6+ readable=18/48 zero=11/48
+  d0 constant values=[wide]
+  d1 number values=[0x1 0x0 0x4 0x5 wide wide ...]
+  d2 number values=[0x1 0x0 0x4 0x5 wide 0x3 ...]
+  d3 number values=[0x4b400000 0x3 0x4 wide wide wide]
+  d4 number values=[0x3f800000 wide wide]
+  d5 number values=[wide 0x0 0x4 wide wide]
+  d6 number values=[wide 0x1 wide wide wide]
+  d7 number values=[0x0 0x2 wide wide wide]
+  result x0 address distinct=6+
+  result x1 small min=0x0 max=0x1 values=[0x0 0x1]
+  result d0 constant values=[wide]
+nvnVertexStreamStateSetStride calls=48 sampled=48 returns_sampled=48
+  x0 address distinct=6+
+  x1 small min=0x0 max=0x50 values=[0x18 0x20 0x8 0x10 0xc 0x50 ...]
+  x2 small min=0x0 max=0x40 values=[0x20 0x0 0x40 0x30 0x4]
+  x3 small min=0x0 max=0x8 values=[0x0 0x8 0x2 0x4 0x3 0x5]
+  x4 address-or-null distinct=2 readable=25/48 zero=23/48
+  x5 number values=[0x1 0x0 0x2 wide wide]
+  x6 mixed distinct=6+ readable=24/48 zero=8/48
+  x7 mixed distinct=6+ readable=18/48 zero=11/48
+  d0 constant values=[wide]
+  d1 number values=[0x1 0x0 0x4 0x5 wide wide ...]
+  d2 number values=[0x1 0x0 0x4 0x5 wide 0x3 ...]
+  d3 number values=[0x4b400000 0x3 0x4 wide wide wide]
+  d4 number values=[0x3f800000 wide wide]
+  d5 number values=[wide 0x0 0x4 wide wide]
+  d6 number values=[wide 0x1 wide wide wide]
+  d7 number values=[0x0 0x2 wide wide wide]
+  result x0 address distinct=6+
+  result x1 small min=0x0 max=0x50 values=[0x18 0x20 0x8 0x10 0xc 0x50 ...]
+  result d0 constant values=[wide]
+nvnWindowAcquireTexture calls=4313 sampled=2048 returns_sampled=2048
+  x0 constant-address distinct=1
+  x1 address distinct=6+
+  x2 address distinct=3
+  x3 mixed distinct=3 readable=2/2048 zero=8/2048
+  x4 address-or-null distinct=2 readable=2040/2048 zero=8/2048
+  x5 address-or-null distinct=3 readable=2041/2048 zero=7/2048
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[wide 0x0 0x200181c7 wide 0x41680000 0x433f4000 ...]
+  d1 number values=[wide wide wide 0x3a800000 wide wide]
+  d2 number values=[wide wide 0x0 wide wide]
+  d3 number values=[wide wide 0x0 wide wide wide ...]
+  d4 number values=[0x0 wide wide]
+  d5 number values=[0xffff 0x0 0xffffffff wide wide]
+  d6 number values=[0xffffffff 0x0 0x43b40000 wide wide 0x44070000]
+  d7 number min=0x0 max=0xc4070000 values=[0x0 0xc3b40000 0x3a888889 0xc4070000] f32=[0 -360 0.0010416667209938169 -540]
+  result x0 constant min=0x0 max=0x0 values=[0x0]
+  result x1 constant values=[wide]
+  result d0 number values=[wide wide]
+nvnWindowBuilderSetDefaults calls=2 sampled=2 returns_sampled=2
+  x0 address distinct=2
+  x1 address distinct=2
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant-address distinct=1
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant values=[wide]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant values=[wide]
+  d3 number values=[wide wide]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 small min=0x0 max=0xffff values=[0xffff 0x0]
+  d6 number values=[0xffffffff wide]
+  d7 number min=0x0 max=0x3a888889 values=[0x0 0x3a888889] f32=[0 0.0010416667209938169]
+  result x0 address distinct=2
+  result x1 address distinct=2
+  result d0 constant values=[wide]
+nvnWindowBuilderSetDevice calls=2 sampled=2 returns_sampled=2
+  x0 address distinct=2
+  x1 constant-address distinct=1
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant-address distinct=1
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant values=[wide]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant values=[wide]
+  d3 number values=[wide wide]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 small min=0x0 max=0xffff values=[0xffff 0x0]
+  d6 number values=[0xffffffff wide]
+  d7 number min=0x0 max=0x3a888889 values=[0x0 0x3a888889] f32=[0 0.0010416667209938169]
+  result x0 address distinct=2
+  result x1 constant-address distinct=1
+  result d0 constant values=[wide]
+nvnWindowBuilderSetNativeWindow calls=2 sampled=2 returns_sampled=2
+  x0 address distinct=2
+  x1 constant-address distinct=1
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant-address distinct=1
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant values=[wide]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant values=[wide]
+  d3 number values=[wide wide]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 small min=0x0 max=0xffff values=[0xffff 0x0]
+  d6 number values=[0xffffffff wide]
+  d7 number min=0x0 max=0x3a888889 values=[0x0 0x3a888889] f32=[0 0.0010416667209938169]
+  result x0 address distinct=2
+  result x1 constant-address distinct=1
+  result d0 constant values=[wide]
+nvnWindowBuilderSetTextures calls=2 sampled=2 returns_sampled=2
+  x0 address distinct=2
+  x1 constant min=0x3 max=0x3 values=[0x3]
+  x2 address distinct=2
+  x3 constant-address distinct=1
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant values=[wide]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant values=[wide]
+  d3 number values=[wide wide]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 small min=0x0 max=0xffff values=[0xffff 0x0]
+  d6 number values=[0xffffffff wide]
+  d7 number min=0x0 max=0x3a888889 values=[0x0 0x3a888889] f32=[0 0.0010416667209938169]
+  result x0 address distinct=2
+  result x1 constant min=0x3 max=0x3 values=[0x3]
+  result d0 constant values=[wide]
+nvnWindowFinalize calls=1 sampled=1 returns_sampled=1
+  x0 constant-address distinct=1
+  x1 constant min=0x2ac875f6 max=0x2ac875f6 values=[0x2ac875f6]
+  x2 constant min=0x0 max=0x0 values=[0x0]
+  x3 constant min=0x0 max=0x0 values=[0x0]
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant min=0x0 max=0x0 values=[0x0]
+  d1 constant values=[wide]
+  d2 constant values=[wide] f64=[0.007812505573383532]
+  d3 constant min=0x0 max=0x0 values=[0x0]
+  d4 constant values=[wide]
+  d5 constant min=0x0 max=0x0 values=[0x0]
+  d6 constant values=[wide] f64=[0.0078125]
+  d7 constant min=0x3a888889 max=0x3a888889 values=[0x3a888889] f32=[0.0010416667209938169]
+  result x0 constant min=0x0 max=0x0 values=[0x0]
+  result x1 constant-address distinct=1
+  result d0 constant values=[wide]
+nvnWindowGetPresentInterval calls=4306 sampled=2048 returns_sampled=2048
+  x0 constant-address distinct=1
+  x1 address-or-null distinct=2 readable=1/2048 zero=2047/2048
+  x2 mixed distinct=6+ readable=1/2048
+  x3 number min=0x0 max=0x10000 values=[0x0 0x10000]
+  x4 address distinct=2
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[wide 0x0 wide 0x3885b993 0x38c20ed0 0x382b39a2 ...]
+  d1 number values=[wide 0x0 wide wide]
+  d2 number values=[wide 0x0 0x7f7fffff wide]
+  d3 number values=[wide 0x0 wide wide]
+  d4 number values=[wide 0x0 wide wide]
+  d5 number values=[0xffffffff 0x0 wide wide]
+  d6 number values=[0x43b40000 0x44070000 wide]
+  d7 number min=0xc3b40000 max=0xc4070000 values=[0xc3b40000 0xc4070000] f32=[-360 -540]
+  result x0 small min=0x1 max=0x2 values=[0x1 0x2]
+  result x1 address-or-null distinct=2 readable=1/2048 zero=2047/2048
+  result d0 number values=[wide 0x0 wide 0x3885b993 0x38c20ed0 0x382b39a2 ...]
+nvnWindowInitialize calls=2 sampled=2 returns_sampled=2
+  x0 constant-address distinct=1
+  x1 address distinct=2
+  x2 address distinct=2
+  x3 constant-address distinct=1
+  x4 constant min=0x0 max=0x0 values=[0x0]
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 constant values=[wide]
+  d1 constant min=0x0 max=0x0 values=[0x0]
+  d2 constant values=[wide]
+  d3 number values=[wide wide]
+  d4 constant min=0x0 max=0x0 values=[0x0]
+  d5 small min=0x0 max=0xffff values=[0xffff 0x0]
+  d6 number values=[0xffffffff wide]
+  d7 number min=0x0 max=0x3a888889 values=[0x0 0x3a888889] f32=[0 0.0010416667209938169]
+  result x0 constant min=0x1 max=0x1 values=[0x1]
+  result x1 constant min=0x1 max=0x1 values=[0x1]
+  result d0 constant values=[wide]
+nvnWindowSetPresentInterval calls=2 sampled=2 returns_sampled=2
+  x0 constant-address distinct=1
+  x1 constant min=0x2 max=0x2 values=[0x2]
+  x2 mixed distinct=2 readable=1/2
+  x3 number min=0x0 max=0x10000 values=[0x0 0x10000]
+  x4 address distinct=2
+  x5 constant min=0x0 max=0x0 values=[0x0]
+  x6 constant min=0x0 max=0x0 values=[0x0]
+  x7 constant min=0x0 max=0x0 values=[0x0]
+  d0 number values=[wide 0x0]
+  d1 number values=[wide 0x0]
+  d2 number values=[wide 0x0]
+  d3 number values=[wide 0x0]
+  d4 number values=[wide 0x0]
+  d5 number min=0x0 max=0xffffffff values=[0xffffffff 0x0]
+  d6 number min=0x43b40000 max=0x44070000 values=[0x43b40000 0x44070000] f32=[360 540]
+  d7 number min=0xc3b40000 max=0xc4070000 values=[0xc3b40000 0xc4070000] f32=[-360 -540]
+  result x0 constant min=0x0 max=0x0 values=[0x0]
+  result x1 constant min=0x2 max=0x2 values=[0x2]
+  result d0 number values=[wide 0x0]

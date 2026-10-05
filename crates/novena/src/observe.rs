@@ -21,6 +21,8 @@ const DISTINCT_LIMIT: usize = 6;
 /// Values below this are never addresses in a program's address space.
 const LOWEST_ADDRESS: u64 = 0x1_0000;
 const ADDRESS_LIMIT: u64 = 1 << 48;
+/// Largest value printed as it is.
+const WIDE: u64 = u32::MAX as u64;
 
 /// What one register held across the sampled calls.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -136,12 +138,22 @@ impl fmt::Display for RegisterShape {
             }
             return Ok(());
         }
-        write!(f, " min={:#x} max={:#x} values=[", self.min, self.max)?;
+        // A value too large for 32 bits that the host could not read may
+        // still be an address (of memory the host guards), so it is shown
+        // as "wide" and only its float reading, if plausible, is printed.
+        if self.max <= WIDE {
+            write!(f, " min={:#x} max={:#x}", self.min, self.max)?;
+        }
+        f.write_str(" values=[")?;
         for (index, value) in self.distinct.iter().enumerate() {
             if index > 0 {
                 f.write_char(' ')?;
             }
-            write!(f, "{value:#x}")?;
+            if *value <= WIDE {
+                write!(f, "{value:#x}")?;
+            } else {
+                f.write_str("wide")?;
+            }
         }
         f.write_str(if self.more_distinct { " ...]" } else { "]" })?;
         let all_zero = self.max == 0;
@@ -271,7 +283,7 @@ mod tests {
             registers.x[1] = call % 3; // a small number
             registers.x[2] = 7; // never changes
             registers.x[3] = if call % 2 == 0 { 0 } else { 0x10_8000 }; // optional pointer
-            registers.x[4] = 0xdead_beef_0000 + call; // large, not readable
+            registers.x[4] = 0xdead_beef_0000 + call; // wide, not readable
             registers.d[0] = u64::from(1.5f32.to_bits());
             shape.record_call(Some(&host), &registers);
         }
@@ -310,6 +322,11 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("0x100"), "{text}");
+        assert!(
+            text.contains("  x4 number values=[wide wide wide wide wide wide ...]\n"),
+            "{text}"
+        );
+        assert!(!text.contains("dead"), "{text}");
         assert!(!text.contains("result"), "{text}");
     }
 

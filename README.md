@@ -18,6 +18,8 @@ What works today:
 
 Every call is currently counted and answered as "not implemented". That is already useful for one thing: finding out which parts of the API a real program uses, which decides the order of the work. The first such census is in [docs/census](docs/census): one program asked for all 534 functions and called 168 of them in its first four minutes.
 
+The first signatures worked out from observation are in [docs/signatures](docs/signatures).
+
 [docs/design.md](docs/design.md) has the plan and the open questions. [docs/host-interface.md](docs/host-interface.md) explains how a host connects.
 
 ## What it is for
