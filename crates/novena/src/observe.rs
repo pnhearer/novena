@@ -201,7 +201,11 @@ impl WordShape {
         }
         self.zeros += u64::from(value == 0);
         let small = u64::from(value) < LOWEST_ADDRESS;
-        let float = !small && plausible_float(f64::from(f32::from_bits(value))).is_some();
+        // Stricter than for registers: memory holds arbitrary data, and a
+        // random word reads as a tiny or huge float far more often than as
+        // one in the range programs use for colours, sizes and factors.
+        let reading = f64::from(f32::from_bits(value)).abs();
+        let float = !small && (1e-3..1e7).contains(&reading);
         self.floats += u64::from(float);
         if !self.distinct.contains(&value) {
             if self.distinct.len() < WORD_DISTINCT_LIMIT {
@@ -225,6 +229,10 @@ struct PointeeShape {
     words: [WordShape; POINTEE_WORDS],
     /// Samples where a 64-bit word was itself a readable address.
     addresses: [u64; POINTEE_WORDS / 2],
+    /// Samples where a 64-bit word was wider than 32 bits but within the
+    /// range addresses come from, and not readable. It may be the address
+    /// of memory the host guards, so neither half is ever printed.
+    wides: [u64; POINTEE_WORDS / 2],
     /// Samples compared before and after the call.
     compared: u64,
 }
@@ -257,10 +265,14 @@ impl PointeeShape {
         for (index, shape) in self.words.iter_mut().enumerate() {
             shape.record(word(bytes, index), first);
         }
-        for (index, count) in self.addresses.iter_mut().enumerate() {
+        for index in 0..POINTEE_WORDS / 2 {
             let value =
                 u64::from(word(bytes, index * 2)) | u64::from(word(bytes, index * 2 + 1)) << 32;
-            *count += u64::from(is_readable_address(host, value));
+            if is_readable_address(host, value) {
+                self.addresses[index] += 1;
+            } else if (WIDE + 1..ADDRESS_LIMIT).contains(&value) {
+                self.wides[index] += 1;
+            }
         }
     }
 
@@ -288,6 +300,23 @@ impl PointeeShape {
                 index += 2;
                 continue;
             }
+            // A 64-bit word that was an address in some samples, or could
+            // have been an unreadable one, is shown without values. The cost: a float followed
+            // by a small non-zero integer is hidden the same way.
+            if index % 2 == 0 && (self.wides[quad] > 0 || self.addresses[quad] > 0) {
+                let changed = self.words[index].changed.max(self.words[index + 1].changed);
+                let _ = writeln!(
+                    out,
+                    "      +{offset:#04x} wide in {}/{} (address in {}/{}){}",
+                    self.wides[quad],
+                    self.samples,
+                    self.addresses[quad],
+                    self.samples,
+                    changed_note(changed)
+                );
+                index += 2;
+                continue;
+            }
             let shape = &self.words[index];
             let mut line = format!("      +{offset:#04x} ");
             if shape.max == 0 {
@@ -306,13 +335,6 @@ impl PointeeShape {
                 });
             } else {
                 line.push_str("other");
-                if index % 2 == 0 && self.addresses[quad] > 0 {
-                    let _ = write!(
-                        line,
-                        " (address in {}/{})",
-                        self.addresses[quad], self.samples
-                    );
-                }
             }
             line.push_str(&changed_note(shape.changed));
             let _ = writeln!(out, "{line}");
@@ -579,11 +601,20 @@ mod tests {
                 let mut page = PAGE.lock().unwrap();
                 page.fill(0);
                 page[0..4].copy_from_slice(&0.5f32.to_bits().to_le_bytes());
-                page[4..8].copy_from_slice(&(call + 1).to_le_bytes());
-                // A pointer back into the page, and a word that is neither
-                // small nor a float.
+                page[4..8].copy_from_slice(&0.25f32.to_bits().to_le_bytes());
+                // A pointer back into the page, and two words that are
+                // neither small nor floats.
                 page[8..16].copy_from_slice(&(PAGE_BASE + 0x80).to_le_bytes());
                 page[16..20].copy_from_slice(&0xdead_beefu32.to_le_bytes());
+                page[20..24].copy_from_slice(&0x7fc0_cafeu32.to_le_bytes());
+                // Something address-shaped that cannot be read: its low half
+                // would read as a float and must not be printed.
+                page[32..40].copy_from_slice(&0x16_c0d2_5e8bu64.to_le_bytes());
+                page[40..44].copy_from_slice(&(call + 1).to_le_bytes());
+                // An optional address: present in two calls, null in one.
+                if call < 2 {
+                    page[48..56].copy_from_slice(&(PAGE_BASE + 0x40).to_le_bytes());
+                }
             }
             let mut registers = Registers::default();
             registers.x[1] = PAGE_BASE;
@@ -594,22 +625,23 @@ mod tests {
         }
         let mut text = String::new();
         shape.write(&mut text, "someFunction", 3);
-        assert!(
-            text.contains("    x1 points to (3 sampled, 3 compared after the call):"),
-            "{text}"
-        );
-        assert!(text.contains("      +0x00 f32 values=[0.5]\n"), "{text}");
-        assert!(
-            text.contains("      +0x04 small min=0x1 max=0x3 values=[0x1 0x2 0x3]\n"),
-            "{text}"
-        );
-        assert!(text.contains("      +0x08 address\n"), "{text}");
-        assert!(text.contains("      +0x10 other\n"), "{text}");
-        assert!(
-            text.contains("      +0x18 zero changed-by-call=3\n"),
-            "{text}"
-        );
-        assert!(!text.contains("dead"), "{text}");
+        for expected in [
+            "    x1 points to (3 sampled, 3 compared after the call):\n",
+            "      +0x00 f32 values=[0.5]\n",
+            "      +0x04 f32 values=[0.25]\n",
+            "      +0x08 address\n",
+            "      +0x10 other\n",
+            "      +0x14 other\n",
+            "      +0x18 zero changed-by-call=3\n",
+            "      +0x20 wide in 3/3 (address in 0/3)\n",
+            "      +0x28 small min=0x1 max=0x3 values=[0x1 0x2 0x3]\n",
+            "      +0x30 wide in 0/3 (address in 2/3)\n",
+        ] {
+            assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
+        }
+        for hidden in ["dead", "cafe", "-6.5", "c0d2"] {
+            assert!(!text.contains(hidden), "{hidden} leaked in:\n{text}");
+        }
     }
 
     #[test]

@@ -20,6 +20,7 @@ What is deliberately not reported: any word that is neither a small integer nor 
 
 ## Confidence and open questions
 
+- A 64-bit word between 2^32 and 2^48 that the host cannot read is reported as `wide` with no values, because it may be the address of guarded memory. A structure that really holds a float followed by a small non-zero integer is hidden by the same rule.
 - Only the first 64 bytes are looked at. Larger structures and arrays show only their start.
 - A structure whose fields are 8 or 16 bits wide will be misread as 32-bit words.
 - An output the function writes with the value that was already there does not count as changed.
