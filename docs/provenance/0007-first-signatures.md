@@ -2,11 +2,11 @@
 
 - Date: 2026-10-05
 - Author: Khargoosh
-- Covers: `docs/shapes/0001-program-a-startup.txt`, `docs/signatures/0001-setup.md`, `docs/signatures/0002-command-buffer.md`
+- Covers: `docs/shapes/0001-program-a-startup.txt`, `docs/signatures/0001-setup.md`, `docs/signatures/0002-command-buffer.md`, `docs/signatures/0003-objects.md`
 
 ## What was learned
 
-The likely arguments and results of 29 functions on the set-up path (device, queue, samplers, window) and three command buffer functions. They are tabulated, each with its evidence and a confidence, in `docs/signatures/0001-setup.md`. A second table, `docs/signatures/0002-command-buffer.md`, was read from the same shapes the same way and covers the command buffer functions that carry most of the calls.
+The likely arguments and results of 29 functions on the set-up path (device, queue, samplers, window) and three command buffer functions. They are tabulated, each with its evidence and a confidence, in `docs/signatures/0001-setup.md`. A second table, `docs/signatures/0002-command-buffer.md`, was read from the same shapes the same way and covers the command buffer functions that carry most of the calls. A third, `docs/signatures/0003-objects.md`, covers the rest, so that every function the program called in this run has an entry.
 
 ## How
 

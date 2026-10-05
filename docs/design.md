@@ -43,7 +43,7 @@ The interface to the host is C, so the library can be used from any language.
 
 1. Done: function table, instances, and a null implementation that records which functions are requested and called.
 2. Done: a census from a real program. It called 168 of the 534 functions; see [docs/census](census).
-3. Under way: observe the shape of the arguments and results of those 168 functions and work out their signatures. The shapes are in [docs/shapes](shapes) and the first 32 signatures in [docs/signatures](signatures).
+3. Done for register arguments: the shape of the arguments and results of those 168 functions, and a signature entry for each, in [docs/shapes](shapes) and [docs/signatures](signatures). Still to observe: what the memory behind pointer arguments looks like.
 4. Object lifetime for the objects a first frame needs.
 5. A single textured triangle from a test program written for this project.
 6. Presentation with a render scale.

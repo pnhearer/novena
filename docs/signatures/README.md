@@ -20,3 +20,4 @@ A register that looked like a leftover from an earlier call is not listed as an 
 |---|---|
 | [0001-setup.md](0001-setup.md) | Device, queue, sampler, window and a few command buffer functions |
 | [0002-command-buffer.md](0002-command-buffer.md) | The command buffer functions that carry most calls |
+| [0003-objects.md](0003-objects.md) | State objects, memory pools, textures, pools and handles, programs, queue, sync, events and window |
