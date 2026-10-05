@@ -1,15 +1,30 @@
 //! novena: a Vulkan implementation of a console graphics API.
 //!
-//! The library has no API-facing functions yet. What exists is the part of
-//! the C interface that describes the library itself, so hosts can already
-//! link it and check what they loaded. See `docs/design.md` for the plan and
-//! `CLEAN-ROOM.md` for the rules every addition follows.
+//! What exists so far is the outer shell every later piece hangs on:
+//!
+//! - the table of function names a program may request ([`functions`]),
+//! - an instance that a host creates and forwards the program's calls to,
+//! - a census of which functions were requested and called.
+//!
+//! No function has behaviour yet. A call is counted, its result registers are
+//! zeroed, and the caller is told it was not implemented. See
+//! `docs/design.md` for the plan and `CLEAN-ROOM.md` for the rules every
+//! addition follows.
 
-use std::ffi::c_char;
+pub mod functions;
+mod instance;
+
+pub use instance::{Census, Host, Instance, Registers, Status};
+
+use functions::FunctionId;
+use std::ffi::{c_char, CStr};
 
 /// Version of the host interface. It changes when a host built against an
 /// older `include/novena.h` could no longer use the library.
-pub const HOST_INTERFACE_VERSION: u32 = 0;
+pub const HOST_INTERFACE_VERSION: u32 = 1;
+
+/// Returned by lookups for a name the library does not know.
+pub const FUNCTION_NONE: u32 = u32::MAX;
 
 static VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 
@@ -26,21 +41,193 @@ pub extern "C" fn novena_host_interface_version() -> u32 {
     HOST_INTERFACE_VERSION
 }
 
+/// Number of functions in the table. Valid function ids are `0..count`.
+#[no_mangle]
+pub extern "C" fn novena_function_count() -> u32 {
+    functions::count() as u32
+}
+
+/// Name of a function as a NUL-terminated string owned by the library, or
+/// null for an id outside the table.
+#[no_mangle]
+pub extern "C" fn novena_function_name(function: u32) -> *const c_char {
+    functions::c_name(FunctionId(function)).map_or(std::ptr::null(), CStr::as_ptr)
+}
+
+/// Id of the function with this name, or `FUNCTION_NONE`.
+///
+/// # Safety
+/// `name` must be null or point to a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn novena_function_lookup(name: *const c_char) -> u32 {
+    if name.is_null() {
+        return FUNCTION_NONE;
+    }
+    // SAFETY: the caller passes a NUL-terminated string.
+    let name = unsafe { CStr::from_ptr(name) };
+    name.to_str()
+        .ok()
+        .and_then(functions::lookup)
+        .map_or(FUNCTION_NONE, |id| id.0)
+}
+
+/// Create an instance. `host` may be null for a host that provides nothing
+/// yet; the structure is copied. Destroy the result with
+/// `novena_instance_destroy`.
+///
+/// # Safety
+/// `host` must be null or point to a valid `Host` whose callbacks stay
+/// callable for the life of the instance.
+#[no_mangle]
+pub unsafe extern "C" fn novena_instance_create(host: *const Host) -> *mut Instance {
+    // SAFETY: the caller passes null or a valid `Host`.
+    let host = unsafe { host.as_ref() }.copied();
+    Box::into_raw(Box::new(Instance::new(host)))
+}
+
+/// Destroy an instance. Null is accepted.
+///
+/// # Safety
+/// `instance` must be null or come from `novena_instance_create` and not
+/// have been destroyed already.
+#[no_mangle]
+pub unsafe extern "C" fn novena_instance_destroy(instance: *mut Instance) {
+    if !instance.is_null() {
+        // SAFETY: the caller passes a live instance from `create`.
+        drop(unsafe { Box::from_raw(instance) });
+    }
+}
+
+/// The program asked its bootstrap function for `name`. Records the request
+/// and returns the function id, or `FUNCTION_NONE` for a name the library
+/// does not know (which is recorded too).
+///
+/// # Safety
+/// `instance` must be live; `name` must be null or NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn novena_instance_request(
+    instance: *const Instance,
+    name: *const c_char,
+) -> u32 {
+    // SAFETY: the caller passes a live instance.
+    let Some(instance) = (unsafe { instance.as_ref() }) else {
+        return FUNCTION_NONE;
+    };
+    if name.is_null() {
+        return FUNCTION_NONE;
+    }
+    // SAFETY: the caller passes a NUL-terminated string.
+    let name = unsafe { CStr::from_ptr(name) }.to_string_lossy();
+    instance.request(&name).map_or(FUNCTION_NONE, |id| id.0)
+}
+
+/// The program called `function`. `registers` holds its argument registers
+/// on entry and receives its result registers.
+///
+/// # Safety
+/// `instance` must be live and `registers` must point to a valid `Registers`.
+#[no_mangle]
+pub unsafe extern "C" fn novena_instance_call(
+    instance: *const Instance,
+    function: u32,
+    registers: *mut Registers,
+) -> Status {
+    // SAFETY: the caller passes a live instance and valid registers.
+    match unsafe { (instance.as_ref(), registers.as_mut()) } {
+        (Some(instance), Some(registers)) => instance.call(FunctionId(function), registers),
+        _ => Status::BadArgument,
+    }
+}
+
+/// How many times `function` was called on this instance.
+///
+/// # Safety
+/// `instance` must be null or live.
+#[no_mangle]
+pub unsafe extern "C" fn novena_instance_call_count(
+    instance: *const Instance,
+    function: u32,
+) -> u64 {
+    // SAFETY: the caller passes null or a live instance.
+    unsafe { instance.as_ref() }.map_or(0, |instance| instance.call_count(FunctionId(function)))
+}
+
+/// Write the census (what was requested and called) to a text file.
+/// Returns `Status::Ok`, or `Status::BadArgument` when the file could not be
+/// written.
+///
+/// # Safety
+/// `instance` must be live; `path` must be NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn novena_instance_write_census(
+    instance: *const Instance,
+    path: *const c_char,
+) -> Status {
+    // SAFETY: the caller passes a live instance.
+    let Some(instance) = (unsafe { instance.as_ref() }) else {
+        return Status::BadArgument;
+    };
+    if path.is_null() {
+        return Status::BadArgument;
+    }
+    // SAFETY: the caller passes a NUL-terminated string.
+    let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
+    match std::fs::write(&*path, instance.census().to_string()) {
+        Ok(()) => Status::Ok,
+        Err(_) => Status::BadArgument,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CStr;
+    use std::ffi::CString;
 
     #[test]
     fn version_is_a_c_string_matching_the_package() {
-        // SAFETY: `novena_version` returns a pointer to a static
-        // NUL-terminated string.
+        // SAFETY: `novena_version` returns a static NUL-terminated string.
         let version = unsafe { CStr::from_ptr(novena_version()) };
         assert_eq!(version.to_str(), Ok(env!("CARGO_PKG_VERSION")));
+        assert_eq!(novena_host_interface_version(), HOST_INTERFACE_VERSION);
     }
 
     #[test]
-    fn host_interface_version_matches_the_constant() {
-        assert_eq!(novena_host_interface_version(), HOST_INTERFACE_VERSION);
+    fn c_interface_round_trips_names_and_counts_calls() {
+        let count = novena_function_count();
+        assert!(count > 0);
+        // SAFETY: ids below the count have names; the strings are static.
+        let first = unsafe { CStr::from_ptr(novena_function_name(0)) }.to_owned();
+        assert_eq!(unsafe { novena_function_lookup(first.as_ptr()) }, 0);
+        assert!(novena_function_name(count).is_null());
+
+        let unknown = CString::new("notAFunction").unwrap();
+        assert_eq!(
+            unsafe { novena_function_lookup(unknown.as_ptr()) },
+            FUNCTION_NONE
+        );
+
+        // SAFETY: a null host is allowed, and the instance is destroyed below.
+        let instance = unsafe { novena_instance_create(std::ptr::null()) };
+        assert_eq!(
+            unsafe { novena_instance_request(instance, first.as_ptr()) },
+            0
+        );
+        assert_eq!(
+            unsafe { novena_instance_request(instance, unknown.as_ptr()) },
+            FUNCTION_NONE
+        );
+
+        let mut registers = Registers::default();
+        registers.x[0] = 7;
+        let status = unsafe { novena_instance_call(instance, 0, &mut registers) };
+        assert_eq!(status, Status::Unimplemented);
+        assert_eq!(registers.x[0], 0);
+        assert_eq!(unsafe { novena_instance_call_count(instance, 0) }, 1);
+        assert_eq!(
+            unsafe { novena_instance_call(instance, count, &mut registers) },
+            Status::BadFunction
+        );
+
+        unsafe { novena_instance_destroy(instance) };
     }
 }

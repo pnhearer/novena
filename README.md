@@ -8,7 +8,17 @@ This is a research and hobby project. Its purposes are interoperability, study a
 
 ## Status
 
-Nothing renders yet. The repository holds the project rules, the design notes and an empty library that builds. See [docs/design.md](docs/design.md) for the plan and for what is known and unknown.
+Early. Nothing renders yet.
+
+What works today:
+
+- The table of 534 functions a program can request by name.
+- The host interface: a host creates an instance, tells it which names the program asks for, and forwards the program's calls.
+- A census of which functions a program requested and called, as a text file that contains names and counts only.
+
+Every call is currently counted and answered as "not implemented". That is already useful for one thing: finding out which parts of the API a real program uses, which decides the order of the work.
+
+[docs/design.md](docs/design.md) has the plan and the open questions. [docs/host-interface.md](docs/host-interface.md) explains how a host connects.
 
 ## What it is for
 
@@ -40,9 +50,10 @@ If you have had access to any proprietary development kit or confidential materi
 ```
 cargo build
 cargo test
+examples/run-host.sh
 ```
 
-Rust stable is enough. Vulkan is not needed yet.
+Rust stable and a C compiler are enough. Vulkan is not needed yet. The last command builds a small host in C against `include/novena.h`, runs it and prints the census it wrote.
 
 ## Licence
 

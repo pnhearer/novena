@@ -16,6 +16,9 @@ program  ->  API calls  ->  novena  ->  Vulkan  ->  host GPU
 
 ## What the host must supply
 
+The interface as it stands is described in [host-interface.md](host-interface.md). In full, a host will supply:
+
+
 - A way to read and write the program's memory. The API passes pointers to the program's own structures, and the program is not required to be native code.
 - A window or surface to present to.
 - Translated shaders, or a shader translator novena can call.
@@ -39,8 +42,9 @@ The interface to the host is C, so the library can be used from any language.
 
 ## Order of work
 
-1. Bootstrap, function table and a null implementation that records which functions are called.
-2. Object lifetime for the objects a first frame needs.
-3. A single textured triangle from a test program written for this project.
-4. Presentation with a render scale.
-5. Breadth, driven by the call census.
+1. Done: function table, instances, and a null implementation that records which functions are requested and called.
+2. A census from a real program, to rank the functions by use.
+3. Object lifetime for the objects a first frame needs.
+4. A single textured triangle from a test program written for this project.
+5. Presentation with a render scale.
+6. Breadth, driven by the census.
