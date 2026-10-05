@@ -8,7 +8,7 @@ novena is an independent, non-commercial research and hobby project. It exists f
 
 ## Independent work
 
-The library is an original implementation of an application programming interface. It was written without access to the proprietary implementation, its source code or its documentation, following the rules in [CLEAN-ROOM.md](CLEAN-ROOM.md). The origin of each piece of behaviour is recorded under [docs/provenance](docs/provenance).
+The library is an original implementation of an application programming interface. It was written without access to any proprietary implementation, source code, development kit or confidential documentation, from any party, following the rules in [CLEAN-ROOM.md](CLEAN-ROOM.md). The origin of each piece of behaviour is recorded under [docs/provenance](docs/provenance).
 
 ## What the project does not contain or do
 

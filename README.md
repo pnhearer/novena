@@ -31,9 +31,9 @@ One thing does not go away. Software for the platform ships its shaders already 
 
 ## How it is written
 
-Clean room. Behaviour is worked out from what can be observed lawfully: the calls that software a contributor owns makes, the effects those calls have, and names and facts that are already public. Proprietary development material is never used. The rules are in [CLEAN-ROOM.md](CLEAN-ROOM.md), and every piece of behaviour in the library is tied to a provenance note under [docs/provenance](docs/provenance).
+Clean room. Behaviour is worked out from what can be observed lawfully: the calls that software a contributor owns makes, the effects those calls have, and names and facts that are already public. No proprietary development kit, confidential or leaked material, or proprietary code is ever used, from any party. The rules are in [CLEAN-ROOM.md](CLEAN-ROOM.md), and every piece of behaviour in the library is tied to a provenance note under [docs/provenance](docs/provenance).
 
-If you have had access to the platform's proprietary development kit, please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening anything.
+If you have had access to any proprietary development kit or confidential material that relates to this area, please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening anything.
 
 ## Building
 

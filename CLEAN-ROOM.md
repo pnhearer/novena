@@ -11,14 +11,21 @@ novena reimplements an interface. It must never contain, or be derived from, the
 
 ## Sources that must not be used
 
-- The platform's software development kit: its headers, libraries, samples, tools and documentation. This includes copies found online. A leak does not make material public for this purpose.
-- Any material received under a non-disclosure agreement.
-- Decompiled or disassembled code of the proprietary driver, copied or translated into this project. Reading a binary you own to learn what an interface does is observation. Carrying its code across is not.
-- Code from projects whose licence is not compatible with MIT or Apache-2.0. Such projects may be read for understanding where their licence allows. Their code may not be copied or closely paraphrased.
+The rule is general. It is not limited to one company or one product.
+
+- **Any proprietary software development kit**, from any party: a platform holder, a hardware vendor, an engine or middleware vendor, or anyone else. That covers headers, libraries, samples, tools and documentation.
+- **Anything under a non-disclosure agreement or other confidentiality terms**, whoever it came from and whatever it describes.
+- **Leaked or otherwise improperly disclosed material of any kind.** A leak does not make material public for this purpose, and neither does finding it on a public website.
+- **Proprietary source code**, including driver, firmware, operating system, engine and game source, however it was obtained.
+- **Code taken from proprietary binaries.** Decompiled or disassembled code of any proprietary driver, library, firmware or program must not be copied, translated or closely paraphrased into this project. Reading a binary you own to learn what an interface does is observation. Carrying its code across is not.
+- **Internal documents**: design documents, bug trackers, emails, slides, certification or guideline documents not published by their owner.
+- **Code under a licence that is not compatible with MIT or Apache-2.0.** Such projects may be read for understanding where their licence allows. Their code may not be copied or closely paraphrased.
+
+If you are unsure whether something falls under one of these, treat it as excluded and ask.
 
 ## Separation of people
 
-Anyone who has seen the platform's proprietary development material does not write, review or advise on the parts of novena that reimplement what that material covers. They are welcome in parts that do not touch it, such as the Vulkan backend internals, build tooling and tests of public behaviour.
+Anyone who has seen excluded material of any of the kinds above does not write, review or advise on the parts of novena that reimplement what that material covers. They are welcome in parts that do not touch it, such as the Vulkan backend internals, build tooling and tests of public behaviour.
 
 If you are not sure which side of that line you are on, say so before contributing. Nobody will hold it against you. An undeclared problem is the only kind that can hurt the project.
 

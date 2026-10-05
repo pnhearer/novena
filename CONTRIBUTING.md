@@ -7,8 +7,8 @@ Thanks for looking. This project has one unusual requirement, so please read thi
 Read [CLEAN-ROOM.md](CLEAN-ROOM.md). By contributing you state that:
 
 - you wrote the change yourself, or it comes from a source the clean-room rules allow and you say which,
-- you did not use the platform's proprietary development kit, its documentation or leaked copies of either,
-- you have not had access to that material, or your change does not touch what it covers,
+- you did not use any proprietary development kit, any material under a non-disclosure agreement, any leaked material, or any proprietary source or decompiled code, from any party,
+- you have not had access to such material, or your change does not touch what it covers,
 - you may license the change under MIT and Apache-2.0.
 
 Add a `Signed-off-by` line to your commits (`git commit -s`) to record that statement.
