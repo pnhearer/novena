@@ -76,20 +76,26 @@ pub unsafe extern "C" fn novena_function_lookup(name: *const c_char) -> u32 {
 /// `novena_instance_destroy`.
 ///
 /// # Safety
-/// `host` must be null or point to a valid `Host` whose callbacks stay
-/// callable for the life of the instance.
+/// `host` must be null or point to a valid `Host`. Its `user` pointer and
+/// callbacks must stay usable for the life of the instance and must tolerate
+/// being used from several threads at once.
 #[no_mangle]
 pub unsafe extern "C" fn novena_instance_create(host: *const Host) -> *mut Instance {
     // SAFETY: the caller passes null or a valid `Host`.
-    let host = unsafe { host.as_ref() }.copied();
-    Box::into_raw(Box::new(Instance::new(host)))
+    let instance = match unsafe { host.as_ref() } {
+        // SAFETY: the caller guarantees the host's lifetime and thread safety.
+        Some(host) => unsafe { Instance::with_host(*host) },
+        None => Instance::new(),
+    };
+    Box::into_raw(Box::new(instance))
 }
 
 /// Destroy an instance. Null is accepted.
 ///
 /// # Safety
 /// `instance` must be null or come from `novena_instance_create` and not
-/// have been destroyed already.
+/// have been destroyed already. No other call on the instance may be running
+/// or start afterwards.
 #[no_mangle]
 pub unsafe extern "C" fn novena_instance_destroy(instance: *mut Instance) {
     if !instance.is_null() {
@@ -125,7 +131,9 @@ pub unsafe extern "C" fn novena_instance_request(
 /// on entry and receives its result registers.
 ///
 /// # Safety
-/// `instance` must be live and `registers` must point to a valid `Registers`.
+/// `instance` must be live. `registers` must point to a valid `Registers`
+/// that nothing else reads or writes until the call returns. Calls on one
+/// instance may run on several threads at once, each with its own registers.
 #[no_mangle]
 pub unsafe extern "C" fn novena_instance_call(
     instance: *const Instance,

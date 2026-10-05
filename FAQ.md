@@ -16,7 +16,7 @@ Yes. There are three ways, and you choose one:
 
 ## Can I change it?
 
-Yes. Under the noncommercial licence you can modify it however you like for noncommercial purposes and share your changes on the same terms. Under the GPL you can modify it and share your changes under the GPL. Either way, keep the licence and the notice file with it so the next person knows the terms too.
+Yes. Under the noncommercial licence you can modify it however you like for noncommercial purposes and share your changes on the same terms. Under the GPL you can modify it and share your changes under the GPL. Either way, pass the licence terms and the copyright notice along with it so the next person knows the terms too. Each licence says exactly how.
 
 ## Why is it not simply free for everything?
 
@@ -26,15 +26,21 @@ So closed commercial use has a price. Anyone who wants to make money with novena
 
 ## What counts as commercial?
 
-Roughly, anything done to make money or as part of a business. Selling a device or program that includes novena, bundling it with something you sell, or running it as part of a paid service are the clear cases. A hobby project that takes no money is not commercial. If you are in between, ask before you ship.
+Roughly, anything done to make money or as part of a business. Selling a device or program that includes novena, or bundling it with something you sell, are the clear cases. A hobby project that takes no money is not commercial.
+
+The noncommercial licence also names kinds of organisation that may use it whatever their funding: charities, schools and universities, public research bodies, public safety and health organisations, environmental groups and government institutions. Its text has the exact list.
+
+If you are in between, ask before you ship.
 
 ## Why are there two free licences? Is one not enough?
 
-Each covers people the other leaves out. The noncommercial licence is the simple one: no conditions beyond "not for commercial use". But projects under the GPL are not allowed to take in code that carries a restriction like that, so the GPL is offered as well and those projects can include novena too.
+Each covers people the other leaves out. The noncommercial licence is the simple one: its main condition is "not for commercial use". But projects under the GPL are not allowed to take in code that carries a restriction like that, so the GPL is offered as well and those projects can include novena too.
 
 ## Can a company use the GPL option and sell it without paying?
 
-Only by following the GPL in full. That means publishing the complete source of everything they distribute that includes novena, under the GPL, and on consumer devices letting the buyer replace the software. A seller who does all that is sharing their work back, which is fair. A seller who wants to keep things closed needs the commercial licence.
+Only by following the GPL in full. Whatever they hand to customers that combines novena with their own code has to be under the GPL, and the customers must be able to get its source. For software shipped in consumer products, the GPL in most cases also requires what a buyer needs to install a changed version. A seller who does all that is sharing their work back, which is fair. A seller who wants to keep things closed needs the commercial licence.
+
+One thing the GPL does not cover is worth saying plainly. Someone who only runs novena on their own machines, and never hands the software to anyone else, is not required by the GPL to share source, even if they charge for what those machines do.
 
 ## I run a free, community emulator or tool. Can I use it?
 

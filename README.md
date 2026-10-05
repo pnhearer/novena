@@ -12,7 +12,7 @@ Early. Nothing renders yet.
 
 What works today:
 
-- The table of 534 functions a program can request by name.
+- A table of 534 function names, found in one program and taken to be the functions it requests.
 - The host interface: a host creates an instance, tells it which names the program asks for, and forwards the program's calls.
 - A census of which functions a program requested and called, as a text file that contains names and counts only.
 

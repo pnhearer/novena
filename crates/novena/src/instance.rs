@@ -12,20 +12,29 @@ use std::sync::Mutex;
 /// the library reads and writes it through these callbacks.
 ///
 /// Both callbacks return 0 on success and any other value when the range is
-/// not accessible.
+/// not accessible. They are `unsafe` to call: the pointer must be valid for
+/// `size` bytes.
+///
+/// The host's side of the contract, which `Instance::with_host` takes on
+/// trust: `user` and both callbacks stay usable for the life of the
+/// instance, and may be used from several threads at once, because a program
+/// can call the graphics API from any of its threads.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Host {
     /// Passed back as the first argument of every callback.
     pub user: *mut c_void,
-    pub read_memory:
-        Option<extern "C" fn(user: *mut c_void, address: u64, out: *mut u8, size: u64) -> i32>,
-    pub write_memory:
-        Option<extern "C" fn(user: *mut c_void, address: u64, data: *const u8, size: u64) -> i32>,
+    pub read_memory: Option<
+        unsafe extern "C" fn(user: *mut c_void, address: u64, out: *mut u8, size: u64) -> i32,
+    >,
+    pub write_memory: Option<
+        unsafe extern "C" fn(user: *mut c_void, address: u64, data: *const u8, size: u64) -> i32,
+    >,
 }
 
-// SAFETY: the host promises its callbacks may be called from any thread the
-// program calls the graphics API from; `user` is only handed back to them.
+// SAFETY: a `Host` only reaches an instance through `Instance::with_host`,
+// whose caller guarantees that `user` and the callbacks may be shared between
+// threads. The library itself only hands `user` back to the callbacks.
 unsafe impl Send for Host {}
 unsafe impl Sync for Host {}
 
@@ -68,7 +77,22 @@ pub struct Instance {
 }
 
 impl Instance {
-    pub fn new(host: Option<Host>) -> Self {
+    /// An instance with no host. It can record requests and calls, which is
+    /// all the library does so far.
+    pub fn new() -> Self {
+        Self::build(None)
+    }
+
+    /// An instance that uses `host` to reach the program's memory.
+    ///
+    /// # Safety
+    /// `host.user` and the callbacks must stay usable for the life of the
+    /// instance and must tolerate being used from several threads at once.
+    pub unsafe fn with_host(host: Host) -> Self {
+        Self::build(Some(host))
+    }
+
+    fn build(host: Option<Host>) -> Self {
         let count = functions::count();
         Self {
             host,
@@ -141,6 +165,12 @@ impl Instance {
     }
 }
 
+impl Default for Instance {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 struct CensusEntry {
     name: &'static str,
     requested: bool,
@@ -204,7 +234,7 @@ mod tests {
 
     #[test]
     fn a_call_is_counted_and_reported_unimplemented() {
-        let instance = Instance::new(None);
+        let instance = Instance::new();
         let id = FunctionId(3);
         let mut registers = Registers {
             x: [1, 2, 3, 4, 5, 6, 7, 8],
@@ -222,7 +252,7 @@ mod tests {
 
     #[test]
     fn an_id_outside_the_table_is_refused() {
-        let instance = Instance::new(None);
+        let instance = Instance::new();
         let id = FunctionId(functions::count() as u32);
         assert_eq!(
             instance.call(id, &mut Registers::default()),
@@ -233,7 +263,7 @@ mod tests {
 
     #[test]
     fn the_census_lists_requests_calls_and_unknown_names() {
-        let instance = Instance::new(None);
+        let instance = Instance::new();
         let (first, first_name) = functions::all().next().unwrap();
         let (second, second_name) = functions::all().nth(1).unwrap();
         assert_eq!(instance.request(first_name), Some(first));
@@ -254,7 +284,7 @@ mod tests {
 
     #[test]
     fn counting_is_safe_from_several_threads() {
-        let instance = Instance::new(None);
+        let instance = Instance::new();
         let id = FunctionId(0);
         std::thread::scope(|scope| {
             for _ in 0..4 {

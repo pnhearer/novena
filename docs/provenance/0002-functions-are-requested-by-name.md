@@ -6,7 +6,9 @@
 
 ## What was learned
 
-A program does not link against the graphics API's functions one by one. It imports a single bootstrap function from the platform's system library and keeps the names of the API functions it wants as text in its own read-only data. In the one program examined, 534 such names are present.
+Two facts about one program. It imports a single function whose name says it is a bootstrap loader for the graphics API, and no other function of that API. And its own read-only data holds 534 strings that have the form of that API's function names.
+
+From those two facts we infer the arrangement the design is built on: the program does not link against the API's functions one by one, but asks the bootstrap function for each by name. That inference has not been confirmed by watching a call.
 
 ## How
 

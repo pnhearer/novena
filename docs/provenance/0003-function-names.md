@@ -6,7 +6,7 @@
 
 ## What was learned
 
-The names of 534 functions that one program requests from the graphics API at start-up. They are listed, sorted, in `data/function-names.txt`.
+534 strings in one program's executable that have the form of the graphics API's function names. They are listed, sorted, in `data/function-names.txt`. We take them to be the names of functions the program requests, which is an inference (see below).
 
 ## How
 

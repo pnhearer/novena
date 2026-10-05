@@ -19,13 +19,18 @@ The rule is general. It is not limited to one company or one product.
 - **Proprietary source code**, including driver, firmware, operating system, engine and game source, however it was obtained.
 - **Code taken from proprietary binaries.** Decompiled or disassembled code of any proprietary driver, library, firmware or program must not be copied, translated or closely paraphrased into this project. Reading a binary you own to learn what an interface does is observation. Carrying its code across is not.
 - **Internal documents**: design documents, bug trackers, emails, slides, certification or guideline documents not published by their owner.
-- **Code under a licence that does not allow inclusion here.** That includes copyleft licences such as the GPL family: novena is also offered under noncommercial and commercial terms, which GPL-licensed code from others cannot be placed under. Such projects may be read for understanding where their licence allows. Their code may not be copied or closely paraphrased.
 
 If you are unsure whether something falls under one of these, treat it as excluded and ask.
 
+## Open code that may be read but not copied
+
+Some openly published code has a licence that does not allow it to be included here. Copyleft licences such as the GPL family are the main case: novena is also offered under noncommercial and commercial terms, which other people's GPL code cannot be placed under.
+
+Such code is not excluded material. It is public, and reading it to understand a general technique is allowed where its licence allows. What is not allowed is copying it, translating it, or writing something that follows it closely. If a part of novena was informed by reading such a project, say so in the provenance note.
+
 ## Separation of people
 
-Anyone who has seen excluded material of any of the kinds above does not write, review or advise on the parts of novena that reimplement what that material covers. They are welcome in parts that do not touch it, such as the Vulkan backend internals, build tooling and tests of public behaviour.
+Anyone who has seen material from the "must not be used" list does not write, review or advise on the parts of novena that reimplement what that material covers. They are welcome in parts that do not touch it, such as the Vulkan backend internals, build tooling and tests of public behaviour.
 
 If you are not sure which side of that line you are on, say so before contributing. Nobody will hold it against you. An undeclared problem is the only kind that can hurt the project.
 

@@ -4,7 +4,7 @@ The host is whatever runs the program: an emulator, or the runtime of a recompil
 
 ## The two moments a host hooks
 
-1. **The program asks for a function by name.** Programs obtain the graphics API through a bootstrap function that takes a name and returns a function pointer (see [provenance note 0002](provenance/0002-functions-are-requested-by-name.md)). When the program calls it, the host calls `novena_instance_request` with the name and gets a function id back. The host then gives the program a pointer of its own making that it will recognise later, one per id.
+1. **The program asks for a function by name.** Programs appear to obtain the graphics API through a bootstrap function that takes a name and returns a function pointer. That is inferred and not yet observed; see [provenance note 0002](provenance/0002-functions-are-requested-by-name.md). When the program calls it, the host calls `novena_instance_request` with the name and gets a function id back. The host then gives the program a pointer of its own making that it will recognise later, one per id.
 2. **The program calls one of those pointers.** The host gathers the argument registers into a `novena_registers` and calls `novena_instance_call` with the id. On return it copies the result registers back to the program.
 
 Function ids are positions in the function table, so they are the same in every instance and every run for a given library version.

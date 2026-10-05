@@ -4,7 +4,7 @@ These notes describe the intended shape of the library. They will change as work
 
 ## Where the library sits
 
-A program for the original platform obtains the graphics API through a single bootstrap function. It passes a function name and receives a pointer, and it repeats this for every function it wants. After that it calls the functions directly.
+As far as we can tell, a program for the original platform obtains the graphics API through a single bootstrap function: it passes a function name and receives a pointer, repeats this for every function it wants, and after that calls the functions directly. This is inferred, not yet observed. [Provenance note 0002](provenance/0002-functions-are-requested-by-name.md) says what it rests on.
 
 novena provides that bootstrap function and the functions behind it. A host (an emulator or a recompiled program's runtime) points the program at novena's bootstrap function, or forwards the program's calls to it.
 
@@ -17,7 +17,6 @@ program  ->  API calls  ->  novena  ->  Vulkan  ->  host GPU
 ## What the host must supply
 
 The interface as it stands is described in [host-interface.md](host-interface.md). In full, a host will supply:
-
 
 - A way to read and write the program's memory. The API passes pointers to the program's own structures, and the program is not required to be native code.
 - A window or surface to present to.

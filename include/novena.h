@@ -25,8 +25,11 @@ typedef enum novena_status {
 } novena_status;
 
 /* What the host provides. Both callbacks return 0 on success and any other
- * value when the range is not accessible. They may be called from any thread
- * the program calls the graphics API from. */
+ * value when the range is not accessible.
+ *
+ * The host guarantees that `user` and both callbacks stay usable until the
+ * instance is destroyed, and that they tolerate being used from several
+ * threads at once: a program can call the graphics API from any thread. */
 typedef struct novena_host {
     void *user;
     int32_t (*read_memory)(void *user, uint64_t address, uint8_t *out, uint64_t size);
@@ -57,15 +60,25 @@ uint32_t novena_function_count(void);
 const char *novena_function_name(uint32_t function);
 uint32_t novena_function_lookup(const char *name);
 
-/* host may be null; the structure is copied. */
+/* Instances.
+ *
+ * Every function below that takes an instance needs the pointer returned by
+ * novena_instance_create, not yet destroyed. Apart from destroy, they may be
+ * called on one instance from several threads at once.
+ *
+ * host may be null; the structure is copied. */
 novena_instance *novena_instance_create(const novena_host *host);
+
+/* Null is accepted. No other call on the instance may be running, and none
+ * may be made afterwards. */
 void novena_instance_destroy(novena_instance *instance);
 
 /* The program asked its bootstrap function for a name. Records the request
  * and returns the function id, or NOVENA_FUNCTION_NONE. */
 uint32_t novena_instance_request(const novena_instance *instance, const char *name);
 
-/* The program called a function. */
+/* The program called a function. `registers` must not be read or written by
+ * anything else until the call returns; each thread uses its own. */
 novena_status novena_instance_call(const novena_instance *instance, uint32_t function,
                                    novena_registers *registers);
 
