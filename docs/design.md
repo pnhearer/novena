@@ -4,7 +4,7 @@ These notes describe the intended shape of the library. They will change as work
 
 ## Where the library sits
 
-As far as we can tell, a program for the original platform obtains the graphics API through a single bootstrap function: it passes a function name and receives a pointer, repeats this for every function it wants, and after that calls the functions directly. This is inferred, not yet observed. [Provenance note 0002](provenance/0002-functions-are-requested-by-name.md) says what it rests on.
+A program for the original platform obtains the graphics API through a bootstrap function: it passes a function name and receives a pointer, repeats this for every function it wants, and after that calls the functions directly. This was inferred first ([note 0002](provenance/0002-functions-are-requested-by-name.md)) and then observed in a running program ([note 0005](provenance/0005-first-census.md)).
 
 novena provides that bootstrap function and the functions behind it. A host (an emulator or a recompiled program's runtime) points the program at novena's bootstrap function, or forwards the program's calls to it.
 
@@ -42,8 +42,9 @@ The interface to the host is C, so the library can be used from any language.
 ## Order of work
 
 1. Done: function table, instances, and a null implementation that records which functions are requested and called.
-2. A census from a real program, to rank the functions by use.
-3. Object lifetime for the objects a first frame needs.
-4. A single textured triangle from a test program written for this project.
-5. Presentation with a render scale.
-6. Breadth, driven by the census.
+2. Done: a census from a real program. It called 168 of the 534 functions; see [docs/census](census).
+3. Next: observe the shape of the arguments and results of those 168 functions, so their signatures can be worked out.
+4. Object lifetime for the objects a first frame needs.
+5. A single textured triangle from a test program written for this project.
+6. Presentation with a render scale.
+7. Breadth, driven by the census.

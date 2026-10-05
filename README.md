@@ -12,11 +12,11 @@ Early. Nothing renders yet.
 
 What works today:
 
-- A table of 534 function names, found in one program and taken to be the functions it requests.
+- A table of 534 function names, found in one program and since observed being requested by it.
 - The host interface: a host creates an instance, tells it which names the program asks for, and forwards the program's calls.
 - A census of which functions a program requested and called, as a text file that contains names and counts only.
 
-Every call is currently counted and answered as "not implemented". That is already useful for one thing: finding out which parts of the API a real program uses, which decides the order of the work.
+Every call is currently counted and answered as "not implemented". That is already useful for one thing: finding out which parts of the API a real program uses, which decides the order of the work. The first such census is in [docs/census](docs/census): one program asked for all 534 functions and called 168 of them in its first four minutes.
 
 [docs/design.md](docs/design.md) has the plan and the open questions. [docs/host-interface.md](docs/host-interface.md) explains how a host connects.
 
