@@ -81,48 +81,74 @@ impl RegisterShape {
     }
 }
 
+/// A value read as a float, when that reading looks like a number a program
+/// would pass on purpose. Integers and addresses read as floats are tiny,
+/// huge or not numbers at all, and printing those would bury the real ones.
+fn plausible_float(value: f64) -> Option<f64> {
+    let magnitude = value.abs();
+    (value == 0.0 || (1e-6..1e9).contains(&magnitude)).then_some(value)
+}
+
+fn float_readings(values: &[u64]) -> Option<(String, &'static str)> {
+    let join = |readings: Vec<Option<f64>>| {
+        readings
+            .into_iter()
+            .map(|reading| reading.map(|value| format!("{value}")))
+            .collect::<Option<Vec<_>>>()
+            .map(|list| list.join(" "))
+    };
+    // A single-precision value occupies the low 32 bits with the rest zero.
+    let singles = values
+        .iter()
+        .map(|value| {
+            (*value <= u64::from(u32::MAX))
+                .then(|| plausible_float(f64::from(f32::from_bits(*value as u32))))
+                .flatten()
+        })
+        .collect();
+    if let Some(list) = join(singles) {
+        return Some((list, "f32"));
+    }
+    let doubles = values
+        .iter()
+        .map(|value| plausible_float(f64::from_bits(*value)))
+        .collect();
+    join(doubles).map(|list| (list, "f64"))
+}
+
 impl fmt::Display for RegisterShape {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.kind())?;
         if self.samples == 0 {
             return Ok(());
         }
-        write!(f, " min={:#x} max={:#x}", self.min, self.max)?;
-        if self.readable > 0 && self.readable < self.samples {
-            write!(f, " readable={}/{}", self.readable, self.samples)?;
-        }
         // Addresses identify objects in one run and mean nothing outside it,
-        // so only their number is reported. Other values are shown, with the
-        // floating-point readings of the same bits.
-        if self.readable == 0 {
-            f.write_str(" values=[")?;
-            for (index, value) in self.distinct.iter().enumerate() {
-                if index > 0 {
-                    f.write_char(' ')?;
-                }
-                write!(f, "{value:#x}")?;
-            }
-            f.write_str(if self.more_distinct { " ...]" } else { "]" })?;
-            let singles: Vec<String> = self
-                .distinct
-                .iter()
-                .map(|value| format!("{}", f32::from_bits(*value as u32)))
-                .collect();
-            let doubles: Vec<String> = self
-                .distinct
-                .iter()
-                .map(|value| format!("{}", f64::from_bits(*value)))
-                .collect();
-            write!(
-                f,
-                " f32=[{}] f64=[{}]",
-                singles.join(" "),
-                doubles.join(" ")
-            )?;
-        } else {
+        // so they are counted and never printed.
+        if self.readable > 0 {
             let count = self.distinct.len();
             let more = if self.more_distinct { "+" } else { "" };
             write!(f, " distinct={count}{more}")?;
+            if self.readable < self.samples {
+                write!(f, " readable={}/{}", self.readable, self.samples)?;
+            }
+            if self.zeros > 0 {
+                write!(f, " zero={}/{}", self.zeros, self.samples)?;
+            }
+            return Ok(());
+        }
+        write!(f, " min={:#x} max={:#x} values=[", self.min, self.max)?;
+        for (index, value) in self.distinct.iter().enumerate() {
+            if index > 0 {
+                f.write_char(' ')?;
+            }
+            write!(f, "{value:#x}")?;
+        }
+        f.write_str(if self.more_distinct { " ...]" } else { "]" })?;
+        let all_zero = self.max == 0;
+        if !all_zero {
+            if let Some((list, kind)) = float_readings(&self.distinct) {
+                write!(f, " {kind}=[{list}]")?;
+            }
         }
         Ok(())
     }
@@ -272,11 +298,18 @@ mod tests {
             ),
             "{text}"
         );
-        // Addresses are counted, not listed.
+        // Small integers are not offered as floats.
         assert!(
-            text.contains("  x0 address min=0x100000 max=0x100900 distinct=6+"),
+            text.contains("  x2 constant min=0x7 max=0x7 values=[0x7]\n"),
             "{text}"
         );
+        // Addresses are counted, never printed.
+        assert!(text.contains("  x0 address distinct=6+\n"), "{text}");
+        assert!(
+            text.contains("  x3 address-or-null distinct=2 readable=5/10 zero=5/10\n"),
+            "{text}"
+        );
+        assert!(!text.contains("0x100"), "{text}");
         assert!(!text.contains("result"), "{text}");
     }
 
