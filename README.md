@@ -46,4 +46,6 @@ Rust stable is enough. Vulkan is not needed yet.
 
 ## Licence
 
-MIT or Apache-2.0, at your option. See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE). Notes on scope and intent are in [LEGAL.md](LEGAL.md).
+novena is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). You may use, change and share it for any noncommercial purpose. Commercial use needs a separate licence, described in [COMMERCIAL.md](COMMERCIAL.md).
+
+[FAQ.md](FAQ.md) explains this in plain words. Notes on scope and intent are in [LEGAL.md](LEGAL.md).
