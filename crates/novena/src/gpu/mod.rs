@@ -43,6 +43,17 @@ impl Backend {
     pub fn readback(&mut self, key: u64) -> Option<(u32, u32, Vec<u8>)> {
         self.images.readback(&self.context, key)
     }
+
+    /// Copy entry points are kept behind the backend boundary. The current
+    /// Vulkan image allocator has no host-visible staging allocation yet, so
+    /// unresolved copy descriptors are deliberately reported as unsupported.
+    pub fn upload(&mut self, _key: u64, _data: &[u8], _width: u64, _height: u64) -> bool {
+        false
+    }
+
+    pub fn copy(&mut self, _destination: u64, _source: u64) -> bool {
+        false
+    }
 }
 
 impl Context {

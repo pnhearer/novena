@@ -17,6 +17,37 @@ fn builder_update(
     Status::Ok
 }
 
+const COPY_CHUNK: usize = 64 * 1024;
+
+fn read_pool_bytes(instance: &Instance, address: u64, size: usize) -> Option<Vec<u8>> {
+    let mut bytes = vec![0; size];
+    for (offset, chunk) in bytes.chunks_mut(COPY_CHUNK).enumerate() {
+        let address = address.checked_add((offset * COPY_CHUNK) as u64)?;
+        if !instance.read_memory(address, chunk) {
+            return None;
+        }
+    }
+    Some(bytes)
+}
+
+#[cfg(not(feature = "vulkan"))]
+fn copy_cpu(instance: &Instance, source: u64, destination: u64, data: Vec<u8>) {
+    let Some(Object::Texture { image, description }) = instance.objects.get(destination) else {
+        return;
+    };
+    let mut image = image.lock().unwrap_or_else(|p| p.into_inner());
+    let size = (description.width.max(1) * description.height.max(1) * 4) as usize;
+    let target = image.get_or_insert_with(|| TextureImage {
+        width: description.width.max(1) as u32,
+        height: description.height.max(1) as u32,
+        depth: 1,
+        pixels: vec![0; size],
+    });
+    let _ = source;
+    let length = target.pixels.len().min(data.len());
+    target.pixels[..length].copy_from_slice(&data[..length]);
+}
+
 /// Marks an event signalled, in novena's record and in the event's storage
 /// word in program memory.
 /// Largest CPU image, in texels: 4096 by 4096.
@@ -186,6 +217,54 @@ pub fn handler(name: &str) -> Option<Handler> {
                                     let _ = backend.clear_depth(texture, depth, stencil);
                                 }
                             }
+                        }
+                        RecordedCommand::CopyBufferToTexture { buffer, texture } => {
+                            let Some(Object::Texture { description, .. }) =
+                                instance.objects.get(texture)
+                            else {
+                                continue;
+                            };
+                            let size = (description.width.max(1)
+                                * description.height.max(1)
+                                * description.depth.max(1)
+                                * 4) as usize;
+                            let Some(data) = read_pool_bytes(instance, buffer, size) else {
+                                continue;
+                            };
+                            #[cfg(feature = "vulkan")]
+                            if let Some(backend) = gpu.as_mut() {
+                                let _ = backend.upload(
+                                    texture,
+                                    &data,
+                                    description.width,
+                                    description.height,
+                                );
+                            }
+                            #[cfg(not(feature = "vulkan"))]
+                            copy_cpu(instance, buffer, texture, data);
+                        }
+                        RecordedCommand::CopyTextureToTexture {
+                            source,
+                            destination,
+                        } => {
+                            let Some(Object::Texture { image, .. }) = instance.objects.get(source)
+                            else {
+                                continue;
+                            };
+                            let Some(_data) = image
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .as_ref()
+                                .map(|i| i.pixels.clone())
+                            else {
+                                continue;
+                            };
+                            #[cfg(feature = "vulkan")]
+                            if let Some(backend) = gpu.as_mut() {
+                                let _ = backend.copy(destination, source);
+                            }
+                            #[cfg(not(feature = "vulkan"))]
+                            copy_cpu(instance, source, destination, _data);
                         }
                         RecordedCommand::SetViewport(_)
                         | RecordedCommand::SetScissor(_)

@@ -27,6 +27,14 @@ pub enum RecordedCommand {
         stencil: u32,
         stencil_mask: u32,
     },
+    CopyBufferToTexture {
+        buffer: u64,
+        texture: u64,
+    },
+    CopyTextureToTexture {
+        source: u64,
+        destination: u64,
+    },
     SetViewport([u64; 5]),
     SetScissor([u64; 5]),
     SetDepthRange([u64; 3]),

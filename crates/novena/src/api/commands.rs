@@ -82,6 +82,31 @@ pub fn handler(name: &str) -> Option<Handler> {
                 },
             )
         },
+        // The register observations establish x1 as the source GPU address
+        // and x2 as the destination texture. The remaining pointers are
+        // intentionally not interpreted; see signatures 0006.
+        "nvnCommandBufferCopyBufferToTexture" => |instance, _, r| {
+            record(
+                instance,
+                0,
+                r,
+                RecordedCommand::CopyBufferToTexture {
+                    buffer: r.x[1],
+                    texture: r.x[2],
+                },
+            )
+        },
+        "nvnCommandBufferCopyTextureToTexture" => |instance, _, r| {
+            record(
+                instance,
+                0,
+                r,
+                RecordedCommand::CopyTextureToTexture {
+                    source: r.x[1],
+                    destination: r.x[2],
+                },
+            )
+        },
         "nvnCommandBufferSetViewport" => |i, _, r| {
             record(
                 i,
