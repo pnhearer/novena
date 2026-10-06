@@ -6,7 +6,7 @@
 //! the command buffer object are handled, so the program can get through
 //! its set-up.
 
-use super::{accept, objects::Object, succeed, Handler};
+use super::{accept, objects::Object, queue::signal_event, succeed, Handler};
 use crate::instance::Status;
 
 pub fn handler(name: &str) -> Option<Handler> {
@@ -63,6 +63,29 @@ pub fn handler(name: &str) -> Option<Handler> {
         | "nvnCommandBufferSetTexturePool"
         | "nvnCommandBufferSetSamplerPool"
         | "nvnCommandBufferSetShaderScratchMemory" => accept,
+        // Commands that the graphics processor would execute later and that
+        // the program waits on. Nothing executes commands yet, so their
+        // effect is produced at recording time (note 0011).
+        //
+        // SignalEvent: the value written is taken from the fourth register,
+        // which was 1 in every observed call; signatures 0002 leaves the
+        // argument order open.
+        "nvnCommandBufferSignalEvent" => |instance, _, registers| {
+            let value = registers.x[4] as u32;
+            signal_event(instance, registers.x[1], if value == 0 { 1 } else { value });
+            Status::Ok
+        },
+        // ReportCounter writes a report to graphics memory. The report's
+        // layout is not observed; sixteen bytes with a non-zero timestamp
+        // in the second word is novena's guess at what a reader waits for.
+        "nvnCommandBufferReportCounter" => |instance, _, registers| {
+            let report = instance.next_counter_report();
+            let mut bytes = [0u8; 16];
+            bytes[..8].copy_from_slice(&0u64.to_le_bytes());
+            bytes[8..].copy_from_slice(&report.to_le_bytes());
+            instance.write_memory(registers.x[2], &bytes);
+            Status::Ok
+        },
         "nvnCommandBufferBeginRecording" => |instance, _, registers| {
             instance.objects.update(registers.x[0], |object| {
                 if let Object::CommandBuffer { recording, .. } = object {

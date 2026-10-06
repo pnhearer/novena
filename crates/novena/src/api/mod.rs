@@ -221,5 +221,7 @@ mod tests {
         "nvnCommandBufferSetTexturePool",
         "nvnCommandBufferSetSamplerPool",
         "nvnCommandBufferSetShaderScratchMemory",
+        "nvnCommandBufferSignalEvent",
+        "nvnCommandBufferReportCounter",
     ];
 }

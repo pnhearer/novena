@@ -53,6 +53,9 @@ pub enum Object {
     },
     Event {
         value: u32,
+        /// Program address of the event's storage word, which the program
+        /// may read directly instead of calling EventGetValue.
+        storage: u64,
     },
     MemoryPoolBuilder {
         device: u64,

@@ -82,6 +82,9 @@ pub struct Instance {
     /// novena's record of the program's objects.
     pub objects: Objects,
     handlers: Vec<Option<Handler>>,
+    /// A rising count that stands in for the graphics processor's clock in
+    /// counter reports.
+    counter_reports: AtomicU64,
     requested: Vec<AtomicBool>,
     calls: Vec<AtomicU64>,
     shapes: Vec<Mutex<FunctionShape>>,
@@ -113,6 +116,7 @@ impl Instance {
             handlers: functions::all()
                 .map(|(_, name)| api::handler(name))
                 .collect(),
+            counter_reports: AtomicU64::new(1),
             requested: (0..count).map(|_| AtomicBool::new(false)).collect(),
             calls: (0..count).map(|_| AtomicU64::new(0)).collect(),
             shapes: (0..count).map(|_| Mutex::default()).collect(),
@@ -141,6 +145,10 @@ impl Instance {
                 None
             }
         }
+    }
+
+    pub(crate) fn next_counter_report(&self) -> u64 {
+        self.counter_reports.fetch_add(1, Ordering::Relaxed) << 10
     }
 
     /// Read program memory through the host. False when there is no host,

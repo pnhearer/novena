@@ -16,7 +16,7 @@ What works today:
 - The host interface: a host creates an instance, tells it which names the program asks for, and forwards the program's calls.
 - A census of which functions a program requested and called, as a text file that contains names and counts only.
 
-About 130 functions, the set-up path, have behaviour: novena keeps a record of the program's objects and answers queries from observed data. One program runs its whole start-up and first frame on novena alone, with nothing drawn yet ([note 0010](docs/provenance/0010-first-run-on-novena.md)). Every other call is counted and answered as "not implemented".
+About 130 functions, the set-up path, have behaviour: novena keeps a record of the program's objects and answers queries from observed data. One program runs on novena alone, presenting frame after frame with nothing drawn yet ([notes 0010 and 0011](docs/provenance/0011-running-past-the-first-frame.md)). Every other call is counted and answered as "not implemented".
 
 The census of what a real program calls is in [docs/census](docs/census): one program asked for all 534 functions and called 168 of them in its first four minutes.
 

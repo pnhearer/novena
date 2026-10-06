@@ -13,6 +13,21 @@ fn builder_update(
     Status::Ok
 }
 
+/// Marks an event signalled, in novena's record and in the event's storage
+/// word in program memory.
+pub(crate) fn signal_event(instance: &Instance, event: u64, new_value: u32) {
+    let mut storage = 0;
+    instance.objects.update(event, |object| {
+        if let Object::Event { value, storage: at } = object {
+            *value = new_value;
+            storage = *at;
+        }
+    });
+    if storage != 0 {
+        write_u32(instance, storage, new_value);
+    }
+}
+
 pub fn handler(name: &str) -> Option<Handler> {
     Some(match name {
         "nvnQueueBuilderSetDefaults" => |instance, _, registers| {
@@ -102,15 +117,25 @@ pub fn handler(name: &str) -> Option<Handler> {
             );
             Status::Ok
         },
+        // The event lives in pool memory the program chose
+        // (EventBuilderSetStorage), and the program was seen reading that
+        // memory directly rather than calling EventGetValue (note 0011).
         "nvnEventInitialize" => |instance, _, registers| {
+            let storage = match instance.objects.get(registers.x[1]) {
+                Some(Object::EventBuilder { pool, offset }) => match instance.objects.get(pool) {
+                    Some(Object::MemoryPool { storage, .. }) => storage + offset,
+                    _ => 0,
+                },
+                _ => 0,
+            };
             instance
                 .objects
-                .put(registers.x[0], Object::Event { value: 0 });
+                .put(registers.x[0], Object::Event { value: 0, storage });
             succeed(registers)
         },
         "nvnEventGetValue" => |instance, _, registers| {
             registers.x[0] = match instance.objects.get(registers.x[0]) {
-                Some(Object::Event { value }) => u64::from(value),
+                Some(Object::Event { value, .. }) => u64::from(value),
                 _ => 0,
             };
             Status::Ok
@@ -118,11 +143,7 @@ pub fn handler(name: &str) -> Option<Handler> {
         // Signatures 0003 leaves the arguments open. The event is marked
         // signalled, which is the least the name promises.
         "nvnEventSignal" => |instance, _, registers| {
-            instance.objects.update(registers.x[0], |object| {
-                if let Object::Event { value } = object {
-                    *value = 1;
-                }
-            });
+            signal_event(instance, registers.x[0], 1);
             Status::Ok
         },
         "nvnWindowBuilderSetDefaults" => |instance, _, registers| {

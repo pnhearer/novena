@@ -21,7 +21,7 @@ The interface as it stands is described in [host-interface.md](host-interface.md
 - A way to read and write the program's memory. The API passes pointers to the program's own structures, and the program is not required to be native code.
 - A window or surface to present to.
 - Translated shaders, or a shader translator novena can call.
-- The platform's frame signal. After presenting, programs wait on the platform's display path (a fence or vertical sync) outside the graphics API. When novena handles presentation, the host must raise that signal itself, or the program waits forever ([note 0010](provenance/0010-first-run-on-novena.md)).
+- Frame pacing. With nothing executing commands, novena completes events and counter reports at recording time and the program runs unpaced ([note 0011](provenance/0011-running-past-the-first-frame.md)). A real implementation paces presents against the display.
 
 The interface to the host is C, so the library can be used from any language.
 
@@ -49,7 +49,7 @@ novena keeps its own record of every object in a side table keyed by the program
 1. Done: function table, instances, and a null implementation that records which functions are requested and called.
 2. Done: a census from a real program. It called 168 of the 534 functions; see [docs/census](census).
 3. Done for register arguments: the shape of the arguments and results of those 168 functions, and a signature entry for each, in [docs/shapes](shapes) and [docs/signatures](signatures). The memory behind pointer arguments has had a first look too ([signatures 0004](signatures/0004-pointers.md)).
-4. Done: the objects a first frame needs, as records in a side table. One program runs through its whole start-up and first frame on novena with nothing drawn ([note 0010](provenance/0010-first-run-on-novena.md)).
+4. Done: the objects a frame needs, as records in a side table. One program runs on novena frame after frame with nothing drawn ([notes 0010](provenance/0010-first-run-on-novena.md) and [0011](provenance/0011-running-past-the-first-frame.md)).
 5. A single textured triangle from a test program written for this project.
 6. Presentation with a render scale.
 7. Breadth, driven by the census.
