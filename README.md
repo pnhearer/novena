@@ -16,7 +16,9 @@ What works today:
 - The host interface: a host creates an instance, tells it which names the program asks for, and forwards the program's calls.
 - A census of which functions a program requested and called, as a text file that contains names and counts only.
 
-Every call is currently counted and answered as "not implemented". That is already useful for one thing: finding out which parts of the API a real program uses, which decides the order of the work. The first such census is in [docs/census](docs/census): one program asked for all 534 functions and called 168 of them in its first four minutes.
+About 130 functions, the set-up path, have behaviour: novena keeps a record of the program's objects and answers queries from observed data. One program runs its whole start-up and first frame on novena alone, with nothing drawn yet ([note 0010](docs/provenance/0010-first-run-on-novena.md)). Every other call is counted and answered as "not implemented".
+
+The census of what a real program calls is in [docs/census](docs/census): one program asked for all 534 functions and called 168 of them in its first four minutes.
 
 The first signatures worked out from observation are in [docs/signatures](docs/signatures).
 

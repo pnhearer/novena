@@ -21,6 +21,7 @@ The interface as it stands is described in [host-interface.md](host-interface.md
 - A way to read and write the program's memory. The API passes pointers to the program's own structures, and the program is not required to be native code.
 - A window or surface to present to.
 - Translated shaders, or a shader translator novena can call.
+- The platform's frame signal. After presenting, programs wait on the platform's display path (a fence or vertical sync) outside the graphics API. When novena handles presentation, the host must raise that signal itself, or the program waits forever ([note 0010](provenance/0010-first-run-on-novena.md)).
 
 The interface to the host is C, so the library can be used from any language.
 
@@ -31,6 +32,10 @@ The interface to the host is C, so the library can be used from any language.
 3. **Command recording.** Calls recorded into the API's command buffers are turned into Vulkan command buffers at submission.
 4. **Presentation.** The API's window object over a Vulkan swapchain, with a host-chosen render scale.
 5. **Shaders.** Out of scope for this crate. A translator from the original machine code to SPIR-V is planned as its own component with its own provenance.
+
+## Objects
+
+novena keeps its own record of every object in a side table keyed by the program's object address, and never writes into the program's object memory. So the size and layout of the objects need not be known. This holds as long as programs only touch objects through the API; one program got through its start-up this way, which is consistent with that but does not prove it.
 
 ## Open questions
 
@@ -44,7 +49,7 @@ The interface to the host is C, so the library can be used from any language.
 1. Done: function table, instances, and a null implementation that records which functions are requested and called.
 2. Done: a census from a real program. It called 168 of the 534 functions; see [docs/census](census).
 3. Done for register arguments: the shape of the arguments and results of those 168 functions, and a signature entry for each, in [docs/shapes](shapes) and [docs/signatures](signatures). The memory behind pointer arguments has had a first look too ([signatures 0004](signatures/0004-pointers.md)).
-4. Object lifetime for the objects a first frame needs.
+4. Done: the objects a first frame needs, as records in a side table. One program runs through its whole start-up and first frame on novena with nothing drawn ([note 0010](provenance/0010-first-run-on-novena.md)).
 5. A single textured triangle from a test program written for this project.
 6. Presentation with a render scale.
 7. Breadth, driven by the census.

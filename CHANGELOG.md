@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Behaviour for the set-up path: device, queue, sync, event, window, memory pool, texture, sampler, pool, program, state and command buffer management, with objects kept in a side table.
 - Function table of 534 names, with lookup by name and by id.
 - Instances, created by a host, that record which functions a program requests and calls.
 - Census output as text.
