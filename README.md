@@ -59,12 +59,12 @@ examples/run-host.sh
 
 Rust stable and a C compiler are enough. Vulkan is not needed yet. The last command builds a small host in C against `include/novena.h`, runs it and prints the census it wrote.
 
-## Licence
+## License
 
 You choose one of three:
 
 - **Noncommercial use:** free, under PolyForm Noncommercial 1.0.0.
 - **GPL and AGPL projects:** free, under the GNU Affero GPL version 3 or later.
-- **Closed commercial use:** needs a paid commercial licence.
+- **Closed commercial use:** needs a paid commercial license.
 
-[LICENSE.md](LICENSE.md) has a table that says which one fits your case. [FAQ.md](FAQ.md) explains the reasons in plain words, and [COMMERCIAL.md](COMMERCIAL.md) covers commercial licences. Notes on scope and intent are in [LEGAL.md](LEGAL.md).
+[LICENSE.md](LICENSE.md) has a table that says which one fits your case. [FAQ.md](FAQ.md) explains the reasons in plain words, and [COMMERCIAL.md](COMMERCIAL.md) covers commercial licenses. Notes on scope and intent are in [LEGAL.md](LEGAL.md).

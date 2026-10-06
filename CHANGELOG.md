@@ -12,4 +12,4 @@
 - Sampling of the memory behind address arguments, with detection of what a call wrote, and per-selector answers of query functions.
 - First shapes file, and a signature entry inferred from it for each of the 168 functions the program called.
 - Example host in C.
-- Project rules: clean room, contributions, licences, scope and intent.
+- Project rules: clean room, contributions, licenses, scope and intent.

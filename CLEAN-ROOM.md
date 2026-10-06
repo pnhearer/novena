@@ -5,9 +5,9 @@ novena reimplements an interface. It must never contain, or be derived from, the
 ## Sources that may be used
 
 1. **Observation of software you lawfully own.** Which API functions a program asks for, the order and arguments of its calls, and the visible result, observed on your own copy with your own tools.
-2. **Public facts.** Function and symbol names that programs carry in their own files, public specifications such as Vulkan and SPIR-V, published research, and openly licensed code whose licence allows it to be included under every licence this project is offered under. In practice that means permissive licences such as MIT, BSD and Apache-2.0.
+2. **Public facts.** Function and symbol names that programs carry in their own files, public specifications such as Vulkan and SPIR-V, published research, and openly licensed code whose license allows it to be included under every license this project is offered under. In practice that means permissive licenses such as MIT, BSD and Apache-2.0.
 3. **Your own experiments.** Small test programs written for this project.
-4. **Hardware behaviour documented in public.** Open drivers and public register documentation for the graphics processor, under their licences.
+4. **Hardware behaviour documented in public.** Open drivers and public register documentation for the graphics processor, under their licenses.
 
 ## Sources that must not be used
 
@@ -24,9 +24,9 @@ If you are unsure whether something falls under one of these, treat it as exclud
 
 ## Open code that may be read but not copied
 
-Some openly published code has a licence that does not allow it to be included here. Copyleft licences such as the GPL family are the main case: novena is also offered under noncommercial and commercial terms, which other people's copyleft code cannot be placed under.
+Some openly published code has a license that does not allow it to be included here. Copyleft licenses such as the GPL family are the main case: novena is also offered under noncommercial and commercial terms, which other people's copyleft code cannot be placed under.
 
-Such code is not excluded material. It is public, and reading it to understand a general technique is allowed where its licence allows. What is not allowed is copying it, translating it, or writing something that follows it closely. If a part of novena was informed by reading such a project, say so in the provenance note.
+Such code is not excluded material. It is public, and reading it to understand a general technique is allowed where its license allows. What is not allowed is copying it, translating it, or writing something that follows it closely. If a part of novena was informed by reading such a project, say so in the provenance note.
 
 ## Separation of people
 

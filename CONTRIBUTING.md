@@ -9,7 +9,7 @@ Read [CLEAN-ROOM.md](CLEAN-ROOM.md). By contributing you state that:
 - you wrote the change yourself, or it comes from a source the clean-room rules allow and you say which,
 - you did not use any proprietary development kit, any material under a non-disclosure agreement, any leaked material, or any proprietary source or decompiled code, from any party,
 - you have not had access to such material, or your change does not touch what it covers,
-- you agree to the contributor agreement in [CLA.md](CLA.md), which lets the project include your work under its two public licences and under commercial licences.
+- you agree to the contributor agreement in [CLA.md](CLA.md), which lets the project include your work under its two public licenses and under commercial licenses.
 
 Add a `Signed-off-by` line to your commits (`git commit -s`) to record that statement, and say in your first pull request that you agree to the contributor agreement.
 

@@ -26,7 +26,7 @@ Use the library only with software you are entitled to use, and in line with the
 
 ## No warranty
 
-The software is provided as is, without warranty of any kind, as set out in the licence texts in the LICENSES folder.
+The software is provided as is, without warranty of any kind, as set out in the license texts in the LICENSES folder.
 
 ## Concerns
 
