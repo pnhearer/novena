@@ -57,7 +57,7 @@ cargo test
 examples/run-host.sh
 ```
 
-Rust stable and a C compiler are enough. Vulkan is not needed yet. The last command builds a small host in C against `include/novena.h`, runs it and prints the census it wrote.
+Rust stable and a C compiler are enough. The CPU implementation is the default. To compile the optional Vulkan backend, use `cargo build --features vulkan`. Vulkan is optional at runtime too: when no loader or device is available, novena keeps using its CPU path. The last command builds a small host in C against `include/novena.h`, runs it and prints the census it wrote.
 
 ## License
 

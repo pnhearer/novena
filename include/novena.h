@@ -1,4 +1,4 @@
-/* novena host interface, version 3. See docs/host-interface.md. */
+/* novena host interface, version 4. See docs/host-interface.md. */
 #ifndef NOVENA_H
 #define NOVENA_H
 
@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define NOVENA_HOST_INTERFACE_VERSION 3u
+#define NOVENA_HOST_INTERFACE_VERSION 4u
 
 /* Returned by lookups for a name the library does not know. */
 #define NOVENA_FUNCTION_NONE UINT32_MAX
@@ -36,6 +36,8 @@ typedef struct novena_host {
     int32_t (*write_memory)(void *user, uint64_t address, const uint8_t *data, uint64_t size);
     void (*present)(void *user, uint64_t window_object, uint32_t width, uint32_t height,
                     const uint8_t *rgba, uint64_t stride_bytes);
+    float render_scale;
+    void (*wait_vblank)(void *user);
 } novena_host;
 
 /* Argument and result registers of one call under the program's standard

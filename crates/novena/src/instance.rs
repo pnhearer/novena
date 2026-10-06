@@ -3,6 +3,8 @@
 
 use crate::api::{self, Handler, Objects};
 use crate::functions::{self, FunctionId};
+#[cfg(feature = "vulkan")]
+use crate::gpu::Backend;
 use crate::observe::{CallSnapshot, FunctionShape};
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -43,6 +45,10 @@ pub struct Host {
             stride_bytes: u64,
         ),
     >,
+    /// The output scale. Values below 1 are treated as 1.0.
+    pub render_scale: f32,
+    /// Called immediately before a texture is presented.
+    pub wait_vblank: Option<unsafe extern "C" fn(user: *mut c_void)>,
 }
 
 // SAFETY: a `Host` only reaches an instance through `Instance::with_host`,
@@ -100,6 +106,8 @@ pub struct Instance {
     shapes: Vec<Mutex<FunctionShape>>,
     /// Names the program asked for that are not in the table, with how often.
     unknown_requests: Mutex<BTreeMap<String, u64>>,
+    #[cfg(feature = "vulkan")]
+    pub(crate) gpu: Mutex<Option<Backend>>,
 }
 
 impl Instance {
@@ -131,6 +139,8 @@ impl Instance {
             calls: (0..count).map(|_| AtomicU64::new(0)).collect(),
             shapes: (0..count).map(|_| Mutex::default()).collect(),
             unknown_requests: Mutex::new(BTreeMap::new()),
+            #[cfg(feature = "vulkan")]
+            gpu: Mutex::new(host.and_then(|h| Backend::new(h.render_scale))),
         }
     }
 

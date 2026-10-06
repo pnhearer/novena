@@ -95,6 +95,8 @@ pub fn handler(name: &str) -> Option<Handler> {
             // clears thousands of other render targets, and filling CPU
             // copies of all of them stalled the program it was tried on.
             let presented = instance.objects.window_textures();
+            #[cfg(feature = "vulkan")]
+            let mut gpu = instance.gpu.lock().unwrap_or_else(|p| p.into_inner());
             for i in 0..r.x[1].min(1024) {
                 let Some(handle) = read_u64(instance, r.x[2] + i * 8) else {
                     break;
@@ -112,6 +114,10 @@ pub fn handler(name: &str) -> Option<Handler> {
                                 continue;
                             };
                             if !presented.contains(&texture) {
+                                #[cfg(feature = "vulkan")]
+                                if let Some(backend) = gpu.as_mut() {
+                                    let _ = backend.clear_color(texture, color, mask);
+                                }
                                 continue;
                             }
                             let Some(Object::Texture { description, image }) =
@@ -119,6 +125,17 @@ pub fn handler(name: &str) -> Option<Handler> {
                             else {
                                 continue;
                             };
+                            #[cfg(feature = "vulkan")]
+                            if let Some(backend) = gpu.as_mut() {
+                                let _ = backend.ensure(
+                                    texture,
+                                    description.width,
+                                    description.height,
+                                    false,
+                                );
+                                let _ = backend.clear_color(texture, color, mask);
+                                continue;
+                            }
                             // Only the first layer of the base level is kept on the
                             // CPU, and only for sizes a screen can have: a game
                             // clears large arrays and volumes every frame, and
@@ -146,10 +163,33 @@ pub fn handler(name: &str) -> Option<Handler> {
                                 }
                             }
                         }
+                        RecordedCommand::ClearDepthStencil { depth, stencil, .. } => {
+                            #[cfg(not(feature = "vulkan"))]
+                            let _ = (depth, stencil);
+                            let Some(texture) = targets.last().copied() else {
+                                continue;
+                            };
+                            if presented.contains(&texture) {
+                                #[cfg(feature = "vulkan")]
+                                if let Some(backend) = gpu.as_mut() {
+                                    let Some(Object::Texture { description, .. }) =
+                                        instance.objects.get(texture)
+                                    else {
+                                        continue;
+                                    };
+                                    let _ = backend.ensure(
+                                        texture,
+                                        description.width,
+                                        description.height,
+                                        true,
+                                    );
+                                    let _ = backend.clear_depth(texture, depth, stencil);
+                                }
+                            }
+                        }
                         RecordedCommand::SetViewport(_)
                         | RecordedCommand::SetScissor(_)
                         | RecordedCommand::SetDepthRange(_)
-                        | RecordedCommand::ClearDepthStencil { .. }
                         | RecordedCommand::Raw { .. } => {}
                     }
                 }
@@ -179,6 +219,33 @@ pub fn handler(name: &str) -> Option<Handler> {
                     Status::Ok
                 };
             };
+            #[cfg(feature = "vulkan")]
+            if let Some(backend) = instance
+                .gpu
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_mut()
+            {
+                if let Some((width, height, pixels)) = backend.readback(texture) {
+                    if let Some(wait) = instance.host().and_then(|h| h.wait_vblank) {
+                        unsafe { wait(instance.host().unwrap().user) };
+                    }
+                    if let Some(host) = instance.host().and_then(|h| h.present) {
+                        unsafe {
+                            host(
+                                instance.host().unwrap().user,
+                                r.x[1],
+                                width,
+                                height,
+                                pixels.as_ptr(),
+                                u64::from(width) * 4,
+                            )
+                        };
+                    }
+                    r.x[0] = 0;
+                    return Status::Ok;
+                }
+            }
             let Some(image) = image
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
@@ -191,6 +258,9 @@ pub fn handler(name: &str) -> Option<Handler> {
                 };
             };
             if let Some(host) = instance.host().and_then(|h| h.present) {
+                if let Some(wait) = instance.host().and_then(|h| h.wait_vblank) {
+                    unsafe { wait(instance.host().unwrap().user) };
+                }
                 unsafe {
                     host(
                         instance.host().unwrap().user,

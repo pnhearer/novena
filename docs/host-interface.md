@@ -2,6 +2,12 @@
 
 The host is whatever runs the program: an emulator, or the runtime of a recompiled program. novena does not load or run programs. The host tells it what the program asked for and forwards the program's calls. The C declarations are in [include/novena.h](../include/novena.h). This page describes interface version 3.
 
+## Presentation
+
+Version 4 adds `render_scale` and optional `wait_vblank` to the host struct.
+The present callback receives scaled RGBA8 rows and `wait_vblank` runs just
+before it. Values below 1.0 for the scale are treated as 1.0.
+
 ## The two moments a host hooks
 
 1. **The program asks for a function by name.** Programs obtain the graphics API through a bootstrap function that takes a name and returns a function pointer (observed, see [provenance note 0005](provenance/0005-first-census.md)). When the program calls it, the host calls `novena_instance_request` with the name and gets a function id back. The host then gives the program a pointer of its own making that it will recognise later, one per id.

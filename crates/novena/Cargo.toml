@@ -8,3 +8,10 @@ repository.workspace = true
 
 [lib]
 crate-type = ["rlib", "cdylib", "staticlib"]
+
+[features]
+default = []
+vulkan = ["dep:ash"]
+
+[dependencies]
+ash = { version = "0.38", optional = true, default-features = false, features = ["loaded"] }
