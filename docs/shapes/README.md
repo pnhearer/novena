@@ -6,6 +6,8 @@ A shape file holds ranges, a few distinct small values, and counts. Addresses ar
 
 From file 0002 on, an address argument is followed by a `points to` block: the first 64 bytes behind it, one line per 32-bit word, classified as `zero`, `small`, `f32`, `address` (for a 64-bit word), `wide` (a 64-bit word that could be an address the host cannot read) or `other`. `changed-by-call=N` means the word was different after the function returned in N sampled calls, which is how output parameters show up. Words classed as `other` are not printed, so no memory appears in the file verbatim.
 
+From file 0003 on, a function whose call wrote through its third argument also gets an `x1 -> *x2 after call` line: the value of the second argument and the 32-bit value written, one pair per distinct second argument. This is how a query function's answers are collected.
+
 How to read a line:
 
 - `address`, `constant-address`, `address-or-null`: every sampled value (or every non-zero one) was memory the host could read.
@@ -18,3 +20,4 @@ How to read a line:
 |---|---|---|
 | `0001-program-a-startup.txt` | Program A, from start-up for a little over three minutes, with no input | [0007](../provenance/0007-first-signatures.md) |
 | `0002-program-a-startup-pointees.txt` | The same, in a later run, with the memory behind address arguments classified | [0008](../provenance/0008-memory-behind-arguments.md) |
+| `0003-program-a-startup-answers.txt` | The same, with query answers kept per selector | [0009](../provenance/0009-query-answers.md) |

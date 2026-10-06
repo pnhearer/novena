@@ -8,7 +8,7 @@
 - Host interface version 2 and a C header.
 - Sampling of argument and result shapes for hosts that let the original implementation run.
 - First census from a running program.
-- Sampling of the memory behind address arguments, with detection of what a call wrote.
+- Sampling of the memory behind address arguments, with detection of what a call wrote, and per-selector answers of query functions.
 - First shapes file, and a signature entry inferred from it for each of the 168 functions the program called.
 - Example host in C.
 - Project rules: clean room, contributions, licences, scope and intent.

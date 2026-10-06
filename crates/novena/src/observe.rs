@@ -361,8 +361,14 @@ fn push_words(line: &mut String, shape: &WordShape, show: impl Fn(u32) -> String
 /// kept until the same thread reports the return so the two can be compared.
 #[derive(Clone, Copy)]
 pub(crate) struct CallSnapshot {
+    registers: Registers,
     pointees: [Option<(u64, [u8; POINTEE_BYTES])>; 8],
 }
+
+/// Distinct keys kept per function for keyed outputs.
+const KEYED_OUTPUT_LIMIT: usize = 96;
+/// Distinct answers kept under one key before the key stops being recorded.
+const KEYED_ANSWER_LIMIT: usize = 3;
 
 /// What one function's calls looked like.
 #[derive(Debug, Clone, Default)]
@@ -370,6 +376,12 @@ pub struct FunctionShape {
     sampled_calls: u64,
     sampled_returns: u64,
     pointees: [PointeeShape; 8],
+    /// For a call shaped like `f(object, selector, out)`: the selector in x1
+    /// and the 32-bit value the call wrote through x2, one entry per
+    /// distinct selector. This is how a query function's answers are
+    /// learned.
+    keyed_outputs: Vec<(u64, u32)>,
+    keyed_outputs_full: bool,
     x: [RegisterShape; 8],
     d: [RegisterShape; 8],
     result_x0: RegisterShape,
@@ -407,6 +419,7 @@ impl FunctionShape {
         }
         self.sampled_calls += 1;
         let mut snapshot = CallSnapshot {
+            registers: *registers,
             pointees: [None; 8],
         };
         for (index, value) in registers.x.into_iter().enumerate() {
@@ -439,6 +452,14 @@ impl FunctionShape {
                 };
                 if let Some(after) = read_pointee(host, *address) {
                     self.pointees[index].record_change(before, &after);
+                    if index == 2 && word(before, 0) != word(&after, 0) {
+                        // An answer that is itself an address, or could be
+                        // the low half of one, is not kept.
+                        let written = u64::from(word(&after, 0));
+                        if !is_readable_address(host, written) && written < 1 << 24 {
+                            self.record_keyed_output(snapshot.registers.x[1], word(&after, 0));
+                        }
+                    }
                 }
             }
         }
@@ -451,6 +472,31 @@ impl FunctionShape {
         let x1 = registers.x[1];
         self.result_x1.record(x1, is_readable_address(host, x1));
         self.result_d0.record(registers.d[0], false);
+    }
+
+    fn record_keyed_output(&mut self, key: u64, value: u32) {
+        if key >= LOWEST_ADDRESS {
+            return;
+        }
+        let same_key = self.keyed_outputs.iter().filter(|(k, _)| *k == key).count();
+        if same_key > 0 {
+            // A differing answer under the same key is worth a note, up to a
+            // point: a key that answers differently every time is not a
+            // query, and its answers are not kept.
+            let seen = self
+                .keyed_outputs
+                .iter()
+                .any(|(k, v)| *k == key && *v == value);
+            if !seen && same_key < KEYED_ANSWER_LIMIT && !self.keyed_outputs_full {
+                self.keyed_outputs.push((key, value));
+            }
+            return;
+        }
+        if self.keyed_outputs.len() < KEYED_OUTPUT_LIMIT {
+            self.keyed_outputs.push((key, value));
+        } else {
+            self.keyed_outputs_full = true;
+        }
     }
 
     pub fn sampled_calls(&self) -> u64 {
@@ -475,6 +521,16 @@ impl FunctionShape {
         }
         for (index, shape) in self.d.iter().enumerate() {
             let _ = writeln!(out, "  d{index} {shape}");
+        }
+        if !self.keyed_outputs.is_empty() {
+            let mut line = String::from("  x1 -> *x2 after call:");
+            for (key, value) in &self.keyed_outputs {
+                let _ = write!(line, " {key:#x}={value:#x}");
+            }
+            if self.keyed_outputs_full {
+                line.push_str(" ...");
+            }
+            let _ = writeln!(out, "{line}");
         }
         if self.sampled_returns > 0 {
             let _ = writeln!(out, "  result x0 {}", self.result_x0);
@@ -618,9 +674,14 @@ mod tests {
             }
             let mut registers = Registers::default();
             registers.x[1] = PAGE_BASE;
+            registers.x[2] = PAGE_BASE + 0x40;
             let snapshot = shape.record_call(Some(&host), &registers);
-            // The function writes an output into the fourth word.
-            PAGE.lock().unwrap()[12 + 12..12 + 16].copy_from_slice(&7u32.to_le_bytes());
+            // The function writes an output into the fourth word, and the
+            // answer to a query (x1 as selector) through x2.
+            let mut page = PAGE.lock().unwrap();
+            page[12 + 12..12 + 16].copy_from_slice(&7u32.to_le_bytes());
+            page[0x40..0x44].copy_from_slice(&(0x1000 + call).to_le_bytes());
+            drop(page);
             shape.record_return(Some(&host), &Registers::default(), snapshot.as_ref());
         }
         let mut text = String::new();
@@ -639,9 +700,36 @@ mod tests {
         ] {
             assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
         }
+        // x1 was an address, so no keyed output is recorded for it.
+        assert!(!text.contains("x1 -> *x2"), "{text}");
         for hidden in ["dead", "cafe", "-6.5", "c0d2"] {
             assert!(!text.contains(hidden), "{hidden} leaked in:\n{text}");
         }
+    }
+
+    #[test]
+    fn query_answers_are_kept_per_selector() {
+        let host = Host {
+            user: std::ptr::null_mut(),
+            read_memory: Some(read_page),
+            write_memory: None,
+        };
+        let mut shape = FunctionShape::default();
+        for selector in [3u64, 9, 3] {
+            PAGE.lock().unwrap().fill(0);
+            let mut registers = Registers::default();
+            registers.x[1] = selector;
+            registers.x[2] = PAGE_BASE;
+            let snapshot = shape.record_call(Some(&host), &registers);
+            PAGE.lock().unwrap()[0..4].copy_from_slice(&(selector as u32 * 100).to_le_bytes());
+            shape.record_return(Some(&host), &Registers::default(), snapshot.as_ref());
+        }
+        let mut text = String::new();
+        shape.write(&mut text, "query", 3);
+        assert!(
+            text.contains("  x1 -> *x2 after call: 0x3=0x12c 0x9=0x384\n"),
+            "{text}"
+        );
     }
 
     #[test]
