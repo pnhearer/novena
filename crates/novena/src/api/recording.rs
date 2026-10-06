@@ -20,6 +20,8 @@ pub fn handler(name: &str) -> Option<Handler> {
                     control_memory: Vec::new(),
                     recording: false,
                     recordings: 0,
+                    commands: Vec::new(),
+                    recording_handles: std::collections::HashMap::new(),
                 },
             );
             succeed(registers)
@@ -88,8 +90,14 @@ pub fn handler(name: &str) -> Option<Handler> {
         },
         "nvnCommandBufferBeginRecording" => |instance, _, registers| {
             instance.objects.update(registers.x[0], |object| {
-                if let Object::CommandBuffer { recording, .. } = object {
+                if let Object::CommandBuffer {
+                    recording,
+                    commands,
+                    ..
+                } = object
+                {
                     *recording = true;
+                    commands.clear();
                 }
             });
             Status::Ok
@@ -104,12 +112,15 @@ pub fn handler(name: &str) -> Option<Handler> {
                 if let Object::CommandBuffer {
                     recording,
                     recordings,
+                    commands,
+                    recording_handles,
                     ..
                 } = object
                 {
                     *recording = false;
                     *recordings += 1;
                     handle = registers.x[0] | (*recordings & 0xffff) << 48;
+                    recording_handles.insert(handle, commands.clone());
                 }
             });
             registers.x[0] = handle;

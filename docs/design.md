@@ -50,6 +50,6 @@ novena keeps its own record of every object in a side table keyed by the program
 2. Done: a census from a real program. It called 168 of the 534 functions; see [docs/census](census).
 3. Done for register arguments: the shape of the arguments and results of those 168 functions, and a signature entry for each, in [docs/shapes](shapes) and [docs/signatures](signatures). The memory behind pointer arguments has had a first look too ([signatures 0004](signatures/0004-pointers.md)).
 4. Done: the objects a frame needs, as records in a side table. One program runs on novena frame after frame with nothing drawn ([notes 0010](provenance/0010-first-run-on-novena.md) and [0011](provenance/0011-running-past-the-first-frame.md)).
-5. A single textured triangle from a test program written for this project.
+5. Done: clears executed on CPU images and presented to the host.
 6. Presentation with a render scale.
 7. Breadth, driven by the census.

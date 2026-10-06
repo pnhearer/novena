@@ -23,7 +23,7 @@ use std::ffi::{c_char, CStr};
 
 /// Version of the host interface. It changes when a host built against an
 /// older `include/novena.h` could no longer use the library.
-pub const HOST_INTERFACE_VERSION: u32 = 2;
+pub const HOST_INTERFACE_VERSION: u32 = 3;
 
 /// Returned by lookups for a name the library does not know.
 pub const FUNCTION_NONE: u32 = u32::MAX;

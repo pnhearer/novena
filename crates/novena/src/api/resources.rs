@@ -40,7 +40,7 @@ fn texture_field(
     pick: impl FnOnce(&TextureDescription) -> u64,
 ) -> Option<u64> {
     match instance.objects.get(address) {
-        Some(Object::Texture(description)) => Some(pick(&description)),
+        Some(Object::Texture { description, .. }) => Some(pick(&description)),
         _ => None,
     }
 }
@@ -162,9 +162,14 @@ pub fn handler(name: &str) -> Option<Handler> {
             else {
                 return Status::BadArgument;
             };
-            instance
-                .objects
-                .put(registers.x[0], Object::Texture(description));
+            instance.objects.put(
+                registers.x[0],
+                Object::Texture {
+                    description,
+                    // The image is shared so object-table clones stay cheap.
+                    image: std::sync::Arc::new(std::sync::Mutex::new(None)),
+                },
+            );
             succeed(registers)
         },
         "nvnTextureFinalize" => |instance, _, registers| {
@@ -187,7 +192,8 @@ pub fn handler(name: &str) -> Option<Handler> {
         // The texture's bytes live in its pool's storage at the offset the
         // program chose; see the note in memory.rs on graphics addresses.
         "nvnTextureGetTextureAddress" => |instance, _, registers| {
-            let Some(Object::Texture(description)) = instance.objects.get(registers.x[0]) else {
+            let Some(Object::Texture { description, .. }) = instance.objects.get(registers.x[0])
+            else {
                 return Status::BadArgument;
             };
             let storage = match instance.objects.get(description.pool) {
@@ -200,7 +206,8 @@ pub fn handler(name: &str) -> Option<Handler> {
         // A view's offset into the texture's storage. Levels are laid out
         // in order by novena's own storage_size rule.
         "nvnTextureGetViewOffset" => |instance, _, registers| {
-            let Some(Object::Texture(description)) = instance.objects.get(registers.x[0]) else {
+            let Some(Object::Texture { description, .. }) = instance.objects.get(registers.x[0])
+            else {
                 return Status::BadArgument;
             };
             let base_level = match instance.objects.get(registers.x[1]) {

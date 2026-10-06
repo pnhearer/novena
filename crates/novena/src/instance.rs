@@ -33,6 +33,16 @@ pub struct Host {
     pub write_memory: Option<
         unsafe extern "C" fn(user: *mut c_void, address: u64, data: *const u8, size: u64) -> i32,
     >,
+    pub present: Option<
+        unsafe extern "C" fn(
+            user: *mut c_void,
+            window_object: u64,
+            width: u32,
+            height: u32,
+            rgba: *const u8,
+            stride_bytes: u64,
+        ),
+    >,
 }
 
 // SAFETY: a `Host` only reaches an instance through `Instance::with_host`,

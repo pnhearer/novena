@@ -8,11 +8,45 @@
 //! observation but has not been confirmed either (see docs/design.md).
 
 use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RecordedCommand {
+    SetRenderTargets {
+        colors: Vec<u64>,
+        depth: u64,
+    },
+    ClearColor {
+        index: u32,
+        color: [f32; 4],
+        mask: u32,
+    },
+    ClearDepthStencil {
+        depth: f32,
+        depth_write: u32,
+        stencil: u32,
+        stencil_mask: u32,
+    },
+    SetViewport([u64; 5]),
+    SetScissor([u64; 5]),
+    SetDepthRange([u64; 3]),
+    Raw {
+        function: u32,
+        registers: [u64; 8],
+    },
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TextureImage {
+    pub width: u32,
+    pub height: u32,
+    pub depth: u32,
+    pub pixels: Vec<u8>,
+}
 
 /// What novena knows about one object. Field meanings follow the signature
 /// tables; unknown enumerations are kept as the integers the program passed.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default)]
 pub enum Object {
     #[default]
     Unknown,
@@ -70,7 +104,10 @@ pub enum Object {
         size: u64,
     },
     TextureBuilder(TextureDescription),
-    Texture(TextureDescription),
+    Texture {
+        description: TextureDescription,
+        image: Arc<Mutex<Option<TextureImage>>>,
+    },
     TextureView {
         base_level: u32,
         levels: u32,
@@ -108,7 +145,20 @@ pub enum Object {
         control_memory: Vec<(u64, u64)>,
         recording: bool,
         recordings: u64,
+        commands: Vec<RecordedCommand>,
+        recording_handles: HashMap<u64, Vec<RecordedCommand>>,
     },
+}
+
+impl PartialEq for Object {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Object::Texture { description: a, .. }, Object::Texture { description: b, .. }) => {
+                a == b
+            }
+            (a, b) => format!("{a:?}") == format!("{b:?}"),
+        }
+    }
 }
 
 /// What the program told a texture builder, carried over to the texture.
@@ -192,5 +242,14 @@ impl Objects {
 
     pub fn is_empty(&self) -> bool {
         self.lock().is_empty()
+    }
+
+    pub fn recording(&self, handle: u64) -> Option<Vec<RecordedCommand>> {
+        self.lock().values().find_map(|object| match object {
+            Object::CommandBuffer {
+                recording_handles, ..
+            } => recording_handles.get(&handle).cloned(),
+            _ => None,
+        })
     }
 }

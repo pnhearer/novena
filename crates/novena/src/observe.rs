@@ -561,6 +561,7 @@ mod tests {
             user: std::ptr::null_mut(),
             read_memory: Some(read),
             write_memory: None,
+            present: None,
         }
     }
 
@@ -650,6 +651,7 @@ mod tests {
             user: std::ptr::null_mut(),
             read_memory: Some(read_page),
             write_memory: None,
+            present: None,
         };
         let mut shape = FunctionShape::default();
         for call in 0..3u32 {
@@ -713,6 +715,7 @@ mod tests {
             user: std::ptr::null_mut(),
             read_memory: Some(read_page),
             write_memory: None,
+            present: None,
         };
         let mut shape = FunctionShape::default();
         for selector in [3u64, 9, 3] {

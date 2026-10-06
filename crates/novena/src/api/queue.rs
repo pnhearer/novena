@@ -1,7 +1,11 @@
 //! Queue, sync, event and window objects.
 //! Signatures: docs/signatures/0001-setup.md, 0003-objects.md, 0004-pointers.md.
 
-use super::{accept, objects::Object, read_u64, succeed, write_u32, Handler};
+use super::{
+    accept,
+    objects::{Object, RecordedCommand, TextureImage},
+    read_u64, succeed, write_u32, Handler,
+};
 use crate::instance::{Instance, Registers, Status};
 
 fn builder_update(
@@ -85,10 +89,94 @@ pub fn handler(name: &str) -> Option<Handler> {
         },
         // Nothing is drawn yet, so submitting, flushing and finishing have
         // nothing to do. They are accepted so the program keeps going.
-        "nvnQueueSubmitCommands"
-        | "nvnQueueFlush"
-        | "nvnQueueFinish"
-        | "nvnQueuePresentTexture" => accept,
+        "nvnQueueSubmitCommands" => |instance, _, r| {
+            for i in 0..r.x[1].min(1024) {
+                let Some(handle) = read_u64(instance, r.x[2] + i * 8) else {
+                    break;
+                };
+                let commands = instance.objects.recording(handle);
+                let Some(commands) = commands else {
+                    continue;
+                };
+                let mut targets = Vec::new();
+                for command in commands {
+                    match command {
+                        RecordedCommand::SetRenderTargets { colors, .. } => targets = colors,
+                        RecordedCommand::ClearColor { index, color, mask } => {
+                            let Some(texture) = targets.get(index as usize).copied() else {
+                                continue;
+                            };
+                            let Some(Object::Texture { description, image }) =
+                                instance.objects.get(texture)
+                            else {
+                                continue;
+                            };
+                            let mut image = image.lock().unwrap_or_else(|p| p.into_inner());
+                            let image = image.get_or_insert_with(|| TextureImage {
+                                width: description.width as u32,
+                                height: description.height as u32,
+                                depth: description.depth.max(1) as u32,
+                                pixels: vec![
+                                    0;
+                                    (description.width.max(1)
+                                        * description.height.max(1)
+                                        * description.depth.max(1)
+                                        * 4) as usize
+                                ],
+                            });
+                            // Bits 0..3 mean red, green, blue and alpha. This is novena's own choice.
+                            let values = color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+                            for pixel in image.pixels.as_chunks_mut::<4>().0 {
+                                for c in 0..4 {
+                                    if mask & (1 << c) != 0 {
+                                        pixel[c] = values[c];
+                                    }
+                                }
+                            }
+                        }
+                        RecordedCommand::SetViewport(_)
+                        | RecordedCommand::SetScissor(_)
+                        | RecordedCommand::SetDepthRange(_)
+                        | RecordedCommand::ClearDepthStencil { .. }
+                        | RecordedCommand::Raw { .. } => {}
+                    }
+                }
+            }
+            Status::Ok
+        },
+        "nvnQueueFlush" | "nvnQueueFinish" => accept,
+        "nvnQueuePresentTexture" => |instance, _, r| {
+            let Some(Object::Window { textures, .. }) = instance.objects.get(r.x[1]) else {
+                return Status::Ok;
+            };
+            let Some(texture) = textures.get(r.x[2] as usize).copied() else {
+                return Status::Ok;
+            };
+            let Some(Object::Texture { description, image }) = instance.objects.get(texture) else {
+                return Status::Ok;
+            };
+            let Some(image) = image
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_ref()
+                .cloned()
+            else {
+                return Status::Ok;
+            };
+            if let Some(host) = instance.host().and_then(|h| h.present) {
+                unsafe {
+                    host(
+                        instance.host().unwrap().user,
+                        r.x[1],
+                        description.width as u32,
+                        description.height as u32,
+                        image.pixels.as_ptr(),
+                        description.width * 4,
+                    );
+                }
+            }
+            Status::Ok
+        },
         // Observed to return 1. Waiting on a sync that nothing signals would
         // block the program forever, so the wait is reported as satisfied.
         "nvnQueueWaitSync" => |_instance, _, registers| succeed(registers),

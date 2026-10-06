@@ -7,6 +7,7 @@
 - Instances, created by a host, that record which functions a program requests and calls.
 - Census output as text.
 - Host interface version 2 and a C header.
+- Host interface version 3 with CPU clear recording and optional presentation.
 - Sampling of argument and result shapes for hosts that let the original implementation run.
 - First census from a running program.
 - Sampling of the memory behind address arguments, with detection of what a call wrote, and per-selector answers of query functions.

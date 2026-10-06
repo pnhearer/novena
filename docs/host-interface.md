@@ -1,6 +1,6 @@
 # Host interface
 
-The host is whatever runs the program: an emulator, or the runtime of a recompiled program. novena does not load or run programs. The host tells it what the program asked for and forwards the program's calls. The C declarations are in [include/novena.h](../include/novena.h). This page describes interface version 2.
+The host is whatever runs the program: an emulator, or the runtime of a recompiled program. novena does not load or run programs. The host tells it what the program asked for and forwards the program's calls. The C declarations are in [include/novena.h](../include/novena.h). This page describes interface version 3.
 
 ## The two moments a host hooks
 

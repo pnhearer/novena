@@ -9,6 +9,7 @@
 //! What a function does comes from `docs/signatures`, and nothing else. A
 //! handler that goes beyond what has been observed says so in a comment.
 
+mod commands;
 mod device;
 mod memory;
 mod objects;
@@ -33,6 +34,7 @@ pub fn handler(name: &str) -> Option<Handler> {
         .or_else(|| resources::handler(name))
         .or_else(|| state::handler(name))
         .or_else(|| recording::handler(name))
+        .or_else(|| commands::handler(name))
 }
 
 /// Writes `value` through the pointer in `address`, through the host.
