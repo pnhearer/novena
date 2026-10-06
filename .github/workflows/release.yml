@@ -26,20 +26,21 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          mkdir -p staging/${{ matrix.archive }}/{include,lib,share/novena/cmake}
+          mkdir -p staging/${{ matrix.archive }}/{include,lib/cmake/novena,lib/pkgconfig}
           cp include/novena.h staging/${{ matrix.archive }}/include/
-          cp -r cmake staging/${{ matrix.archive }}/share/novena/
+          cp cmake/novenaConfig.cmake staging/${{ matrix.archive }}/lib/cmake/novena/
+          cp novena.pc staging/${{ matrix.archive }}/lib/pkgconfig/
           cp target/${{ matrix.target }}/release/libnovena.{so,a} staging/${{ matrix.archive }}/lib/
-          cp novena.pc NOTICE LICENSE.md staging/${{ matrix.archive }}/
+          cp NOTICE LICENSE.md staging/${{ matrix.archive }}/
           tar -czf ${{ matrix.archive }}.tar.gz -C staging ${{ matrix.archive }}
       - name: Package Windows archive
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force staging/${{ matrix.archive }}/include, staging/${{ matrix.archive }}/lib | Out-Null
+          New-Item -ItemType Directory -Force staging/${{ matrix.archive }}/include, staging/${{ matrix.archive }}/lib/cmake/novena, staging/${{ matrix.archive }}/lib/pkgconfig | Out-Null
           Copy-Item include/novena.h staging/${{ matrix.archive }}/include/
-          Copy-Item -Recurse cmake staging/${{ matrix.archive }}/
-          Copy-Item novena.pc staging/${{ matrix.archive }}/
+          Copy-Item cmake/novenaConfig.cmake staging/${{ matrix.archive }}/lib/cmake/novena/
+          Copy-Item novena.pc staging/${{ matrix.archive }}/lib/pkgconfig/
           Copy-Item target/${{ matrix.target }}/release/novena.dll, target/${{ matrix.target }}/release/novena.lib staging/${{ matrix.archive }}/lib/
           Copy-Item NOTICE, LICENSE.md staging/${{ matrix.archive }}/
           Compress-Archive staging/${{ matrix.archive }} ${{ matrix.archive }}.zip

@@ -3,7 +3,7 @@
 
 use super::{
     accept,
-    objects::{Object, RecordedCommand, TextureImage},
+    objects::{Object, RecordedCommand, TextureDescription, TextureImage},
     read_u64, succeed, write_u32, Handler,
 };
 use crate::instance::{Instance, Registers, Status};
@@ -30,13 +30,30 @@ fn read_pool_bytes(instance: &Instance, address: u64, size: usize) -> Option<Vec
     Some(bytes)
 }
 
+/// Bytes in a texture's base level at four bytes per texel, or `None` when
+/// the recorded size is larger than novena's image limit.
+fn copy_size(description: &TextureDescription) -> Option<usize> {
+    let texels = description
+        .width
+        .max(1)
+        .checked_mul(description.height.max(1))?
+        .checked_mul(description.depth.max(1))?;
+    (texels <= CPU_IMAGE_TEXELS).then(|| (texels * 4) as usize)
+}
+
 #[cfg(not(feature = "vulkan"))]
 fn copy_cpu(instance: &Instance, source: u64, destination: u64, data: Vec<u8>) {
     let Some(Object::Texture { image, description }) = instance.objects.get(destination) else {
         return;
     };
+    let level = TextureDescription {
+        depth: 1,
+        ..description.clone()
+    };
+    let Some(size) = copy_size(&level) else {
+        return;
+    };
     let mut image = image.lock().unwrap_or_else(|p| p.into_inner());
-    let size = (description.width.max(1) * description.height.max(1) * 4) as usize;
     let target = image.get_or_insert_with(|| TextureImage {
         width: description.width.max(1) as u32,
         height: description.height.max(1) as u32,
@@ -224,10 +241,9 @@ pub fn handler(name: &str) -> Option<Handler> {
                             else {
                                 continue;
                             };
-                            let size = (description.width.max(1)
-                                * description.height.max(1)
-                                * description.depth.max(1)
-                                * 4) as usize;
+                            let Some(size) = copy_size(&description) else {
+                                continue;
+                            };
                             let Some(data) = read_pool_bytes(instance, buffer, size) else {
                                 continue;
                             };

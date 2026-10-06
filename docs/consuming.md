@@ -21,6 +21,12 @@ target_link_libraries(my_host PRIVATE novena::novena)
 
 For an unpacked archive, use `-DCMAKE_PREFIX_PATH=/path/to/novena`.
 
+## pkg-config
+
+```sh
+PKG_CONFIG_PATH=/path/to/novena/lib/pkgconfig pkg-config --cflags --libs novena
+```
+
 ## C#
 
 The native library can be imported directly:

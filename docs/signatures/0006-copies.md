@@ -8,8 +8,8 @@ not establish an argument order or dimensions.
 
 This step therefore executes only the observed source and destination object
 addresses: x1 is the source GPU address and x2 is the destination texture for
-`CopyBufferToTexture`; x1 and x2 are source and destination textures for
-`CopyTextureToTexture`. It copies the complete base-level opaque byte block,
+`CopyBufferToTexture`. For `CopyTextureToTexture`, treating x1 as the source
+and x2 as the destination is novena's assumption, not an observation. It copies the complete base-level opaque byte block,
 using four bytes per texel, novena's existing format-independent storage
 choice. The unresolved pointer arguments remain raw in the recorded command.
 

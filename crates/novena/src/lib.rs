@@ -62,13 +62,12 @@ fn ffi_guard<T>(default: T, f: impl FnOnce() -> T) -> T {
 /// The most recent panic message on this thread, or null when there was none.
 #[no_mangle]
 pub extern "C" fn novena_last_error() -> *const c_char {
-    ffi_guard(std::ptr::null(), || {
-        LAST_ERROR.with(|error| {
-            error
-                .borrow()
-                .as_ref()
-                .map_or(std::ptr::null(), |message| message.as_ptr())
-        })
+    // Not wrapped in `ffi_guard`, which would clear the message first.
+    LAST_ERROR.with(|error| {
+        error
+            .borrow()
+            .as_ref()
+            .map_or(std::ptr::null(), |message| message.as_ptr())
     })
 }
 
@@ -297,6 +296,18 @@ mod tests {
         let version = unsafe { CStr::from_ptr(novena_version()) };
         assert_eq!(version.to_str(), Ok(env!("CARGO_PKG_VERSION")));
         assert_eq!(novena_host_interface_version(), HOST_INTERFACE_VERSION);
+    }
+
+    #[test]
+    fn a_panic_is_reported_and_cleared_by_the_next_call() {
+        let status = ffi_guard(Status::Ok, || -> Status { panic!("boom") });
+        assert_eq!(status, Status::Ok);
+        // SAFETY: a non-null result is a NUL-terminated string owned by the
+        // library until the next call on this thread.
+        let message = unsafe { CStr::from_ptr(novena_last_error()) };
+        assert_eq!(message.to_str(), Ok("boom"));
+        novena_version();
+        assert!(novena_last_error().is_null());
     }
 
     #[test]
