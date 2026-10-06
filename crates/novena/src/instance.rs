@@ -1,6 +1,7 @@
 //! An instance: what a host creates once and forwards a program's graphics
 //! calls to.
 
+use crate::api::{self, Handler, Objects};
 use crate::functions::{self, FunctionId};
 use crate::observe::{CallSnapshot, FunctionShape};
 use std::cell::Cell;
@@ -78,6 +79,9 @@ thread_local! {
 
 pub struct Instance {
     host: Option<Host>,
+    /// novena's record of the program's objects.
+    pub objects: Objects,
+    handlers: Vec<Option<Handler>>,
     requested: Vec<AtomicBool>,
     calls: Vec<AtomicU64>,
     shapes: Vec<Mutex<FunctionShape>>,
@@ -105,6 +109,10 @@ impl Instance {
         let count = functions::count();
         Self {
             host,
+            objects: Objects::new(),
+            handlers: functions::all()
+                .map(|(_, name)| api::handler(name))
+                .collect(),
             requested: (0..count).map(|_| AtomicBool::new(false)).collect(),
             calls: (0..count).map(|_| AtomicU64::new(0)).collect(),
             shapes: (0..count).map(|_| Mutex::default()).collect(),
@@ -135,8 +143,37 @@ impl Instance {
         }
     }
 
-    /// Run a call. Nothing is implemented yet, so every known function is
-    /// counted and reported as unimplemented with zeroed results.
+    /// Read program memory through the host. False when there is no host,
+    /// no read callback, or the range is not accessible.
+    pub fn read_memory(&self, address: u64, out: &mut [u8]) -> bool {
+        let Some(read) = self.host.as_ref().and_then(|host| host.read_memory) else {
+            return false;
+        };
+        let user = self
+            .host
+            .as_ref()
+            .map_or(std::ptr::null_mut(), |host| host.user);
+        // SAFETY: `out` is valid for its length; the host's callback reports
+        // an inaccessible range instead of faulting.
+        unsafe { read(user, address, out.as_mut_ptr(), out.len() as u64) == 0 }
+    }
+
+    /// Write program memory through the host.
+    pub fn write_memory(&self, address: u64, data: &[u8]) -> bool {
+        let Some(write) = self.host.as_ref().and_then(|host| host.write_memory) else {
+            return false;
+        };
+        let user = self
+            .host
+            .as_ref()
+            .map_or(std::ptr::null_mut(), |host| host.user);
+        // SAFETY: `data` is valid for its length.
+        unsafe { write(user, address, data.as_ptr(), data.len() as u64) == 0 }
+    }
+
+    /// Run a call. A function with a handler runs it; any other known
+    /// function is counted and reported as unimplemented with zeroed
+    /// results.
     pub fn call(&self, function: FunctionId, registers: &mut Registers) -> Status {
         let Some(counter) = self.calls.get(function.0 as usize) else {
             return Status::BadFunction;
@@ -150,6 +187,9 @@ impl Instance {
             None
         };
         PENDING.set(snapshot.map(|snapshot| (function.0, snapshot)));
+        if let Some(Some(handler)) = self.handlers.get(function.0 as usize) {
+            return handler(self, function, registers);
+        }
         registers.x[0] = 0;
         registers.x[1] = 0;
         registers.d[0] = 0;

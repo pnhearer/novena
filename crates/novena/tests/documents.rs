@@ -43,6 +43,11 @@ fn functions_with_signatures() -> BTreeSet<String> {
             continue;
         }
         let text = fs::read_to_string(&path).expect("signatures file");
+        // Only tables whose rows are functions; other tables (query
+        // answers, for one) have other things in their first column.
+        if !text.contains("| Function |") {
+            continue;
+        }
         for line in text.lines() {
             let Some(cell) = line
                 .strip_prefix("| ")

@@ -11,6 +11,7 @@
 //! `docs/design.md` for the plan and `CLEAN-ROOM.md` for the rules every
 //! addition follows.
 
+pub mod api;
 pub mod functions;
 mod instance;
 pub mod observe;
