@@ -85,6 +85,8 @@ pub enum Status {
     BadFunction = 2,
     /// A pointer argument was null, or a file could not be written.
     BadArgument = 3,
+    /// The library panicked while servicing the call.
+    InternalError = 4,
 }
 
 thread_local! {

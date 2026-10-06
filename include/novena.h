@@ -21,7 +21,9 @@ typedef enum novena_status {
     /* The function id is outside the table. */
     NOVENA_BAD_FUNCTION = 2,
     /* A pointer argument was null, or a file could not be written. */
-    NOVENA_BAD_ARGUMENT = 3
+    NOVENA_BAD_ARGUMENT = 3,
+    /* The library panicked while servicing the call. */
+    NOVENA_INTERNAL_ERROR = 4
 } novena_status;
 
 /* What the host provides. Both callbacks return 0 on success and any other
@@ -100,6 +102,11 @@ novena_status novena_instance_write_census(const novena_instance *instance, cons
  * function: ranges, a few distinct values, and which were readable addresses.
  * Never the memory behind an address. */
 novena_status novena_instance_write_shapes(const novena_instance *instance, const char *path);
+
+/* The most recent panic message on this thread, or null when there was none.
+ * The returned string is owned by the library and remains valid until the
+ * next call on this thread. */
+const char *novena_last_error(void);
 
 #ifdef __cplusplus
 }

@@ -21,7 +21,9 @@ pub mod observe;
 pub use instance::{Census, Host, Instance, Registers, Status};
 
 use functions::FunctionId;
-use std::ffi::{c_char, CStr};
+use std::cell::RefCell;
+use std::ffi::{c_char, CStr, CString};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 /// Version of the host interface. It changes when a host built against an
 /// older `include/novena.h` could no longer use the library.
@@ -32,30 +34,70 @@ pub const FUNCTION_NONE: u32 = u32::MAX;
 
 static VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 
+thread_local! {
+    static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
+}
+
+fn ffi_guard<T>(default: T, f: impl FnOnce() -> T) -> T {
+    LAST_ERROR.with(|error| *error.borrow_mut() = None);
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(value) => value,
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("unknown panic");
+            LAST_ERROR.with(|error| {
+                *error.borrow_mut() = Some(
+                    CString::new(message)
+                        .unwrap_or_else(|_| CString::new("panic message contained NUL").unwrap()),
+                )
+            });
+            default
+        }
+    }
+}
+
+/// The most recent panic message on this thread, or null when there was none.
+#[no_mangle]
+pub extern "C" fn novena_last_error() -> *const c_char {
+    ffi_guard(std::ptr::null(), || {
+        LAST_ERROR.with(|error| {
+            error
+                .borrow()
+                .as_ref()
+                .map_or(std::ptr::null(), |message| message.as_ptr())
+        })
+    })
+}
+
 /// The library version as a NUL-terminated string that lives as long as the
 /// library is loaded.
 #[no_mangle]
 pub extern "C" fn novena_version() -> *const c_char {
-    VERSION.as_ptr().cast()
+    ffi_guard(std::ptr::null(), || VERSION.as_ptr().cast())
 }
 
 /// The host interface version this library was built with.
 #[no_mangle]
 pub extern "C" fn novena_host_interface_version() -> u32 {
-    HOST_INTERFACE_VERSION
+    ffi_guard(0, || HOST_INTERFACE_VERSION)
 }
 
 /// Number of functions in the table. Valid function ids are `0..count`.
 #[no_mangle]
 pub extern "C" fn novena_function_count() -> u32 {
-    functions::count() as u32
+    ffi_guard(0, || functions::count() as u32)
 }
 
 /// Name of a function as a NUL-terminated string owned by the library, or
 /// null for an id outside the table.
 #[no_mangle]
 pub extern "C" fn novena_function_name(function: u32) -> *const c_char {
-    functions::c_name(FunctionId(function)).map_or(std::ptr::null(), CStr::as_ptr)
+    ffi_guard(std::ptr::null(), || {
+        functions::c_name(FunctionId(function)).map_or(std::ptr::null(), CStr::as_ptr)
+    })
 }
 
 /// Id of the function with this name, or `FUNCTION_NONE`.
@@ -64,15 +106,17 @@ pub extern "C" fn novena_function_name(function: u32) -> *const c_char {
 /// `name` must be null or point to a NUL-terminated string.
 #[no_mangle]
 pub unsafe extern "C" fn novena_function_lookup(name: *const c_char) -> u32 {
-    if name.is_null() {
-        return FUNCTION_NONE;
-    }
-    // SAFETY: the caller passes a NUL-terminated string.
-    let name = unsafe { CStr::from_ptr(name) };
-    name.to_str()
-        .ok()
-        .and_then(functions::lookup)
-        .map_or(FUNCTION_NONE, |id| id.0)
+    ffi_guard(FUNCTION_NONE, || {
+        if name.is_null() {
+            return FUNCTION_NONE;
+        }
+        // SAFETY: the caller passes a NUL-terminated string.
+        let name = unsafe { CStr::from_ptr(name) };
+        name.to_str()
+            .ok()
+            .and_then(functions::lookup)
+            .map_or(FUNCTION_NONE, |id| id.0)
+    })
 }
 
 /// Create an instance. `host` may be null for a host that provides nothing
@@ -85,13 +129,14 @@ pub unsafe extern "C" fn novena_function_lookup(name: *const c_char) -> u32 {
 /// being used from several threads at once.
 #[no_mangle]
 pub unsafe extern "C" fn novena_instance_create(host: *const Host) -> *mut Instance {
-    // SAFETY: the caller passes null or a valid `Host`.
-    let instance = match unsafe { host.as_ref() } {
-        // SAFETY: the caller guarantees the host's lifetime and thread safety.
-        Some(host) => unsafe { Instance::with_host(*host) },
-        None => Instance::new(),
-    };
-    Box::into_raw(Box::new(instance))
+    ffi_guard(std::ptr::null_mut(), || {
+        // SAFETY: the caller passes null or a valid `Host`.
+        let instance = match unsafe { host.as_ref() } {
+            Some(host) => unsafe { Instance::with_host(*host) },
+            None => Instance::new(),
+        };
+        Box::into_raw(Box::new(instance))
+    })
 }
 
 /// Destroy an instance. Null is accepted.
@@ -102,10 +147,11 @@ pub unsafe extern "C" fn novena_instance_create(host: *const Host) -> *mut Insta
 /// or start afterwards.
 #[no_mangle]
 pub unsafe extern "C" fn novena_instance_destroy(instance: *mut Instance) {
-    if !instance.is_null() {
-        // SAFETY: the caller passes a live instance from `create`.
-        drop(unsafe { Box::from_raw(instance) });
-    }
+    ffi_guard((), || {
+        if !instance.is_null() {
+            drop(unsafe { Box::from_raw(instance) });
+        }
+    })
 }
 
 /// The program asked its bootstrap function for `name`. Records the request
@@ -119,16 +165,16 @@ pub unsafe extern "C" fn novena_instance_request(
     instance: *const Instance,
     name: *const c_char,
 ) -> u32 {
-    // SAFETY: the caller passes a live instance.
-    let Some(instance) = (unsafe { instance.as_ref() }) else {
-        return FUNCTION_NONE;
-    };
-    if name.is_null() {
-        return FUNCTION_NONE;
-    }
-    // SAFETY: the caller passes a NUL-terminated string.
-    let name = unsafe { CStr::from_ptr(name) }.to_string_lossy();
-    instance.request(&name).map_or(FUNCTION_NONE, |id| id.0)
+    ffi_guard(FUNCTION_NONE, || {
+        let Some(instance) = (unsafe { instance.as_ref() }) else {
+            return FUNCTION_NONE;
+        };
+        if name.is_null() {
+            return FUNCTION_NONE;
+        }
+        let name = unsafe { CStr::from_ptr(name) }.to_string_lossy();
+        instance.request(&name).map_or(FUNCTION_NONE, |id| id.0)
+    })
 }
 
 /// The program called `function`. `registers` holds its argument registers
@@ -144,11 +190,12 @@ pub unsafe extern "C" fn novena_instance_call(
     function: u32,
     registers: *mut Registers,
 ) -> Status {
-    // SAFETY: the caller passes a live instance and valid registers.
-    match unsafe { (instance.as_ref(), registers.as_mut()) } {
-        (Some(instance), Some(registers)) => instance.call(FunctionId(function), registers),
-        _ => Status::BadArgument,
-    }
+    ffi_guard(Status::InternalError, || {
+        match unsafe { (instance.as_ref(), registers.as_mut()) } {
+            (Some(instance), Some(registers)) => instance.call(FunctionId(function), registers),
+            _ => Status::BadArgument,
+        }
+    })
 }
 
 /// The original implementation of `function` returned. `registers` holds
@@ -163,11 +210,12 @@ pub unsafe extern "C" fn novena_instance_returned(
     function: u32,
     registers: *const Registers,
 ) -> Status {
-    // SAFETY: the caller passes a live instance and valid registers.
-    match unsafe { (instance.as_ref(), registers.as_ref()) } {
-        (Some(instance), Some(registers)) => instance.returned(FunctionId(function), registers),
-        _ => Status::BadArgument,
-    }
+    ffi_guard(Status::InternalError, || {
+        match unsafe { (instance.as_ref(), registers.as_ref()) } {
+            (Some(instance), Some(registers)) => instance.returned(FunctionId(function), registers),
+            _ => Status::BadArgument,
+        }
+    })
 }
 
 /// Write the sampled argument and result shapes to a text file.
@@ -179,19 +227,21 @@ pub unsafe extern "C" fn novena_instance_write_shapes(
     instance: *const Instance,
     path: *const c_char,
 ) -> Status {
-    // SAFETY: the caller passes a live instance.
-    let Some(instance) = (unsafe { instance.as_ref() }) else {
-        return Status::BadArgument;
-    };
-    if path.is_null() {
-        return Status::BadArgument;
-    }
-    // SAFETY: the caller passes a NUL-terminated string.
-    let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
-    match std::fs::write(&*path, instance.shapes_report()) {
-        Ok(()) => Status::Ok,
-        Err(_) => Status::BadArgument,
-    }
+    ffi_guard(Status::InternalError, || {
+        // SAFETY: the caller passes a live instance.
+        let Some(instance) = (unsafe { instance.as_ref() }) else {
+            return Status::BadArgument;
+        };
+        if path.is_null() {
+            return Status::BadArgument;
+        }
+        // SAFETY: the caller passes a NUL-terminated string.
+        let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
+        match std::fs::write(&*path, instance.shapes_report()) {
+            Ok(()) => Status::Ok,
+            Err(_) => Status::BadArgument,
+        }
+    })
 }
 
 /// How many times `function` was called on this instance.
@@ -203,8 +253,9 @@ pub unsafe extern "C" fn novena_instance_call_count(
     instance: *const Instance,
     function: u32,
 ) -> u64 {
-    // SAFETY: the caller passes null or a live instance.
-    unsafe { instance.as_ref() }.map_or(0, |instance| instance.call_count(FunctionId(function)))
+    ffi_guard(0, || {
+        unsafe { instance.as_ref() }.map_or(0, |instance| instance.call_count(FunctionId(function)))
+    })
 }
 
 /// Write the census (what was requested and called) to a text file.
@@ -218,19 +269,21 @@ pub unsafe extern "C" fn novena_instance_write_census(
     instance: *const Instance,
     path: *const c_char,
 ) -> Status {
-    // SAFETY: the caller passes a live instance.
-    let Some(instance) = (unsafe { instance.as_ref() }) else {
-        return Status::BadArgument;
-    };
-    if path.is_null() {
-        return Status::BadArgument;
-    }
-    // SAFETY: the caller passes a NUL-terminated string.
-    let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
-    match std::fs::write(&*path, instance.census().to_string()) {
-        Ok(()) => Status::Ok,
-        Err(_) => Status::BadArgument,
-    }
+    ffi_guard(Status::InternalError, || {
+        // SAFETY: the caller passes a live instance.
+        let Some(instance) = (unsafe { instance.as_ref() }) else {
+            return Status::BadArgument;
+        };
+        if path.is_null() {
+            return Status::BadArgument;
+        }
+        // SAFETY: the caller passes a NUL-terminated string.
+        let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
+        match std::fs::write(&*path, instance.census().to_string()) {
+            Ok(()) => Status::Ok,
+            Err(_) => Status::BadArgument,
+        }
+    })
 }
 
 #[cfg(test)]

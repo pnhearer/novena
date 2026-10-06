@@ -1,0 +1,9 @@
+language = "C"
+include_guard = "NOVENA_H_GENERATED"
+pragma_once = true
+style = "both"
+usize_is_size_t = true
+
+[export]
+include = ["Host", "Registers", "Status"]
+

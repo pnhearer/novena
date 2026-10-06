@@ -13,7 +13,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - run: cargo install cbindgen --locked
+      - run: cbindgen --config cbindgen.toml --crate novena --output /tmp/novena-generated.h
+      - run: cc -std=c11 -Wall -Wextra -Werror -Iinclude -fsyntax-only examples/host.c
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets --features vulkan -- -D warnings
       - run: cargo test
+      - run: cargo test --features vulkan
       - run: examples/run-host.sh

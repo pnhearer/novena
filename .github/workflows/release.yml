@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: novena-linux-x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: novena-windows-x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Package Unix archive
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p staging/${{ matrix.archive }}/{include,lib,share/novena/cmake}
+          cp include/novena.h staging/${{ matrix.archive }}/include/
+          cp -r cmake staging/${{ matrix.archive }}/share/novena/
+          cp target/${{ matrix.target }}/release/libnovena.{so,a} staging/${{ matrix.archive }}/lib/
+          cp novena.pc NOTICE LICENSE.md staging/${{ matrix.archive }}/
+          tar -czf ${{ matrix.archive }}.tar.gz -C staging ${{ matrix.archive }}
+      - name: Package Windows archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force staging/${{ matrix.archive }}/include, staging/${{ matrix.archive }}/lib | Out-Null
+          Copy-Item include/novena.h staging/${{ matrix.archive }}/include/
+          Copy-Item -Recurse cmake staging/${{ matrix.archive }}/
+          Copy-Item novena.pc staging/${{ matrix.archive }}/
+          Copy-Item target/${{ matrix.target }}/release/novena.dll, target/${{ matrix.target }}/release/novena.lib staging/${{ matrix.archive }}/lib/
+          Copy-Item NOTICE, LICENSE.md staging/${{ matrix.archive }}/
+          Compress-Archive staging/${{ matrix.archive }} ${{ matrix.archive }}.zip
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.archive }}.*
