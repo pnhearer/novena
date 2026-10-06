@@ -624,6 +624,9 @@ mod tests {
 
     /// A host with one readable page whose contents the test controls.
     static PAGE: std::sync::Mutex<[u8; 256]> = std::sync::Mutex::new([0; 256]);
+    /// Held for the whole of each test that uses PAGE, since tests run in
+    /// parallel.
+    static PAGE_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
     const PAGE_BASE: u64 = 0x40_0000;
 
     unsafe extern "C" fn read_page(
@@ -647,6 +650,7 @@ mod tests {
 
     #[test]
     fn memory_behind_an_address_is_classified_and_changes_are_noticed() {
+        let _serial = PAGE_TEST.lock().unwrap_or_else(|p| p.into_inner());
         let host = Host {
             user: std::ptr::null_mut(),
             read_memory: Some(read_page),
@@ -711,6 +715,7 @@ mod tests {
 
     #[test]
     fn query_answers_are_kept_per_selector() {
+        let _serial = PAGE_TEST.lock().unwrap_or_else(|p| p.into_inner());
         let host = Host {
             user: std::ptr::null_mut(),
             read_memory: Some(read_page),

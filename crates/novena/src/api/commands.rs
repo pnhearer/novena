@@ -7,7 +7,7 @@ use crate::instance::{Instance, Registers, Status};
 fn record(
     instance: &Instance,
     function: u32,
-    registers: &Registers,
+    registers: &mut Registers,
     command: RecordedCommand,
 ) -> Status {
     instance.objects.update(registers.x[0], |object| {
@@ -21,6 +21,12 @@ fn record(
         }
     });
     let _ = function;
+    // Recorded commands return nothing novena knows of. The result
+    // registers are cleared, as for an unhandled call, so a caller that does
+    // read a result gets zero rather than its own first argument back.
+    registers.x[0] = 0;
+    registers.x[1] = 0;
+    registers.d[0] = 0;
     Status::Ok
 }
 
@@ -100,8 +106,11 @@ pub fn handler(name: &str) -> Option<Handler> {
                 RecordedCommand::SetDepthRange([r.x[1], r.d[0], r.d[1]]),
             )
         },
+        // Kept for a later executor, but reported as not implemented: the
+        // host then treats the call exactly as before this handler existed,
+        // which a program was seen to depend on (note 0012).
         _ => |instance, function, r| {
-            record(
+            let _ = record(
                 instance,
                 function.0,
                 r,
@@ -109,7 +118,8 @@ pub fn handler(name: &str) -> Option<Handler> {
                     function: function.0,
                     registers: r.x,
                 },
-            )
+            );
+            Status::Unimplemented
         },
     })
 }

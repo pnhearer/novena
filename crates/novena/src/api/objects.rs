@@ -244,12 +244,29 @@ impl Objects {
         self.lock().is_empty()
     }
 
+    /// Every texture some window presents.
+    pub fn window_textures(&self) -> std::collections::HashSet<u64> {
+        self.lock()
+            .values()
+            .filter_map(|object| match object {
+                Object::Window { textures, .. } => Some(textures.iter().copied()),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    }
+
+    /// Take the commands of a submitted recording. A recording handle
+    /// carries its command buffer's address in its low 48 bits (see
+    /// EndRecording), so the lookup is direct. A recording is executed once
+    /// and then dropped, so finished recordings do not pile up.
     pub fn recording(&self, handle: u64) -> Option<Vec<RecordedCommand>> {
-        self.lock().values().find_map(|object| match object {
-            Object::CommandBuffer {
+        let owner = handle & ((1 << 48) - 1);
+        match self.lock().get_mut(&owner) {
+            Some(Object::CommandBuffer {
                 recording_handles, ..
-            } => recording_handles.get(&handle).cloned(),
+            }) => recording_handles.remove(&handle),
             _ => None,
-        })
+        }
     }
 }

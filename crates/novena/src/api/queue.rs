@@ -19,6 +19,9 @@ fn builder_update(
 
 /// Marks an event signalled, in novena's record and in the event's storage
 /// word in program memory.
+/// Largest CPU image, in texels: 4096 by 4096.
+const CPU_IMAGE_TEXELS: u64 = 4096 * 4096;
+
 pub(crate) fn signal_event(instance: &Instance, event: u64, new_value: u32) {
     let mut storage = 0;
     instance.objects.update(event, |object| {
@@ -87,9 +90,11 @@ pub fn handler(name: &str) -> Option<Handler> {
                 .put(registers.x[0], Object::Queue { device });
             succeed(registers)
         },
-        // Nothing is drawn yet, so submitting, flushing and finishing have
-        // nothing to do. They are accepted so the program keeps going.
         "nvnQueueSubmitCommands" => |instance, _, r| {
+            // Only textures a window presents get a CPU image. A program
+            // clears thousands of other render targets, and filling CPU
+            // copies of all of them stalled the program it was tried on.
+            let presented = instance.objects.window_textures();
             for i in 0..r.x[1].min(1024) {
                 let Some(handle) = read_u64(instance, r.x[2] + i * 8) else {
                     break;
@@ -106,23 +111,30 @@ pub fn handler(name: &str) -> Option<Handler> {
                             let Some(texture) = targets.get(index as usize).copied() else {
                                 continue;
                             };
+                            if !presented.contains(&texture) {
+                                continue;
+                            }
                             let Some(Object::Texture { description, image }) =
                                 instance.objects.get(texture)
                             else {
                                 continue;
                             };
+                            // Only the first layer of the base level is kept on the
+                            // CPU, and only for sizes a screen can have: a game
+                            // clears large arrays and volumes every frame, and
+                            // copying those on the CPU stalled it. novena's own
+                            // limit, until clears run on the GPU.
+                            let (width, height) =
+                                (description.width.max(1), description.height.max(1));
+                            if width * height > CPU_IMAGE_TEXELS {
+                                continue;
+                            }
                             let mut image = image.lock().unwrap_or_else(|p| p.into_inner());
                             let image = image.get_or_insert_with(|| TextureImage {
-                                width: description.width as u32,
-                                height: description.height as u32,
-                                depth: description.depth.max(1) as u32,
-                                pixels: vec![
-                                    0;
-                                    (description.width.max(1)
-                                        * description.height.max(1)
-                                        * description.depth.max(1)
-                                        * 4) as usize
-                                ],
+                                width: width as u32,
+                                height: height as u32,
+                                depth: 1,
+                                pixels: vec![0; (width * height * 4) as usize],
                             });
                             // Bits 0..3 mean red, green, blue and alpha. This is novena's own choice.
                             let values = color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
@@ -142,18 +154,30 @@ pub fn handler(name: &str) -> Option<Handler> {
                     }
                 }
             }
-            Status::Ok
+            {
+                r.x[0] = 0;
+                Status::Ok
+            }
         },
         "nvnQueueFlush" | "nvnQueueFinish" => accept,
         "nvnQueuePresentTexture" => |instance, _, r| {
             let Some(Object::Window { textures, .. }) = instance.objects.get(r.x[1]) else {
-                return Status::Ok;
+                return {
+                    r.x[0] = 0;
+                    Status::Ok
+                };
             };
             let Some(texture) = textures.get(r.x[2] as usize).copied() else {
-                return Status::Ok;
+                return {
+                    r.x[0] = 0;
+                    Status::Ok
+                };
             };
             let Some(Object::Texture { description, image }) = instance.objects.get(texture) else {
-                return Status::Ok;
+                return {
+                    r.x[0] = 0;
+                    Status::Ok
+                };
             };
             let Some(image) = image
                 .lock()
@@ -161,7 +185,10 @@ pub fn handler(name: &str) -> Option<Handler> {
                 .as_ref()
                 .cloned()
             else {
-                return Status::Ok;
+                return {
+                    r.x[0] = 0;
+                    Status::Ok
+                };
             };
             if let Some(host) = instance.host().and_then(|h| h.present) {
                 unsafe {
@@ -175,7 +202,10 @@ pub fn handler(name: &str) -> Option<Handler> {
                     );
                 }
             }
-            Status::Ok
+            {
+                r.x[0] = 0;
+                Status::Ok
+            }
         },
         // Observed to return 1. Waiting on a sync that nothing signals would
         // block the program forever, so the wait is reported as satisfied.

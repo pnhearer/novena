@@ -120,7 +120,12 @@ pub fn handler(name: &str) -> Option<Handler> {
                     *recording = false;
                     *recordings += 1;
                     handle = registers.x[0] | (*recordings & 0xffff) << 48;
-                    recording_handles.insert(handle, commands.clone());
+                    recording_handles.insert(handle, std::mem::take(commands));
+                    // A recording is normally submitted soon after it ends.
+                    // Older ones that never were are dropped, so the object
+                    // (which is copied on every lookup) stays small.
+                    let current = *recordings & 0xffff;
+                    recording_handles.retain(|h, _| current.wrapping_sub(h >> 48) & 0xffff < 64);
                 }
             });
             registers.x[0] = handle;
