@@ -105,6 +105,7 @@ mod tests {
                 flags: 0,
                 storage: base,
                 size: 0x4000,
+                gpu_address: None,
             },
         );
         let seen = Arc::new(Mutex::new(Vec::new()));

@@ -99,7 +99,7 @@ pub enum Status {
 thread_local! {
     /// The call this thread last reported and what its address arguments
     /// pointed to, until the matching return is reported.
-    static PENDING: Cell<Option<(u32, CallSnapshot)>> = const { Cell::new(None) };
+    static PENDING: Cell<Option<(u32, CallSnapshot, Registers)>> = const { Cell::new(None) };
 }
 
 pub struct Instance {
@@ -261,7 +261,7 @@ impl Instance {
         } else {
             None
         };
-        PENDING.set(snapshot.map(|snapshot| (function.0, snapshot)));
+        PENDING.set(snapshot.map(|snapshot| (function.0, snapshot, *registers)));
         if let Some(Some(handler)) = self.handlers.get(function.0 as usize) {
             return handler(self, function, registers);
         }
@@ -281,11 +281,43 @@ impl Instance {
         // reported call was the same function.
         let snapshot = PENDING
             .take()
-            .filter(|(pending, _)| *pending == function.0)
-            .map(|(_, snapshot)| snapshot);
-        self.shape(function)
-            .record_return(self.host.as_ref(), registers, snapshot.as_ref());
+            .filter(|(pending, _, _)| *pending == function.0)
+            .map(|(_, snapshot, registers)| (snapshot, registers));
+        if let Some((_, call_registers)) = snapshot.as_ref() {
+            self.observe_pool_return(function, call_registers, registers);
+        }
+        self.shape(function).record_return(
+            self.host.as_ref(),
+            registers,
+            snapshot.as_ref().map(|(snapshot, _)| snapshot),
+        );
         Status::Ok
+    }
+
+    fn observe_pool_return(
+        &self,
+        function: FunctionId,
+        call_registers: &Registers,
+        return_registers: &Registers,
+    ) {
+        let Some(name) = functions::all()
+            .find(|(id, _)| *id == function)
+            .map(|(_, name)| name)
+        else {
+            return;
+        };
+        if name == "nvnMemoryPoolGetBufferAddress" {
+            let pool = call_registers.x[0];
+            let gpu_address = return_registers.x[0];
+            self.objects.update(pool, |object| {
+                if let crate::api::Object::MemoryPool {
+                    gpu_address: base, ..
+                } = object
+                {
+                    *base = Some(gpu_address);
+                }
+            });
+        }
     }
 
     fn shape(&self, function: FunctionId) -> std::sync::MutexGuard<'_, FunctionShape> {
@@ -495,5 +527,59 @@ mod tests {
             }
         });
         assert_eq!(instance.call_count(id), 4000);
+    }
+
+    #[test]
+    fn observed_pool_address_is_used_for_shader_resolution() {
+        let instance = Instance::new();
+        let defaults = FunctionId(
+            functions::lookup("nvnMemoryPoolBuilderSetDefaults")
+                .unwrap()
+                .0,
+        );
+        let storage = FunctionId(
+            functions::lookup("nvnMemoryPoolBuilderSetStorage")
+                .unwrap()
+                .0,
+        );
+        let initialize = FunctionId(functions::lookup("nvnMemoryPoolInitialize").unwrap().0);
+        let address = FunctionId(
+            functions::lookup("nvnMemoryPoolGetBufferAddress")
+                .unwrap()
+                .0,
+        );
+
+        let mut registers = Registers {
+            x: [20, 0, 0, 0, 0, 0, 0, 0],
+            ..Registers::default()
+        };
+        assert_eq!(instance.call(defaults, &mut registers), Status::Ok);
+        registers.x[0] = 20;
+        registers.x[1] = 0x1000;
+        registers.x[2] = 0x100;
+        assert_eq!(instance.call(storage, &mut registers), Status::Ok);
+        registers.x = [21, 20, 0, 0, 0, 0, 0, 0];
+        assert_eq!(instance.call(initialize, &mut registers), Status::Ok);
+
+        let call = Registers {
+            x: [21, 0, 0, 0, 0, 0, 0, 0],
+            ..Registers::default()
+        };
+        let result = Registers {
+            x: [0x9000, 0, 0, 0, 0, 0, 0, 0],
+            ..Registers::default()
+        };
+        let mut call_registers = call;
+        assert_eq!(instance.call(address, &mut call_registers), Status::Ok);
+        instance.returned(address, &result);
+
+        assert_eq!(
+            instance.objects.resolve_gpu_address(0x9080),
+            Ok(crate::api::GpuAddress {
+                pool: 21,
+                offset: 0x80,
+                program_address: 0x1080,
+            })
+        );
     }
 }

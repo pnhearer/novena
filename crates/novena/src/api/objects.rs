@@ -142,6 +142,7 @@ pub enum Object {
         flags: u64,
         storage: u64,
         size: u64,
+        gpu_address: Option<u64>,
     },
     TextureBuilder(TextureDescription),
     Texture {
@@ -298,23 +299,28 @@ impl Objects {
     }
 
     /// Resolve a GPU address against the registered pool ranges. novena uses
-    /// each pool's program storage address as its GPU base.
+    /// each pool's observed buffer address as its GPU base.
     pub fn resolve_gpu_address(&self, address: u64) -> Result<GpuAddress, GpuAddressError> {
-        let pools: Vec<(u64, u64, u64)> = self
+        let pools: Vec<(u64, u64, u64, u64)> = self
             .lock()
             .iter()
             .filter_map(|(pool, object)| match object {
-                Object::MemoryPool { storage, size, .. } => Some((*pool, *storage, *size)),
+                Object::MemoryPool {
+                    storage,
+                    size,
+                    gpu_address,
+                    ..
+                } => Some((*pool, *storage, gpu_address.unwrap_or(*storage), *size)),
                 _ => None,
             })
             .collect();
         let mut matched_base = None;
-        for (pool, base, size) in pools {
+        for (pool, storage, base, size) in pools {
             let Some(offset) = address.checked_sub(base) else {
                 continue;
             };
             if offset < size {
-                let Some(program_address) = base.checked_add(offset) else {
+                let Some(program_address) = storage.checked_add(offset) else {
                     return Err(GpuAddressError::UnknownAddress);
                 };
                 return Ok(GpuAddress {
@@ -373,6 +379,7 @@ mod tests {
                 flags: 0,
                 storage: 0x10_0000,
                 size: 0x100,
+                gpu_address: None,
             },
         );
         assert_eq!(
