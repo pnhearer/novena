@@ -20,7 +20,7 @@ mod state;
 
 use crate::functions::FunctionId;
 use crate::instance::{Instance, Registers, Status};
-pub use objects::{GpuAddress, GpuAddressError, Object, Objects, ShaderRecord};
+pub use objects::{GpuAddress, GpuAddressError, Object, Objects, ShaderRecord, ShaderTranslation};
 
 /// A function's behaviour. Arguments arrive in `registers`; results go back
 /// through it.

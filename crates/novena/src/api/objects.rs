@@ -78,6 +78,12 @@ pub struct ShaderRecord {
     pub raw_words: [u64; 8],
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShaderTranslation {
+    Spirv(Vec<u32>),
+    Error(String),
+}
+
 /// What novena knows about one object. Field meanings follow the signature
 /// tables; unknown enumerations are kept as the integers the program passed.
 #[derive(Debug, Clone, Default)]
@@ -165,6 +171,7 @@ pub enum Object {
     Program {
         device: u64,
         shader_records: Vec<ShaderRecord>,
+        shader_translations: Vec<ShaderTranslation>,
     },
     /// A state object. Its fields are not interpreted yet; the program's
     /// calls are kept as (function, arguments) so they are not lost.

@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub type ShaderStage = u32;
+pub const SHADER_STAGE_UNKNOWN: ShaderStage = 0;
 
 pub trait ShaderTranslator: Send + Sync {
     fn translate(&self, stage: ShaderStage, code: &[u8]) -> Result<Vec<u32>, String>;
@@ -115,6 +116,8 @@ pub struct Instance {
     /// Names the program asked for that are not in the table, with how often.
     unknown_requests: Mutex<BTreeMap<String, u64>>,
     shader_translator: Mutex<Option<Arc<dyn ShaderTranslator>>>,
+    shader_translation_enabled: AtomicBool,
+    shader_translation_errors: Mutex<BTreeMap<String, u64>>,
     #[cfg(feature = "vulkan")]
     pub(crate) gpu: Mutex<Option<Backend>>,
 }
@@ -149,6 +152,8 @@ impl Instance {
             shapes: (0..count).map(|_| Mutex::default()).collect(),
             unknown_requests: Mutex::new(BTreeMap::new()),
             shader_translator: Mutex::new(None),
+            shader_translation_enabled: AtomicBool::new(false),
+            shader_translation_errors: Mutex::new(BTreeMap::new()),
             #[cfg(feature = "vulkan")]
             gpu: Mutex::new(host.and_then(|h| Backend::new(h.render_scale))),
         }
@@ -171,6 +176,24 @@ impl Instance {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    pub fn set_shader_translation_enabled(&self, enabled: bool) {
+        self.shader_translation_enabled
+            .store(enabled, Ordering::Relaxed);
+    }
+
+    pub(crate) fn shader_translation_enabled(&self) -> bool {
+        self.shader_translation_enabled.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn record_shader_translation_error(&self, error: String) {
+        *self
+            .shader_translation_errors
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry(error)
+            .or_default() += 1;
     }
 
     /// Record that the program asked for `name` and return its id.
@@ -308,6 +331,11 @@ impl Instance {
         Census {
             functions,
             unknown_requests,
+            shader_translation_errors: self
+                .shader_translation_errors
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone(),
         }
     }
 }
@@ -329,6 +357,7 @@ struct CensusEntry {
 pub struct Census {
     functions: Vec<CensusEntry>,
     unknown_requests: BTreeMap<String, u64>,
+    shader_translation_errors: BTreeMap<String, u64>,
 }
 
 impl Census {
@@ -370,6 +399,9 @@ impl fmt::Display for Census {
         }
         for (name, count) in &self.unknown_requests {
             writeln!(f, "unknown {count} {name}")?;
+        }
+        for (error, count) in &self.shader_translation_errors {
+            writeln!(f, "shader-translation-error {count} {error}")?;
         }
         Ok(())
     }

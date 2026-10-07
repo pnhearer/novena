@@ -6,7 +6,176 @@ use super::{
     objects::{Object, SamplerDescription, ShaderRecord, TextureDescription},
     read_f32x4, succeed, Handler,
 };
-use crate::instance::{Instance, Registers, Status};
+use crate::instance::{Instance, Registers, Status, SHADER_STAGE_UNKNOWN};
+
+const MAX_SHADER_BYTES: usize = 64 * 1024;
+
+fn shader_bytes(instance: &Instance, address: u64) -> Option<Vec<u8>> {
+    let resolution = instance.objects.resolve_gpu_address(address).ok()?;
+    let mut bytes = vec![0; MAX_SHADER_BYTES];
+    let mut length = MAX_SHADER_BYTES;
+    let mut chunk = [0u8; 256];
+    for offset in (0..MAX_SHADER_BYTES).step_by(chunk.len()) {
+        let address = resolution.program_address.checked_add(offset as u64)?;
+        if !instance.read_memory(address, &mut chunk) {
+            return None;
+        }
+        bytes[offset..offset + chunk.len()].copy_from_slice(&chunk);
+        if let Some(start) = chunk
+            .windows(64)
+            .position(|window| window.iter().all(|&b| b == 0))
+        {
+            length = offset + start;
+            break;
+        }
+    }
+    bytes.truncate(length);
+    Some(bytes)
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::*;
+    use crate::api::{Object, ShaderTranslation};
+    use crate::{Host, Registers, ShaderStage, ShaderTranslator, SHADER_STAGE_UNKNOWN};
+    use std::ffi::c_void;
+    use std::sync::{Arc, Mutex};
+
+    struct Memory {
+        base: u64,
+        bytes: Vec<u8>,
+    }
+
+    unsafe extern "C" fn read_memory(
+        user: *mut c_void,
+        address: u64,
+        out: *mut u8,
+        size: u64,
+    ) -> i32 {
+        let memory = unsafe { &*(user.cast::<Memory>()) };
+        let Some(start) = address.checked_sub(memory.base).map(|value| value as usize) else {
+            return 1;
+        };
+        let end = start.saturating_add(size as usize);
+        if end > memory.bytes.len() {
+            return 1;
+        }
+        unsafe { std::slice::from_raw_parts_mut(out, size as usize) }
+            .copy_from_slice(&memory.bytes[start..end]);
+        0
+    }
+
+    type SeenTranslations = Arc<Mutex<Vec<(ShaderStage, Vec<u8>)>>>;
+
+    struct FakeTranslator(SeenTranslations);
+
+    impl ShaderTranslator for FakeTranslator {
+        fn translate(&self, stage: ShaderStage, code: &[u8]) -> Result<Vec<u32>, String> {
+            self.0.lock().unwrap().push((stage, code.to_vec()));
+            Ok(vec![0x0723_0203, code.len() as u32])
+        }
+    }
+
+    #[test]
+    fn enabled_translation_uses_resolved_bytes_and_retains_spirv() {
+        let base = 0x1000;
+        let mut memory = Box::new(Memory {
+            base,
+            bytes: vec![0; 0x4000],
+        });
+        let record = 0x2000usize - base as usize;
+        let code = 0x1080usize - base as usize;
+        memory.bytes[record..record + 8].copy_from_slice(&0x1080u64.to_le_bytes());
+        memory.bytes[code..code + 4].copy_from_slice(&1u32.to_le_bytes());
+        memory.bytes[code + 4..code + 8].copy_from_slice(&2u32.to_le_bytes());
+        let host = Host {
+            user: (&mut *memory as *mut Memory).cast(),
+            read_memory: Some(read_memory),
+            write_memory: None,
+            present: None,
+            render_scale: 1.0,
+            wait_vblank: None,
+        };
+        let instance = unsafe { Instance::with_host(host) };
+        instance.objects.put(
+            7,
+            Object::MemoryPool {
+                device: 0,
+                flags: 0,
+                storage: base,
+                size: 0x4000,
+            },
+        );
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        instance.set_shader_translator(Some(Arc::new(FakeTranslator(seen.clone()))));
+        instance.set_shader_translation_enabled(true);
+        let mut init = Registers {
+            x: [9, 0, 0, 0, 0, 0, 0, 0],
+            ..Registers::default()
+        };
+        assert_eq!(
+            instance.call(
+                crate::functions::lookup("nvnProgramInitialize").unwrap(),
+                &mut init
+            ),
+            Status::Ok
+        );
+        let mut setup = Registers {
+            x: [9, 1, 0x2000, 0, 0, 0, 0, 0],
+            ..Registers::default()
+        };
+        assert_eq!(
+            instance.call(
+                crate::functions::lookup("nvnProgramSetShaders").unwrap(),
+                &mut setup
+            ),
+            Status::Ok
+        );
+        assert_eq!(seen.lock().unwrap()[0].0, SHADER_STAGE_UNKNOWN);
+        assert_eq!(seen.lock().unwrap()[0].1.len(), 5);
+        assert_eq!(
+            instance.objects.get(9),
+            Some(Object::Program {
+                device: 0,
+                shader_records: vec![crate::api::ShaderRecord {
+                    record_address: 0x2000,
+                    gpu_addresses: [0x1080, 0],
+                    raw_words: [0x1080, 0, 0, 0, 0, 0, 0, 0]
+                }],
+                shader_translations: vec![ShaderTranslation::Spirv(vec![0x0723_0203, 5])]
+            })
+        );
+    }
+}
+
+fn translate_shaders(
+    instance: &Instance,
+    records: &[ShaderRecord],
+) -> Vec<super::objects::ShaderTranslation> {
+    if !instance.shader_translation_enabled() {
+        return Vec::new();
+    }
+    let Some(translator) = instance.shader_translator() else {
+        return Vec::new();
+    };
+    records
+        .iter()
+        .map(|record| {
+            let Some(code) = shader_bytes(instance, record.gpu_addresses[0]) else {
+                instance.record_shader_translation_error("shader bytes unavailable".into());
+                return super::objects::ShaderTranslation::Error("shader bytes unavailable".into());
+            };
+            match translator.translate(SHADER_STAGE_UNKNOWN, &code) {
+                Ok(words) => super::objects::ShaderTranslation::Spirv(words),
+                Err(error) => {
+                    instance.record_shader_translation_error(error.clone());
+                    super::objects::ShaderTranslation::Error(error)
+                }
+            }
+        })
+        .collect()
+}
 
 fn texture_builder_update(
     instance: &Instance,
@@ -379,6 +548,7 @@ pub fn handler(name: &str) -> Option<Handler> {
                 Object::Program {
                     device: registers.x[1],
                     shader_records: Vec::new(),
+                    shader_translations: Vec::new(),
                 },
             );
             succeed(registers)
@@ -412,6 +582,25 @@ pub fn handler(name: &str) -> Option<Handler> {
             instance.objects.update(registers.x[0], |object| {
                 if let Object::Program { shader_records, .. } = object {
                     *shader_records = records;
+                }
+            });
+            let translations = instance
+                .objects
+                .get(registers.x[0])
+                .and_then(|object| match object {
+                    Object::Program { shader_records, .. } => {
+                        Some(translate_shaders(instance, &shader_records))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default();
+            instance.objects.update(registers.x[0], |object| {
+                if let Object::Program {
+                    shader_translations,
+                    ..
+                } = object
+                {
+                    *shader_translations = translations;
                 }
             });
             succeed(registers)
