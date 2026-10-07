@@ -13,11 +13,15 @@ const MAX_SHADER_BYTES: usize = 64 * 1024;
 const SHADER_PREFIX: usize = 0x30;
 const SHADER_CODE_OFFSET: usize = 0x80;
 
-fn shader_bytes(instance: &Instance, address: u64) -> Option<Vec<u8>> {
-    let resolution = instance.objects.resolve_gpu_address(address).ok()?;
-    let available = usize::try_from(resolution.remaining).ok()?;
+fn shader_bytes(instance: &Instance, address: u64) -> Result<Vec<u8>, &'static str> {
+    let resolution = instance
+        .objects
+        .resolve_gpu_address(address)
+        .map_err(|_| "shader bytes unavailable")?;
+    let available =
+        usize::try_from(resolution.remaining).map_err(|_| "shader bytes unavailable")?;
     if available <= SHADER_PREFIX {
-        return None;
+        return Err("shader bytes unavailable");
     }
     let limit = available.min(MAX_SHADER_BYTES);
     let mut bytes = vec![0; limit];
@@ -26,9 +30,12 @@ fn shader_bytes(instance: &Instance, address: u64) -> Option<Vec<u8>> {
     let scan_start = SHADER_CODE_OFFSET.min(limit);
     for offset in (scan_start..limit).step_by(chunk.len()) {
         let read_length = chunk.len().min(limit - offset);
-        let address = resolution.program_address.checked_add(offset as u64)?;
+        let address = resolution
+            .program_address
+            .checked_add(offset as u64)
+            .ok_or("shader bytes unavailable")?;
         if !instance.read_memory(address, &mut chunk[..read_length]) {
-            return None;
+            return Err("shader bytes unavailable");
         }
         bytes[offset..offset + read_length].copy_from_slice(&chunk[..read_length]);
         for start in (0..read_length.saturating_sub(63)).step_by(4) {
@@ -41,7 +48,10 @@ fn shader_bytes(instance: &Instance, address: u64) -> Option<Vec<u8>> {
             break;
         }
     }
-    Some(bytes[SHADER_PREFIX..length].to_vec())
+    if length <= SHADER_CODE_OFFSET {
+        return Err("no code after header");
+    }
+    Ok(bytes[SHADER_PREFIX..length].to_vec())
 }
 
 #[cfg(test)]
@@ -191,9 +201,12 @@ fn translate_shaders(
     records
         .iter()
         .map(|record| {
-            let Some(code) = shader_bytes(instance, record.gpu_addresses[0]) else {
-                instance.record_shader_translation_error("shader bytes unavailable".into());
-                return super::objects::ShaderTranslation::Error("shader bytes unavailable".into());
+            let code = match shader_bytes(instance, record.gpu_addresses[0]) {
+                Ok(code) => code,
+                Err(error) => {
+                    instance.record_shader_translation_error(error.into());
+                    return super::objects::ShaderTranslation::Error(error.into());
+                }
             };
             match translator.translate(SHADER_STAGE_UNKNOWN, &code) {
                 Ok(words) => {

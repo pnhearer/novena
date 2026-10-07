@@ -15,6 +15,7 @@
 
 use crate::api::{GpuAddressError, Objects};
 use crate::instance::{Host, Registers};
+use std::collections::BTreeMap;
 use std::fmt::{self, Write};
 
 /// Calls sampled per function. Shapes settle quickly, and the busiest
@@ -287,7 +288,7 @@ struct ShaderShape {
     words: [WordShape; SHADER_WORDS],
     leading_nonzero: u64,
     repeating_header: u64,
-    length_hint: Option<usize>,
+    code_lengths: BTreeMap<(usize, &'static str), u64>,
     resolved_offsets: Vec<u64>,
     unresolved: Vec<(GpuAddressError, u64)>,
 }
@@ -326,39 +327,52 @@ impl ShaderShape {
             (period..SHADER_WORDS)
                 .all(|index| shader_word(&bytes, index) == shader_word(&bytes, index % period))
         }));
-        if self.length_hint.is_none() {
-            let read = host.and_then(|host| host.read_memory);
-            let mut chunk = [0u8; 256];
-            let limit = usize::try_from(resolution.remaining)
-                .unwrap_or(usize::MAX)
-                .min(64 * 1024);
-            'scan: for offset in (0x80..limit).step_by(chunk.len()) {
-                let Some(read) = read else { break };
-                let Some(at) = address.checked_add(offset as u64) else {
-                    break;
-                };
-                let read_length = chunk.len().min(limit - offset);
-                if unsafe {
-                    read(
-                        host.unwrap().user,
-                        at,
-                        chunk.as_mut_ptr(),
-                        read_length as u64,
-                    )
-                } != 0
+        let read = host.and_then(|host| host.read_memory);
+        let pool_end = usize::try_from(resolution.remaining).unwrap_or(usize::MAX);
+        let limit = pool_end.min(64 * 1024);
+        let mut length = limit;
+        let mut reason = if pool_end <= 64 * 1024 {
+            "pool end"
+        } else {
+            "cap"
+        };
+        let mut chunk = [0u8; 256];
+        'scan: for offset in (0x80..limit).step_by(chunk.len()) {
+            let Some(read) = read else {
+                reason = "unreadable";
+                length = offset;
+                break;
+            };
+            let Some(at) = resolution.program_address.checked_add(offset as u64) else {
+                reason = "unreadable";
+                length = offset;
+                break;
+            };
+            let read_length = chunk.len().min(limit - offset);
+            if unsafe {
+                read(
+                    host.unwrap().user,
+                    at,
+                    chunk.as_mut_ptr(),
+                    read_length as u64,
+                )
+            } != 0
+            {
+                reason = "unreadable";
+                length = offset;
+                break;
+            }
+            for start in (0..read_length.saturating_sub(63)).step_by(4) {
+                if start + 64 <= read_length
+                    && chunk[start..start + 64].iter().all(|&byte| byte == 0)
                 {
-                    break;
-                }
-                for start in (0..read_length.saturating_sub(63)).step_by(4) {
-                    if start + 64 <= read_length
-                        && chunk[start..start + 64].iter().all(|&byte| byte == 0)
-                    {
-                        self.length_hint = Some(offset + start);
-                        break 'scan;
-                    }
+                    length = offset + start;
+                    reason = "zero run";
+                    break 'scan;
                 }
             }
         }
+        *self.code_lengths.entry((length, reason)).or_default() += 1;
     }
 
     fn write(&self, out: &mut String, offset: usize) {
@@ -380,6 +394,12 @@ impl ShaderShape {
                     .join(" ")
             );
         }
+        if !self.code_lengths.is_empty() {
+            let _ = writeln!(out, "    code-lengths:");
+            for ((length, reason), count) in &self.code_lengths {
+                let _ = writeln!(out, "      length={length} stop={reason} count={count}");
+            }
+        }
         for (reason, _) in &self.unresolved {
             let _ = writeln!(out, "    unresolved reason={}", unresolved_reason(*reason));
         }
@@ -388,11 +408,8 @@ impl ShaderShape {
         }
         let _ = writeln!(
             out,
-            "    leading-nonzero-total={} repeating-header={}/{} length-hint={}",
-            self.leading_nonzero,
-            self.repeating_header,
-            self.samples,
-            self.length_hint.unwrap_or(0x1000)
+            "    leading-nonzero-total={} repeating-header={}/{}",
+            self.leading_nonzero, self.repeating_header, self.samples,
         );
         for (index, shape) in self.words.iter().enumerate() {
             let mut line = format!("    +{:#04x} ", index * 4);
