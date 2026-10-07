@@ -123,6 +123,46 @@ pub fn handler(name: &str) -> Option<Handler> {
                 RecordedCommand::SetScissor(r.x[..5].try_into().unwrap()),
             )
         },
+        "nvnCommandBufferDrawArrays" => |i, _, r| {
+            record(
+                i,
+                0,
+                r,
+                RecordedCommand::DrawArrays {
+                    primitive: r.x[1] as u32,
+                    first: r.x[2] as u32,
+                    count: r.x[3] as u32,
+                },
+            )
+        },
+        "nvnCommandBufferDrawArraysInstanced" => |i, _, r| {
+            record(
+                i,
+                0,
+                r,
+                RecordedCommand::DrawArraysInstanced {
+                    primitive: r.x[1] as u32,
+                    first: r.x[2] as u32,
+                    count: r.x[3] as u32,
+                    base_instance: r.x[4] as u32,
+                    instances: r.x[5] as u32,
+                },
+            )
+        },
+        "nvnCommandBufferDrawElementsBaseVertex" => |i, _, r| {
+            record(
+                i,
+                0,
+                r,
+                RecordedCommand::DrawElementsBaseVertex {
+                    primitive: r.x[1] as u32,
+                    index_type: r.x[2] as u32,
+                    count: r.x[3] as u32,
+                    indices: r.x[4],
+                    base_vertex: r.x[5] as u32,
+                },
+            )
+        },
         "nvnCommandBufferSetDepthRange" => |i, _, r| {
             record(
                 i,

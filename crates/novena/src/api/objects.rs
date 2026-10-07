@@ -38,6 +38,25 @@ pub enum RecordedCommand {
     SetViewport([u64; 5]),
     SetScissor([u64; 5]),
     SetDepthRange([u64; 3]),
+    DrawArrays {
+        primitive: u32,
+        first: u32,
+        count: u32,
+    },
+    DrawArraysInstanced {
+        primitive: u32,
+        first: u32,
+        count: u32,
+        base_instance: u32,
+        instances: u32,
+    },
+    DrawElementsBaseVertex {
+        primitive: u32,
+        index_type: u32,
+        count: u32,
+        indices: u64,
+        base_vertex: u32,
+    },
     Raw {
         function: u32,
         registers: [u64; 8],

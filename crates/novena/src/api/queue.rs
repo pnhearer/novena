@@ -285,6 +285,9 @@ pub fn handler(name: &str) -> Option<Handler> {
                         RecordedCommand::SetViewport(_)
                         | RecordedCommand::SetScissor(_)
                         | RecordedCommand::SetDepthRange(_)
+                        | RecordedCommand::DrawArrays { .. }
+                        | RecordedCommand::DrawArraysInstanced { .. }
+                        | RecordedCommand::DrawElementsBaseVertex { .. }
                         | RecordedCommand::Raw { .. } => {}
                     }
                 }
