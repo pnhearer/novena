@@ -11,7 +11,13 @@ use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+pub type ShaderStage = u32;
+
+pub trait ShaderTranslator: Send + Sync {
+    fn translate(&self, stage: ShaderStage, code: &[u8]) -> Result<Vec<u32>, String>;
+}
 
 /// What the host provides. The program's memory is the host's to manage, so
 /// the library reads and writes it through these callbacks.
@@ -108,6 +114,7 @@ pub struct Instance {
     shapes: Vec<Mutex<FunctionShape>>,
     /// Names the program asked for that are not in the table, with how often.
     unknown_requests: Mutex<BTreeMap<String, u64>>,
+    shader_translator: Mutex<Option<Arc<dyn ShaderTranslator>>>,
     #[cfg(feature = "vulkan")]
     pub(crate) gpu: Mutex<Option<Backend>>,
 }
@@ -141,6 +148,7 @@ impl Instance {
             calls: (0..count).map(|_| AtomicU64::new(0)).collect(),
             shapes: (0..count).map(|_| Mutex::default()).collect(),
             unknown_requests: Mutex::new(BTreeMap::new()),
+            shader_translator: Mutex::new(None),
             #[cfg(feature = "vulkan")]
             gpu: Mutex::new(host.and_then(|h| Backend::new(h.render_scale))),
         }
@@ -149,6 +157,20 @@ impl Instance {
     /// The host this instance was created with.
     pub fn host(&self) -> Option<&Host> {
         self.host.as_ref()
+    }
+
+    pub fn set_shader_translator(&self, translator: Option<Arc<dyn ShaderTranslator>>) {
+        *self
+            .shader_translator
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = translator;
+    }
+
+    pub fn shader_translator(&self) -> Option<Arc<dyn ShaderTranslator>> {
+        self.shader_translator
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// Record that the program asked for `name` and return its id.
@@ -356,6 +378,26 @@ impl fmt::Display for Census {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    struct FakeTranslator;
+
+    impl ShaderTranslator for FakeTranslator {
+        fn translate(&self, stage: ShaderStage, code: &[u8]) -> Result<Vec<u32>, String> {
+            Ok(vec![stage, code.len() as u32])
+        }
+    }
+
+    #[test]
+    fn shader_translator_can_be_registered_and_called() {
+        let instance = Instance::new();
+        assert!(instance.shader_translator().is_none());
+        instance.set_shader_translator(Some(Arc::new(FakeTranslator)));
+        let translator = instance.shader_translator().expect("translator");
+        assert_eq!(translator.translate(7, &[1, 2, 3]), Ok(vec![7, 3]));
+        instance.set_shader_translator(None);
+        assert!(instance.shader_translator().is_none());
+    }
 
     #[test]
     fn a_call_is_counted_and_reported_unimplemented() {

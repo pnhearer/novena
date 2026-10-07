@@ -23,3 +23,5 @@ A register that looked like a leftover from an earlier call is not listed as an 
 | [0003-objects.md](0003-objects.md) | State objects, memory pools, textures, pools and handles, programs, queue, sync, events and window |
 | [0004-pointers.md](0004-pointers.md) | What pointer arguments point to: colours, outputs, arrays of objects, shader records |
 | [0005-device-answers.md](0005-device-answers.md) | The answers the device integer query gave, per selector |
+| [0007-program-shaders.md](0007-program-shaders.md) | The shader setup call and its record |
+| [0008-program-shader-state.md](0008-program-shader-state.md) | Retained shader record state and open fields |
