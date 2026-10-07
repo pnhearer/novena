@@ -171,7 +171,7 @@ mod tests {
             })
         );
         assert_eq!(
-            fs::read(dump_directory.join("2000-0.spv")).unwrap(),
+            fs::read(dump_directory.join("0-7dff408e4ca88672.spv")).unwrap(),
             [0x03, 0x02, 0x23, 0x07, 0x50 + 8, 0, 0, 0]
         );
         fs::remove_dir_all(dump_directory).unwrap();
@@ -190,19 +190,19 @@ fn translate_shaders(
     };
     records
         .iter()
-        .enumerate()
-        .map(|(record_index, record)| {
+        .map(|record| {
             let Some(code) = shader_bytes(instance, record.gpu_addresses[0]) else {
                 instance.record_shader_translation_error("shader bytes unavailable".into());
                 return super::objects::ShaderTranslation::Error("shader bytes unavailable".into());
             };
             match translator.translate(SHADER_STAGE_UNKNOWN, &code) {
                 Ok(words) => {
-                    dump_translation(instance, record.record_address, record_index, &words);
+                    instance.record_successful_shader_translation(&words);
+                    dump_translation(instance, &words);
                     super::objects::ShaderTranslation::Spirv(words)
                 }
                 Err(error) => {
-                    dump_translation_error(instance, record.record_address, record_index, &error);
+                    dump_translation_error(instance, &error);
                     instance.record_shader_translation_error(error.clone());
                     super::objects::ShaderTranslation::Error(error)
                 }
@@ -211,30 +211,32 @@ fn translate_shaders(
         .collect()
 }
 
-fn dump_translation(instance: &Instance, program_address: u64, record_index: usize, words: &[u32]) {
+fn dump_translation(instance: &Instance, words: &[u32]) {
     let Some(directory) = instance.shader_dump_directory() else {
         return;
     };
-    let path = directory.join(format!("{program_address:x}-{record_index}.spv"));
     let bytes = words
         .iter()
         .flat_map(|word| word.to_le_bytes())
         .collect::<Vec<_>>();
+    let Some((sequence, hash)) = instance.next_shader_dump(&bytes) else {
+        return;
+    };
+    let path = directory.join(format!("{sequence}-{hash:016x}.spv"));
     let _ = fs::create_dir_all(&directory).and_then(|()| fs::write(path, bytes));
 }
 
-fn dump_translation_error(
-    instance: &Instance,
-    program_address: u64,
-    record_index: usize,
-    error: &str,
-) {
+fn dump_translation_error(instance: &Instance, error: &str) {
     let Some(directory) = instance.shader_dump_directory() else {
         return;
     };
-    let path = directory.join(format!("{program_address:x}-{record_index}.err"));
     let message = error.lines().next().unwrap_or("");
-    let _ = fs::create_dir_all(&directory).and_then(|()| fs::write(path, format!("{message}\n")));
+    let bytes = format!("{message}\n").into_bytes();
+    let Some((sequence, hash)) = instance.next_shader_dump(&bytes) else {
+        return;
+    };
+    let path = directory.join(format!("{sequence}-{hash:016x}.err"));
+    let _ = fs::create_dir_all(&directory).and_then(|()| fs::write(path, bytes));
 }
 
 fn texture_builder_update(

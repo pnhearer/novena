@@ -7,7 +7,7 @@ use crate::functions::{self, FunctionId};
 use crate::gpu::Backend;
 use crate::observe::{CallSnapshot, FunctionShape};
 use std::cell::Cell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::c_void;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -119,6 +119,10 @@ pub struct Instance {
     shader_translator: Mutex<Option<Arc<dyn ShaderTranslator>>>,
     shader_translation_enabled: AtomicBool,
     shader_dump_directory: Mutex<Option<PathBuf>>,
+    shader_dump_sequence: AtomicU64,
+    shader_dump_hashes: Mutex<BTreeSet<u64>>,
+    successful_shader_translations: AtomicU64,
+    distinct_shader_outputs: Mutex<BTreeSet<u64>>,
     shader_translation_errors: Mutex<BTreeMap<String, u64>>,
     #[cfg(feature = "vulkan")]
     pub(crate) gpu: Mutex<Option<Backend>>,
@@ -156,6 +160,10 @@ impl Instance {
             shader_translator: Mutex::new(None),
             shader_translation_enabled: AtomicBool::new(false),
             shader_dump_directory: Mutex::new(None),
+            shader_dump_sequence: AtomicU64::new(0),
+            shader_dump_hashes: Mutex::new(BTreeSet::new()),
+            successful_shader_translations: AtomicU64::new(0),
+            distinct_shader_outputs: Mutex::new(BTreeSet::new()),
             shader_translation_errors: Mutex::new(BTreeMap::new()),
             #[cfg(feature = "vulkan")]
             gpu: Mutex::new(host.and_then(|h| Backend::new(h.render_scale))),
@@ -214,6 +222,33 @@ impl Instance {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .entry(error)
             .or_default() += 1;
+    }
+
+    pub(crate) fn record_successful_shader_translation(&self, words: &[u32]) {
+        self.successful_shader_translations
+            .fetch_add(1, Ordering::Relaxed);
+        self.distinct_shader_outputs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(hash_bytes(
+                &words
+                    .iter()
+                    .flat_map(|word| word.to_le_bytes())
+                    .collect::<Vec<_>>(),
+            ));
+    }
+
+    pub(crate) fn next_shader_dump(&self, bytes: &[u8]) -> Option<(u64, u64)> {
+        let hash = hash_bytes(bytes);
+        let mut hashes = self
+            .shader_dump_hashes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if !hashes.insert(hash) {
+            return None;
+        }
+        let sequence = self.shader_dump_sequence.fetch_add(1, Ordering::Relaxed);
+        Some((sequence, hash))
     }
 
     /// Record that the program asked for `name` and return its id.
@@ -383,6 +418,14 @@ impl Instance {
         Census {
             functions,
             unknown_requests,
+            successful_shader_translations: self
+                .successful_shader_translations
+                .load(Ordering::Relaxed),
+            distinct_shader_outputs: self
+                .distinct_shader_outputs
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .len(),
             shader_translation_errors: self
                 .shader_translation_errors
                 .lock()
@@ -409,6 +452,8 @@ struct CensusEntry {
 pub struct Census {
     functions: Vec<CensusEntry>,
     unknown_requests: BTreeMap<String, u64>,
+    successful_shader_translations: u64,
+    distinct_shader_outputs: usize,
     shader_translation_errors: BTreeMap<String, u64>,
 }
 
@@ -455,8 +500,19 @@ impl fmt::Display for Census {
         for (error, count) in &self.shader_translation_errors {
             writeln!(f, "shader-translation-error {count} {error}")?;
         }
+        writeln!(
+            f,
+            "shader-translations-successful {} distinct-outputs {}",
+            self.successful_shader_translations, self.distinct_shader_outputs
+        )?;
         Ok(())
     }
+}
+
+fn hash_bytes(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf29ce484222325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+    })
 }
 
 #[cfg(test)]
@@ -530,7 +586,11 @@ mod tests {
         assert!(text.contains(&format!("0 yes {first_name}\n")), "{text}");
         assert!(text.contains(&format!("1 no {second_name}\n")), "{text}");
         assert!(text.contains("unknown 2 somethingElse\n"), "{text}");
-        assert_eq!(text.lines().count(), 5, "{text}");
+        assert!(
+            text.contains("shader-translations-successful 0 distinct-outputs 0\n"),
+            "{text}"
+        );
+        assert_eq!(text.lines().count(), 6, "{text}");
     }
 
     #[test]
