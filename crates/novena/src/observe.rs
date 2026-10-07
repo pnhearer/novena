@@ -172,6 +172,8 @@ impl fmt::Display for RegisterShape {
 /// Bytes looked at behind an address argument.
 pub const POINTEE_BYTES: usize = 64;
 const POINTEE_WORDS: usize = POINTEE_BYTES / 4;
+const SHADER_BYTES: usize = 0x80;
+const SHADER_WORDS: usize = SHADER_BYTES / 4;
 const WORD_DISTINCT_LIMIT: usize = 4;
 
 /// What one 32-bit word behind an address argument held across the sampled
@@ -256,6 +258,123 @@ fn word(bytes: &[u8; POINTEE_BYTES], index: usize) -> u32 {
             .try_into()
             .expect("four bytes"),
     )
+}
+
+fn read_shader(host: Option<&Host>, address: u64) -> Option<[u8; SHADER_BYTES]> {
+    let host = host?;
+    let read = host.read_memory?;
+    if !(LOWEST_ADDRESS..ADDRESS_LIMIT).contains(&address) {
+        return None;
+    }
+    let mut bytes = [0u8; SHADER_BYTES];
+    (unsafe { read(host.user, address, bytes.as_mut_ptr(), SHADER_BYTES as u64) } == 0)
+        .then_some(bytes)
+}
+
+fn shader_word(bytes: &[u8; SHADER_BYTES], index: usize) -> u32 {
+    u32::from_le_bytes(
+        bytes[index * 4..index * 4 + 4]
+            .try_into()
+            .expect("four bytes"),
+    )
+}
+
+#[derive(Debug, Clone, Default)]
+struct ShaderShape {
+    samples: u64,
+    unreadable: u64,
+    words: [WordShape; SHADER_WORDS],
+    leading_nonzero: u64,
+    repeating_header: u64,
+    length_hint: Option<usize>,
+}
+
+impl ShaderShape {
+    fn record(&mut self, host: Option<&Host>, address: u64) {
+        let Some(bytes) = read_shader(host, address) else {
+            self.unreadable += 1;
+            return;
+        };
+        self.samples += 1;
+        let first = self.samples == 1;
+        for (index, shape) in self.words.iter_mut().enumerate() {
+            shape.record(shader_word(&bytes, index), first);
+        }
+        let leading = (0..SHADER_WORDS)
+            .take_while(|&index| shader_word(&bytes, index) != 0)
+            .count();
+        self.leading_nonzero += leading as u64;
+        self.repeating_header += u64::from((1..=8).any(|period| {
+            (period..SHADER_WORDS)
+                .all(|index| shader_word(&bytes, index) == shader_word(&bytes, index % period))
+        }));
+        if self.length_hint.is_none() {
+            let read = host.and_then(|host| host.read_memory);
+            let mut chunk = [0u8; 256];
+            'scan: for offset in (0..0x1000).step_by(chunk.len()) {
+                let Some(read) = read else { break };
+                let Some(at) = address.checked_add(offset as u64) else {
+                    break;
+                };
+                if unsafe {
+                    read(
+                        host.unwrap().user,
+                        at,
+                        chunk.as_mut_ptr(),
+                        chunk.len() as u64,
+                    )
+                } != 0
+                {
+                    break;
+                }
+                for start in (0..chunk.len()).step_by(4) {
+                    if start + 64 <= chunk.len()
+                        && chunk[start..start + 64].iter().all(|&byte| byte == 0)
+                    {
+                        self.length_hint = Some(offset + start);
+                        break 'scan;
+                    }
+                }
+            }
+        }
+    }
+
+    fn write(&self, out: &mut String, offset: usize) {
+        let _ = writeln!(
+            out,
+            "  shader +{offset:#04x} samples={} unreadable={}",
+            self.samples, self.unreadable
+        );
+        if self.samples == 0 {
+            return;
+        }
+        let _ = writeln!(
+            out,
+            "    leading-nonzero-total={} repeating-header={}/{} length-hint={}",
+            self.leading_nonzero,
+            self.repeating_header,
+            self.samples,
+            self.length_hint.unwrap_or(0x1000)
+        );
+        for (index, shape) in self.words.iter().enumerate() {
+            let mut line = format!("    +{:#04x} ", index * 4);
+            if shape.max == 0 {
+                line.push_str("zero");
+            } else if u64::from(shape.max) < LOWEST_ADDRESS {
+                let _ = write!(
+                    line,
+                    "small min={:#x} max={:#x} values=[",
+                    shape.min, shape.max
+                );
+                push_words(&mut line, shape, |value| format!("{value:#x}"));
+            } else if shape.floats + shape.zeros == self.samples {
+                line.push_str("f32");
+            } else {
+                line.push_str("other");
+            }
+            let _ = writeln!(out, "{line}");
+        }
+    }
 }
 
 impl PointeeShape {
@@ -376,6 +495,7 @@ pub struct FunctionShape {
     sampled_calls: u64,
     sampled_returns: u64,
     pointees: [PointeeShape; 8],
+    shader_values: [ShaderShape; 2],
     /// For a call shaped like `f(object, selector, out)`: the selector in x1
     /// and the 32-bit value the call wrote through x2, one entry per
     /// distinct selector. This is how a query function's answers are
@@ -430,6 +550,13 @@ impl FunctionShape {
             self.x[index].record(value, readable);
             if let Some(bytes) = bytes {
                 self.pointees[index].record(host, &bytes);
+                if index == 2 {
+                    for (slot, start) in [0usize, 12].into_iter().enumerate() {
+                        let address = u64::from(word(&bytes, start / 4))
+                            | u64::from(word(&bytes, start / 4 + 1)) << 32;
+                        self.shader_values[slot].record(host, address);
+                    }
+                }
                 snapshot.pointees[index] = Some((value, bytes));
             }
         }
@@ -521,6 +648,10 @@ impl FunctionShape {
         }
         for (index, shape) in self.d.iter().enumerate() {
             let _ = writeln!(out, "  d{index} {shape}");
+        }
+        if name == "ProgramSetShaders" || name == "nvnProgramSetShaders" {
+            self.shader_values[0].write(out, 0);
+            self.shader_values[1].write(out, 0x30);
         }
         if !self.keyed_outputs.is_empty() {
             let mut line = String::from("  x1 -> *x2 after call:");
