@@ -902,6 +902,7 @@ mod tests {
                 flags: 0,
                 storage: PAGE_BASE,
                 size: 0x100,
+                gpu_address: None,
             },
         );
         let host = Host {

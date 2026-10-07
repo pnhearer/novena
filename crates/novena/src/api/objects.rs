@@ -78,6 +78,12 @@ pub struct ShaderRecord {
     pub raw_words: [u64; 8],
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShaderTranslation {
+    Spirv(Vec<u32>),
+    Error(String),
+}
+
 /// What novena knows about one object. Field meanings follow the signature
 /// tables; unknown enumerations are kept as the integers the program passed.
 #[derive(Debug, Clone, Default)]
@@ -136,6 +142,7 @@ pub enum Object {
         flags: u64,
         storage: u64,
         size: u64,
+        gpu_address: Option<u64>,
     },
     TextureBuilder(TextureDescription),
     Texture {
@@ -165,6 +172,7 @@ pub enum Object {
     Program {
         device: u64,
         shader_records: Vec<ShaderRecord>,
+        shader_translations: Vec<ShaderTranslation>,
     },
     /// A state object. Its fields are not interpreted yet; the program's
     /// calls are kept as (function, arguments) so they are not lost.
@@ -291,23 +299,28 @@ impl Objects {
     }
 
     /// Resolve a GPU address against the registered pool ranges. novena uses
-    /// each pool's program storage address as its GPU base.
+    /// each pool's observed buffer address as its GPU base.
     pub fn resolve_gpu_address(&self, address: u64) -> Result<GpuAddress, GpuAddressError> {
-        let pools: Vec<(u64, u64, u64)> = self
+        let pools: Vec<(u64, u64, u64, u64)> = self
             .lock()
             .iter()
             .filter_map(|(pool, object)| match object {
-                Object::MemoryPool { storage, size, .. } => Some((*pool, *storage, *size)),
+                Object::MemoryPool {
+                    storage,
+                    size,
+                    gpu_address,
+                    ..
+                } => Some((*pool, *storage, gpu_address.unwrap_or(*storage), *size)),
                 _ => None,
             })
             .collect();
         let mut matched_base = None;
-        for (pool, base, size) in pools {
+        for (pool, storage, base, size) in pools {
             let Some(offset) = address.checked_sub(base) else {
                 continue;
             };
             if offset < size {
-                let Some(program_address) = base.checked_add(offset) else {
+                let Some(program_address) = storage.checked_add(offset) else {
                     return Err(GpuAddressError::UnknownAddress);
                 };
                 return Ok(GpuAddress {
@@ -366,6 +379,7 @@ mod tests {
                 flags: 0,
                 storage: 0x10_0000,
                 size: 0x100,
+                gpu_address: None,
             },
         );
         assert_eq!(

@@ -90,6 +90,7 @@ pub fn handler(name: &str) -> Option<Handler> {
                     flags,
                     storage,
                     size,
+                    gpu_address: None,
                 },
             );
             succeed(registers)
