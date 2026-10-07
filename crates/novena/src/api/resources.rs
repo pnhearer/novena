@@ -7,6 +7,7 @@ use super::{
     read_f32x4, succeed, Handler,
 };
 use crate::instance::{Instance, Registers, Status, SHADER_STAGE_UNKNOWN};
+use std::fs;
 
 const MAX_SHADER_BYTES: usize = 64 * 1024;
 
@@ -40,6 +41,8 @@ mod tests {
     use crate::api::{Object, ShaderTranslation};
     use crate::{Host, Registers, ShaderStage, ShaderTranslator, SHADER_STAGE_UNKNOWN};
     use std::ffi::c_void;
+    use std::fs;
+    use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
     struct Memory {
@@ -111,6 +114,12 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         instance.set_shader_translator(Some(Arc::new(FakeTranslator(seen.clone()))));
         instance.set_shader_translation_enabled(true);
+        let dump_directory = PathBuf::from(format!(
+            "/tmp/novena-spirv-dump-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dump_directory);
+        instance.set_shader_dump_directory(Some(&dump_directory));
         let mut init = Registers {
             x: [9, 0, 0, 0, 0, 0, 0, 0],
             ..Registers::default()
@@ -147,6 +156,11 @@ mod tests {
                 shader_translations: vec![ShaderTranslation::Spirv(vec![0x0723_0203, 5])]
             })
         );
+        assert_eq!(
+            fs::read(dump_directory.join("2000-0.spv")).unwrap(),
+            [0x03, 0x02, 0x23, 0x07, 5, 0, 0, 0]
+        );
+        fs::remove_dir_all(dump_directory).unwrap();
     }
 }
 
@@ -162,20 +176,51 @@ fn translate_shaders(
     };
     records
         .iter()
-        .map(|record| {
+        .enumerate()
+        .map(|(record_index, record)| {
             let Some(code) = shader_bytes(instance, record.gpu_addresses[0]) else {
                 instance.record_shader_translation_error("shader bytes unavailable".into());
                 return super::objects::ShaderTranslation::Error("shader bytes unavailable".into());
             };
             match translator.translate(SHADER_STAGE_UNKNOWN, &code) {
-                Ok(words) => super::objects::ShaderTranslation::Spirv(words),
+                Ok(words) => {
+                    dump_translation(instance, record.record_address, record_index, &words);
+                    super::objects::ShaderTranslation::Spirv(words)
+                }
                 Err(error) => {
+                    dump_translation_error(instance, record.record_address, record_index, &error);
                     instance.record_shader_translation_error(error.clone());
                     super::objects::ShaderTranslation::Error(error)
                 }
             }
         })
         .collect()
+}
+
+fn dump_translation(instance: &Instance, program_address: u64, record_index: usize, words: &[u32]) {
+    let Some(directory) = instance.shader_dump_directory() else {
+        return;
+    };
+    let path = directory.join(format!("{program_address:x}-{record_index}.spv"));
+    let bytes = words
+        .iter()
+        .flat_map(|word| word.to_le_bytes())
+        .collect::<Vec<_>>();
+    let _ = fs::create_dir_all(&directory).and_then(|()| fs::write(path, bytes));
+}
+
+fn dump_translation_error(
+    instance: &Instance,
+    program_address: u64,
+    record_index: usize,
+    error: &str,
+) {
+    let Some(directory) = instance.shader_dump_directory() else {
+        return;
+    };
+    let path = directory.join(format!("{program_address:x}-{record_index}.err"));
+    let message = error.lines().next().unwrap_or("");
+    let _ = fs::create_dir_all(&directory).and_then(|()| fs::write(path, format!("{message}\n")));
 }
 
 fn texture_builder_update(

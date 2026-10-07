@@ -79,6 +79,12 @@ novena_instance *novena_instance_create(const novena_host *host);
  * may be made afterwards. */
 void novena_instance_destroy(novena_instance *instance);
 
+/* Set or clear (with null) the directory for local debugging dumps of
+ * translated shaders. Files contain translated output derived from the
+ * observed program's shaders, never the original shader bytes. */
+novena_status novena_instance_set_shader_dump_directory(const novena_instance *instance,
+                                                         const char *directory);
+
 /* The program asked its bootstrap function for a name. Records the request
  * and returns the function id, or NOVENA_FUNCTION_NONE. */
 uint32_t novena_instance_request(const novena_instance *instance, const char *name);

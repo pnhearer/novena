@@ -10,6 +10,7 @@ use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::fmt;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -117,6 +118,7 @@ pub struct Instance {
     unknown_requests: Mutex<BTreeMap<String, u64>>,
     shader_translator: Mutex<Option<Arc<dyn ShaderTranslator>>>,
     shader_translation_enabled: AtomicBool,
+    shader_dump_directory: Mutex<Option<PathBuf>>,
     shader_translation_errors: Mutex<BTreeMap<String, u64>>,
     #[cfg(feature = "vulkan")]
     pub(crate) gpu: Mutex<Option<Backend>>,
@@ -153,6 +155,7 @@ impl Instance {
             unknown_requests: Mutex::new(BTreeMap::new()),
             shader_translator: Mutex::new(None),
             shader_translation_enabled: AtomicBool::new(false),
+            shader_dump_directory: Mutex::new(None),
             shader_translation_errors: Mutex::new(BTreeMap::new()),
             #[cfg(feature = "vulkan")]
             gpu: Mutex::new(host.and_then(|h| Backend::new(h.render_scale))),
@@ -181,6 +184,23 @@ impl Instance {
     pub fn set_shader_translation_enabled(&self, enabled: bool) {
         self.shader_translation_enabled
             .store(enabled, Ordering::Relaxed);
+    }
+
+    /// Set the directory for optional translated shader dumps. `None` disables
+    /// dumping. The directory receives output derived from the observed
+    /// program's shaders, never the original shader bytes.
+    pub fn set_shader_dump_directory(&self, directory: Option<&Path>) {
+        *self
+            .shader_dump_directory
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = directory.map(Path::to_path_buf);
+    }
+
+    pub(crate) fn shader_dump_directory(&self) -> Option<PathBuf> {
+        self.shader_dump_directory
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     pub(crate) fn shader_translation_enabled(&self) -> bool {

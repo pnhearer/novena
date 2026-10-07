@@ -26,6 +26,7 @@ use functions::FunctionId;
 use std::cell::RefCell;
 use std::ffi::{c_char, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::Path;
 
 /// Version of the host interface. It changes when a host built against an
 /// older `include/novena.h` could no longer use the library.
@@ -152,6 +153,36 @@ pub unsafe extern "C" fn novena_instance_destroy(instance: *mut Instance) {
         if !instance.is_null() {
             drop(unsafe { Box::from_raw(instance) });
         }
+    })
+}
+
+/// Set or clear the directory for local debugging dumps of translated
+/// shaders. The files contain translated output derived from the observed
+/// program's shaders and never the original shader bytes.
+///
+/// # Safety
+/// `instance` must be live and `directory` must be null or NUL-terminated
+/// UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn novena_instance_set_shader_dump_directory(
+    instance: *const Instance,
+    directory: *const c_char,
+) -> Status {
+    ffi_guard(Status::InternalError, || {
+        let Some(instance) = (unsafe { instance.as_ref() }) else {
+            return Status::BadArgument;
+        };
+        let path = if directory.is_null() {
+            None
+        } else {
+            let value = unsafe { CStr::from_ptr(directory) };
+            let Ok(value) = value.to_str() else {
+                return Status::BadArgument;
+            };
+            Some(Path::new(value))
+        };
+        instance.set_shader_dump_directory(path);
+        Status::Ok
     })
 }
 

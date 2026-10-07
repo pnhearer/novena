@@ -25,6 +25,10 @@ What works today:
 - Recorded draw commands and retained shader records.
 - GPU address resolution through registered memory pools, including pools learned from observed calls.
 - An opt-in `ShaderTranslator` hook that receives bounded shader bytes during shader setup and retains translated words or error counts.
+- An off-by-default translated-shader dump for local debugging. A host can set
+  a dump directory; successful translations are written as SPIR-V files and
+  failures as one-line error files. The output is derived from the observed
+  program's shaders, and the original shader bytes are never written.
 - CI coverage for the optional Vulkan feature.
 
 About 130 functions, the set-up path, have behaviour: novena keeps a record of the program's objects and answers queries from observed data. One program runs on novena alone, presenting frame after frame with clears but no executed draws ([notes 0010 and 0011](docs/provenance/0011-running-past-the-first-frame.md)). Draw commands and shader records are retained, but draws are skipped. Shader translation is available only when a host registers a translator and enables it. Vulkan texture copies, shader execution, and draw execution are not implemented. Other calls are counted and answered as "not implemented".
@@ -47,6 +51,10 @@ Working at that level has practical uses:
 - There is no hardware command stream to decode.
 
 One thing does not go away. Software for the platform ships its shaders already compiled for the original graphics processor. novena can pass retained shader bytes to an opt-in translator hook, but it does not provide a translator or execute translated shaders.
+
+The optional dump directory is for local debugging only. It writes translated
+output derived from the observed program's shaders, never the original shader
+bytes.
 
 ## What it is not
 
