@@ -9,7 +9,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -20,5 +20,11 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo clippy --all-targets --features vulkan -- -D warnings
       - run: cargo test
-      - run: cargo test --features vulkan
-      - run: examples/run-host.sh
+      - name: Test without a Vulkan device
+        run: VK_ICD_FILENAMES=/tmp/novena-no-such-vulkan-icd.json cargo test --features vulkan
+      - run: cargo build --release
+      - name: Check the C consumer
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -Iinclude examples/host.c \
+            -Ltarget/release -lnovena -o /tmp/novena-c-consumer
+          LD_LIBRARY_PATH=target/release /tmp/novena-c-consumer /tmp/novena-census.txt
