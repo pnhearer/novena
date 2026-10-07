@@ -9,28 +9,38 @@ use super::{
 use crate::instance::{Instance, Registers, Status, SHADER_STAGE_UNKNOWN};
 
 const MAX_SHADER_BYTES: usize = 64 * 1024;
+const SHADER_PREFIX: usize = 0x30;
+const SHADER_CODE_OFFSET: usize = 0x80;
 
 fn shader_bytes(instance: &Instance, address: u64) -> Option<Vec<u8>> {
     let resolution = instance.objects.resolve_gpu_address(address).ok()?;
-    let mut bytes = vec![0; MAX_SHADER_BYTES];
-    let mut length = MAX_SHADER_BYTES;
+    let available = usize::try_from(resolution.remaining).ok()?;
+    if available <= SHADER_PREFIX {
+        return None;
+    }
+    let limit = available.min(MAX_SHADER_BYTES);
+    let mut bytes = vec![0; limit];
+    let mut length = limit;
     let mut chunk = [0u8; 256];
-    for offset in (0..MAX_SHADER_BYTES).step_by(chunk.len()) {
+    let scan_start = SHADER_CODE_OFFSET.min(limit);
+    for offset in (scan_start..limit).step_by(chunk.len()) {
+        let read_length = chunk.len().min(limit - offset);
         let address = resolution.program_address.checked_add(offset as u64)?;
-        if !instance.read_memory(address, &mut chunk) {
+        if !instance.read_memory(address, &mut chunk[..read_length]) {
             return None;
         }
-        bytes[offset..offset + chunk.len()].copy_from_slice(&chunk);
-        if let Some(start) = chunk
-            .windows(64)
-            .position(|window| window.iter().all(|&b| b == 0))
-        {
-            length = offset + start;
+        bytes[offset..offset + read_length].copy_from_slice(&chunk[..read_length]);
+        for start in (0..read_length.saturating_sub(63)).step_by(4) {
+            if chunk[start..start + 64].iter().all(|&byte| byte == 0) {
+                length = offset + start;
+                break;
+            }
+        }
+        if length != limit {
             break;
         }
     }
-    bytes.truncate(length);
-    Some(bytes)
+    Some(bytes[SHADER_PREFIX..length].to_vec())
 }
 
 #[cfg(test)]
@@ -86,7 +96,7 @@ mod tests {
         });
         let record = 0x2000usize - base as usize;
         let code = 0x1080usize - base as usize;
-        memory.bytes[record..record + 8].copy_from_slice(&0x1080u64.to_le_bytes());
+        memory.bytes[record..record + 8].copy_from_slice(&0x1000u64.to_le_bytes());
         memory.bytes[code..code + 4].copy_from_slice(&1u32.to_le_bytes());
         memory.bytes[code + 4..code + 8].copy_from_slice(&2u32.to_le_bytes());
         let host = Host {
@@ -134,17 +144,21 @@ mod tests {
             Status::Ok
         );
         assert_eq!(seen.lock().unwrap()[0].0, SHADER_STAGE_UNKNOWN);
-        assert_eq!(seen.lock().unwrap()[0].1.len(), 5);
+        assert_eq!(seen.lock().unwrap()[0].1.len(), 0x50 + 8);
+        assert_eq!(
+            u32::from_le_bytes(seen.lock().unwrap()[0].1[0x50..0x54].try_into().unwrap()),
+            1
+        );
         assert_eq!(
             instance.objects.get(9),
             Some(Object::Program {
                 device: 0,
                 shader_records: vec![crate::api::ShaderRecord {
                     record_address: 0x2000,
-                    gpu_addresses: [0x1080, 0],
-                    raw_words: [0x1080, 0, 0, 0, 0, 0, 0, 0]
+                    gpu_addresses: [0x1000, 0],
+                    raw_words: [0x1000, 0, 0, 0, 0, 0, 0, 0]
                 }],
-                shader_translations: vec![ShaderTranslation::Spirv(vec![0x0723_0203, 5])]
+                shader_translations: vec![ShaderTranslation::Spirv(vec![0x0723_0203, 0x50 + 8])]
             })
         );
     }

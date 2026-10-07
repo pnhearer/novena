@@ -578,6 +578,7 @@ mod tests {
             Ok(crate::api::GpuAddress {
                 pool: 21,
                 offset: 0x80,
+                remaining: 0x80,
                 program_address: 0x1080,
             })
         );
