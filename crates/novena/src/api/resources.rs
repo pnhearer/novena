@@ -13,6 +13,46 @@ const MAX_SHADER_BYTES: usize = 64 * 1024;
 const SHADER_PREFIX: usize = 0x30;
 const SHADER_CODE_OFFSET: usize = 0x80;
 
+/// Program data starts with a magic word that selects the layout (observed
+/// on a real program, docs/provenance): 0x12345678 is a graphics program
+/// with the 80-byte shader header at +0x30 and code at +0x80; 0x12345679 is
+/// a compute program with no header and code at +0x100. The translator gets
+/// the header followed by the code; a compute program gets an all-zero
+/// header, which parses as the compute shader type.
+const GRAPHICS_MAGIC: u32 = 0x1234_5678;
+const COMPUTE_MAGIC: u32 = 0x1234_5679;
+const COMPUTE_CODE_OFFSET: usize = 0x100;
+const SHADER_HEADER_SIZE: usize = SHADER_CODE_OFFSET - SHADER_PREFIX;
+
+/// Header followed by code, from program memory read from its start.
+fn layout_bytes(memory: &[u8]) -> Result<Vec<u8>, &'static str> {
+    if memory.len() <= SHADER_CODE_OFFSET {
+        return Err("no code after header");
+    }
+    let magic = u32::from_le_bytes(memory[..4].try_into().unwrap());
+    let (header, code_offset) = match magic {
+        COMPUTE_MAGIC => ([0u8; SHADER_HEADER_SIZE], COMPUTE_CODE_OFFSET),
+        GRAPHICS_MAGIC => (
+            memory[SHADER_PREFIX..SHADER_CODE_OFFSET]
+                .try_into()
+                .unwrap(),
+            SHADER_CODE_OFFSET,
+        ),
+        _ => return Err("unknown shader layout magic"),
+    };
+    let code = memory.get(code_offset..).unwrap_or(&[]);
+    let length = (0..code.len().saturating_sub(63))
+        .step_by(4)
+        .find(|&start| code[start..start + 64].iter().all(|&byte| byte == 0))
+        .unwrap_or(code.len());
+    if length == 0 {
+        return Err("no code after header");
+    }
+    let mut bytes = header.to_vec();
+    bytes.extend_from_slice(&code[..length]);
+    Ok(bytes)
+}
+
 fn shader_bytes(instance: &Instance, address: u64) -> Result<Vec<u8>, &'static str> {
     let resolution = instance
         .objects
@@ -20,38 +60,55 @@ fn shader_bytes(instance: &Instance, address: u64) -> Result<Vec<u8>, &'static s
         .map_err(|_| "shader bytes unavailable")?;
     let available =
         usize::try_from(resolution.remaining).map_err(|_| "shader bytes unavailable")?;
-    if available <= SHADER_PREFIX {
+    if available <= SHADER_CODE_OFFSET {
         return Err("shader bytes unavailable");
     }
     let limit = available.min(MAX_SHADER_BYTES);
-    let mut bytes = vec![0; limit];
-    let mut length = limit;
+    let mut prefix = [0u8; SHADER_CODE_OFFSET];
+    if !instance.read_memory(resolution.program_address, &mut prefix) {
+        return Err("shader bytes unavailable");
+    }
+    let magic = u32::from_le_bytes(prefix[..4].try_into().unwrap());
+    let (header, code_offset) = match magic {
+        COMPUTE_MAGIC => ([0u8; SHADER_HEADER_SIZE], COMPUTE_CODE_OFFSET),
+        GRAPHICS_MAGIC => (
+            prefix[SHADER_PREFIX..SHADER_CODE_OFFSET]
+                .try_into()
+                .unwrap(),
+            SHADER_CODE_OFFSET,
+        ),
+        _ => return Err("unknown shader layout magic"),
+    };
+    if limit <= code_offset {
+        return Err("no code after header");
+    }
+    let mut code = vec![0; limit - code_offset];
+    let mut length = code.len();
     let mut chunk = [0u8; 256];
-    let scan_start = SHADER_CODE_OFFSET.min(limit);
-    for offset in (scan_start..limit).step_by(chunk.len()) {
-        let read_length = chunk.len().min(limit - offset);
-        let address = resolution
+    for offset in (0..code.len()).step_by(chunk.len()) {
+        let read_length = chunk.len().min(code.len() - offset);
+        let at = resolution
             .program_address
-            .checked_add(offset as u64)
+            .checked_add((code_offset + offset) as u64)
             .ok_or("shader bytes unavailable")?;
-        if !instance.read_memory(address, &mut chunk[..read_length]) {
+        if !instance.read_memory(at, &mut chunk[..read_length]) {
             return Err("shader bytes unavailable");
         }
-        bytes[offset..offset + read_length].copy_from_slice(&chunk[..read_length]);
-        for start in (0..read_length.saturating_sub(63)).step_by(4) {
-            if chunk[start..start + 64].iter().all(|&byte| byte == 0) {
-                length = offset + start;
-                break;
-            }
-        }
-        if length != limit {
+        code[offset..offset + read_length].copy_from_slice(&chunk[..read_length]);
+        if let Some(start) = (0..read_length.saturating_sub(63))
+            .step_by(4)
+            .find(|&start| chunk[start..start + 64].iter().all(|&byte| byte == 0))
+        {
+            length = offset + start;
             break;
         }
     }
-    if length <= SHADER_CODE_OFFSET {
+    if length == 0 {
         return Err("no code after header");
     }
-    Ok(bytes[SHADER_PREFIX..length].to_vec())
+    let mut bytes = header.to_vec();
+    bytes.extend_from_slice(&code[..length]);
+    Ok(bytes)
 }
 
 pub(crate) fn retry_pending(instance: &Instance, program: u64, point: &'static str) {
@@ -65,22 +122,14 @@ pub(crate) fn retry_pending(instance: &Instance, program: u64, point: &'static s
             instance.fail_pending_shader(program, entry.record_index);
             continue;
         }
-        let end = bytes.len();
-        let mut code_end = end;
-        for start in (SHADER_CODE_OFFSET..end.saturating_sub(63)).step_by(4) {
-            if bytes[start..start + 64].iter().all(|&byte| byte == 0) {
-                code_end = start;
-                break;
-            }
-        }
-        if code_end <= SHADER_CODE_OFFSET {
+        let Ok(program_bytes) = layout_bytes(&bytes) else {
             instance.fail_pending_shader(program, entry.record_index);
             continue;
-        }
+        };
         let Some(translator) = instance.shader_translator() else {
             continue;
         };
-        match translator.translate(SHADER_STAGE_UNKNOWN, &bytes[SHADER_PREFIX..code_end]) {
+        match translator.translate(SHADER_STAGE_UNKNOWN, &program_bytes) {
             Ok(words) => {
                 instance.record_successful_shader_translation(&words);
                 instance.record_late_read(point);
@@ -152,6 +201,25 @@ mod tests {
     }
 
     #[test]
+    fn program_layout_follows_the_magic_word() {
+        let mut graphics = vec![0u8; 0x200];
+        graphics[..4].copy_from_slice(&GRAPHICS_MAGIC.to_le_bytes());
+        graphics[0x30] = 0xaa;
+        graphics[0x80..0x88].copy_from_slice(&[1; 8]);
+        let bytes = layout_bytes(&graphics).unwrap();
+        assert_eq!((bytes.len(), bytes[0], bytes[0x50]), (0x50 + 8, 0xaa, 1));
+
+        let mut compute = vec![0u8; 0x200];
+        compute[..4].copy_from_slice(&COMPUTE_MAGIC.to_le_bytes());
+        compute[0x100..0x108].copy_from_slice(&[2; 8]);
+        let bytes = layout_bytes(&compute).unwrap();
+        assert!(bytes[..0x50].iter().all(|&b| b == 0));
+        assert_eq!(&bytes[0x50..], &[2; 8]);
+
+        assert!(layout_bytes(&[0u8; 0x200]).is_err());
+    }
+
+    #[test]
     fn enabled_translation_uses_resolved_bytes_and_retains_spirv() {
         let base = 0x1000;
         let mut memory = Box::new(Memory {
@@ -161,6 +229,8 @@ mod tests {
         let record = 0x2000usize - base as usize;
         let code = 0x1080usize - base as usize;
         memory.bytes[record..record + 8].copy_from_slice(&0x1000u64.to_le_bytes());
+        // Graphics program layout: magic, header at +0x30, code at +0x80.
+        memory.bytes[0..4].copy_from_slice(&GRAPHICS_MAGIC.to_le_bytes());
         memory.bytes[code..code + 4].copy_from_slice(&1u32.to_le_bytes());
         memory.bytes[code + 4..code + 8].copy_from_slice(&2u32.to_le_bytes());
         let host = Host {
@@ -254,6 +324,7 @@ fn translate_shaders(
         .iter()
         .enumerate()
         .map(|(record_index, record)| {
+            dump_record(instance, record);
             let code = match shader_bytes(instance, record.gpu_addresses[0]) {
                 Ok(code) => code,
                 Err(error) => {
@@ -301,6 +372,57 @@ fn translate_shaders(
             }
         })
         .collect()
+}
+
+/// Opt-in observation for working out shader record layouts: when
+/// NOVENA_RECORD_DUMP_DIR is set, write each SetShaders record's raw words
+/// and, for every word that resolves to program memory, the bytes from
+/// 0x80 before it to 0x180 after it. Written once per record address. The
+/// output contains program data and belongs in a private directory.
+fn dump_record(instance: &Instance, record: &ShaderRecord) {
+    let Some(directory) = std::env::var_os("NOVENA_RECORD_DUMP_DIR") else {
+        return;
+    };
+    let directory = std::path::PathBuf::from(directory);
+    // Programs reuse record memory, so key by the record's contents.
+    let key = record
+        .raw_words
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325u64, |h, w| {
+            (h ^ w).wrapping_mul(0x0100_0000_01b3)
+        });
+    let path = directory.join(format!("{key:016x}.txt"));
+    if path.exists() {
+        return;
+    }
+    let mut text = String::new();
+    for (index, word) in record.raw_words.iter().enumerate() {
+        text.push_str(&format!("word +0x{:02x}: {word:#018x}\n", index * 8));
+    }
+    for (index, word) in record.raw_words.iter().enumerate() {
+        let Ok(resolution) = instance.objects.resolve_gpu_address(*word) else {
+            continue;
+        };
+        let start = resolution.program_address.saturating_sub(0x80);
+        let mut bytes = vec![0u8; 0x200];
+        if !instance.read_memory(start, &mut bytes) {
+            continue;
+        }
+        text.push_str(&format!(
+            "window for word +0x{:02x} (program address {:#x}, from -0x80):\n",
+            index * 8,
+            resolution.program_address
+        ));
+        for (row, chunk) in bytes.chunks(16).enumerate() {
+            let hex = chunk
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            text.push_str(&format!("  {:+5}: {hex}\n", row as i64 * 16 - 0x80));
+        }
+    }
+    let _ = fs::create_dir_all(&directory).and_then(|()| fs::write(path, text));
 }
 
 fn dump_translation(instance: &Instance, words: &[u32]) {
