@@ -329,24 +329,28 @@ impl ShaderShape {
         if self.length_hint.is_none() {
             let read = host.and_then(|host| host.read_memory);
             let mut chunk = [0u8; 256];
-            'scan: for offset in (0..0x1000).step_by(chunk.len()) {
+            let limit = usize::try_from(resolution.remaining)
+                .unwrap_or(usize::MAX)
+                .min(64 * 1024);
+            'scan: for offset in (0x80..limit).step_by(chunk.len()) {
                 let Some(read) = read else { break };
                 let Some(at) = address.checked_add(offset as u64) else {
                     break;
                 };
+                let read_length = chunk.len().min(limit - offset);
                 if unsafe {
                     read(
                         host.unwrap().user,
                         at,
                         chunk.as_mut_ptr(),
-                        chunk.len() as u64,
+                        read_length as u64,
                     )
                 } != 0
                 {
                     break;
                 }
-                for start in (0..chunk.len()).step_by(4) {
-                    if start + 64 <= chunk.len()
+                for start in (0..read_length.saturating_sub(63)).step_by(4) {
+                    if start + 64 <= read_length
                         && chunk[start..start + 64].iter().all(|&byte| byte == 0)
                     {
                         self.length_hint = Some(offset + start);

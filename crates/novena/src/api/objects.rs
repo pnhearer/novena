@@ -243,6 +243,7 @@ pub struct Objects {
 pub struct GpuAddress {
     pub pool: u64,
     pub offset: u64,
+    pub remaining: u64,
     pub program_address: u64,
 }
 
@@ -326,6 +327,7 @@ impl Objects {
                 return Ok(GpuAddress {
                     pool,
                     offset,
+                    remaining: size - offset,
                     program_address,
                 });
             }
@@ -387,6 +389,7 @@ mod tests {
             Ok(GpuAddress {
                 pool: 1,
                 offset: 0x20,
+                remaining: 0xe0,
                 program_address: 0x10_0020,
             })
         );
