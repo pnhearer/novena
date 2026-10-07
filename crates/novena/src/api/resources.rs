@@ -172,7 +172,7 @@ mod tests {
         );
         assert_eq!(
             fs::read(dump_directory.join("2000-0.spv")).unwrap(),
-            [0x03, 0x02, 0x23, 0x07, 5, 0, 0, 0]
+            [0x03, 0x02, 0x23, 0x07, 0x50 + 8, 0, 0, 0]
         );
         fs::remove_dir_all(dump_directory).unwrap();
     }
