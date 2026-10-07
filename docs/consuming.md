@@ -1,7 +1,7 @@
 # Consuming novena
 
 Release archives contain the header, libraries, license files, `NOTICE`, a
-CMake package and a pkg-config file. No Rust installation is needed to use a
+CMake package, and a pkg-config file. No Rust installation is needed to use a
 prebuilt archive.
 
 ## C
@@ -9,6 +9,7 @@ prebuilt archive.
 Compile with `-I/path/to/novena/include`, link with `-L/path/to/novena/lib
 -lnovena`, and load the resulting shared library using the platform's normal
 loader search path. The complete interface is in `include/novena.h`.
+The C interface catches panics at every exported function boundary. A panic returns NOVENA_INTERNAL_ERROR. novena_last_error returns the message on the same thread until its next library call.
 
 ## C++ with CMake
 

@@ -8,17 +8,23 @@ This is a research and hobby project. Its purposes are interoperability, study a
 
 ## Status
 
-Early. Nothing renders yet.
+Early. Clears and presentation work. Draws and shaders do not.
 
 What works today:
 
 - A table of 534 function names, found in one program and since observed being requested by it.
 - The host interface: a host creates an instance, tells it which names the program asks for, and forwards the program's calls.
 - A census of which functions a program requested and called, as a text file that contains names and counts only.
+- Census and shapes observation reports.
+- A panic-guarded C interface with novena_last_error, plus CMake and pkg-config files in release archives.
+- CPU texture copies with four bytes per base-level texel, 64 KiB host reads, no format decoding, and a 4096 by 4096 texel limit.
+- Render scaling and optional vblank pacing through the host interface.
+- CPU clears for window-presented textures and an optional Vulkan backend for color and depth clears.
 
-About 130 functions, the set-up path, have behaviour: novena keeps a record of the program's objects and answers queries from observed data. One program runs on novena alone, presenting frame after frame with nothing drawn yet ([notes 0010 and 0011](docs/provenance/0011-running-past-the-first-frame.md)). Every other call is counted and answered as "not implemented".
+About 130 functions, the set-up path, have behaviour: novena keeps a record of the program's objects and answers queries from observed data. One program runs on novena alone, presenting frame after frame with clears but no draws ([notes 0010 and 0011](docs/provenance/0011-running-past-the-first-frame.md)). Draw commands are recorded and skipped. Shader translation, draw execution, and Vulkan texture copies are not implemented. Other calls are counted and answered as "not implemented".
 
 The census of what a real program calls is in [docs/census](docs/census): one program asked for all 534 functions and called 168 of them in its first four minutes.
+The register observations that support the current signatures are in docs/shapes.
 
 The first signatures worked out from observation are in [docs/signatures](docs/signatures).
 
@@ -58,6 +64,8 @@ examples/run-host.sh
 ```
 
 Rust stable and a C compiler are enough. The CPU implementation is the default. To compile the optional Vulkan backend, use `cargo build --features vulkan`. Vulkan is optional at runtime too: when no loader or device is available, novena keeps using its CPU path. The last command builds a small host in C against `include/novena.h`, runs it and prints the census it wrote.
+
+Release archives also include a CMake package and a pkg-config file. See docs/consuming.md for consumption details.
 
 ## License
 
