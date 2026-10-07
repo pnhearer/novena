@@ -1,6 +1,6 @@
 # Host interface
 
-The host is whatever runs the program: an emulator, or the runtime of a recompiled program. novena does not load or run programs. The host tells it what the program asked for and forwards the program's calls. The C declarations are in [include/novena.h](../include/novena.h). This page describes interface version 3.
+The host is whatever runs the program: an emulator, or the runtime of a recompiled program. novena does not load or run programs. The host tells it what the program asked for and forwards the program's calls. The C declarations are in [include/novena.h](../include/novena.h). This page describes interface version 4.
 
 ## Presentation
 
@@ -29,7 +29,7 @@ The callbacks can be called from any thread on which the program calls the graph
 
 ## What happens today
 
-No function has behaviour yet. `novena_instance_call` counts the call, sets the result registers to zero and returns `NOVENA_UNIMPLEMENTED`. A program that needs real results will not get far, but a host can already find out which functions a program requests and calls, and in what numbers.
+The set-up path has behaviour. CPU clears and copies run for supported images. Draws and shader translation are not implemented. Calls outside the implemented set are counted and return NOVENA_UNIMPLEMENTED.
 
 `novena_instance_write_census` writes that as text:
 
