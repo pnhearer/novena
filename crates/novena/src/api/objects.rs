@@ -52,6 +52,13 @@ pub struct TextureImage {
     pub pixels: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShaderRecord {
+    pub record_address: u64,
+    pub gpu_addresses: [u64; 2],
+    pub raw_words: [u64; 8],
+}
+
 /// What novena knows about one object. Field meanings follow the signature
 /// tables; unknown enumerations are kept as the integers the program passed.
 #[derive(Debug, Clone, Default)]
@@ -138,8 +145,7 @@ pub enum Object {
     Sampler(SamplerDescription),
     Program {
         device: u64,
-        /// Address of each shader record the program handed over.
-        shader_records: Vec<u64>,
+        shader_records: Vec<ShaderRecord>,
     },
     /// A state object. Its fields are not interpreted yet; the program's
     /// calls are kept as (function, arguments) so they are not lost.

@@ -3,7 +3,7 @@
 //! 0004-pointers.md.
 
 use super::{
-    objects::{Object, SamplerDescription, TextureDescription},
+    objects::{Object, SamplerDescription, ShaderRecord, TextureDescription},
     read_f32x4, succeed, Handler,
 };
 use crate::instance::{Instance, Registers, Status};
@@ -383,12 +383,31 @@ pub fn handler(name: &str) -> Option<Handler> {
             );
             succeed(registers)
         },
-        // The records' contents are the open shader question. Their
-        // addresses are kept so a later stage can read them.
+        // The record has two GPU-shaped values, but observation does not
+        // identify the code value or establish a code size. Keep both and
+        // the observed words until that gap is closed.
         "nvnProgramSetShaders" => |instance, _, registers| {
             let count = registers.x[1].min(8);
-            let records: Vec<u64> = (0..count)
-                .map(|index| registers.x[2] + index * 0x40)
+            let records: Vec<ShaderRecord> = (0..count)
+                .filter_map(|index| {
+                    let record_address = registers.x[2] + index * 0x40;
+                    let mut bytes = [0u8; 0x40];
+                    if !instance.read_memory(record_address, &mut bytes) {
+                        return None;
+                    }
+                    let mut raw_words = [0u64; 8];
+                    for (index, word) in raw_words.iter_mut().enumerate() {
+                        let start = index * 8;
+                        *word = u64::from_le_bytes(
+                            bytes[start..start + 8].try_into().expect("8 bytes"),
+                        );
+                    }
+                    Some(ShaderRecord {
+                        record_address,
+                        gpu_addresses: [raw_words[0], raw_words[6]],
+                        raw_words,
+                    })
+                })
                 .collect();
             instance.objects.update(registers.x[0], |object| {
                 if let Object::Program { shader_records, .. } = object {

@@ -18,7 +18,7 @@ pub mod gpu;
 mod instance;
 pub mod observe;
 
-pub use instance::{Census, Host, Instance, Registers, Status};
+pub use instance::{Census, Host, Instance, Registers, ShaderStage, ShaderTranslator, Status};
 
 use functions::FunctionId;
 use std::cell::RefCell;
