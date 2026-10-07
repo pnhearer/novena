@@ -13,6 +13,7 @@
 //! reported verbatim: a word that is not a small integer or a plausible
 //! float is reported only as "other".
 
+use crate::api::{GpuAddressError, Objects};
 use crate::instance::{Host, Registers};
 use std::fmt::{self, Write};
 
@@ -287,11 +288,28 @@ struct ShaderShape {
     leading_nonzero: u64,
     repeating_header: u64,
     length_hint: Option<usize>,
+    resolved_offsets: Vec<u64>,
+    unresolved: Vec<(GpuAddressError, u64)>,
+}
+
+fn unresolved_reason(reason: GpuAddressError) -> &'static str {
+    match reason {
+        GpuAddressError::UnknownAddress => "no registered pool",
+        GpuAddressError::OutsidePool { .. } => "outside registered pool",
+    }
 }
 
 impl ShaderShape {
-    fn record(&mut self, host: Option<&Host>, address: u64) {
-        let Some(bytes) = read_shader(host, address) else {
+    fn record(&mut self, host: Option<&Host>, objects: &Objects, address: u64) {
+        let resolution = match objects.resolve_gpu_address(address) {
+            Ok(resolution) => resolution,
+            Err(reason) => {
+                self.unresolved.push((reason, address));
+                return;
+            }
+        };
+        self.resolved_offsets.push(resolution.offset);
+        let Some(bytes) = read_shader(host, resolution.program_address) else {
             self.unreadable += 1;
             return;
         };
@@ -342,9 +360,25 @@ impl ShaderShape {
     fn write(&self, out: &mut String, offset: usize) {
         let _ = writeln!(
             out,
-            "  shader +{offset:#04x} samples={} unreadable={}",
-            self.samples, self.unreadable
+            "  shader +{offset:#04x} resolved={} unreadable={} unresolved={}",
+            self.resolved_offsets.len(),
+            self.unreadable,
+            self.unresolved.len()
         );
+        if !self.resolved_offsets.is_empty() {
+            let _ = writeln!(
+                out,
+                "    pool-offsets=[{}]",
+                self.resolved_offsets
+                    .iter()
+                    .map(|offset| format!("{offset:#x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+        }
+        for (reason, _) in &self.unresolved {
+            let _ = writeln!(out, "    unresolved reason={}", unresolved_reason(*reason));
+        }
         if self.samples == 0 {
             return;
         }
@@ -532,6 +566,7 @@ impl FunctionShape {
     pub(crate) fn record_call(
         &mut self,
         host: Option<&Host>,
+        objects: &Objects,
         registers: &Registers,
     ) -> Option<CallSnapshot> {
         if self.sampled_calls >= SAMPLE_LIMIT {
@@ -554,7 +589,7 @@ impl FunctionShape {
                     for (slot, start) in [0usize, 12].into_iter().enumerate() {
                         let address = u64::from(word(&bytes, start / 4))
                             | u64::from(word(&bytes, start / 4 + 1)) << 32;
-                        self.shader_values[slot].record(host, address);
+                        self.shader_values[slot].record(host, objects, address);
                     }
                 }
                 snapshot.pointees[index] = Some((value, bytes));
@@ -710,7 +745,7 @@ mod tests {
             registers.x[3] = if call % 2 == 0 { 0 } else { 0x10_8000 }; // optional pointer
             registers.x[4] = 0xdead_beef_0000 + call; // wide, not readable
             registers.d[0] = u64::from(1.5f32.to_bits());
-            shape.record_call(Some(&host), &registers);
+            shape.record_call(Some(&host), &Objects::new(), &registers);
         }
         assert_eq!(shape.x[0].kind(), "address");
         assert_eq!(shape.x[1].kind(), "small");
@@ -816,7 +851,7 @@ mod tests {
             let mut registers = Registers::default();
             registers.x[1] = PAGE_BASE;
             registers.x[2] = PAGE_BASE + 0x40;
-            let snapshot = shape.record_call(Some(&host), &registers);
+            let snapshot = shape.record_call(Some(&host), &Objects::new(), &registers);
             // The function writes an output into the fourth word, and the
             // answer to a query (x1 as selector) through x2.
             let mut page = PAGE.lock().unwrap();
@@ -849,6 +884,50 @@ mod tests {
     }
 
     #[test]
+    fn shader_observation_resolves_pool_gpu_addresses_shape_only() {
+        let _serial = PAGE_TEST.lock().unwrap_or_else(|p| p.into_inner());
+        {
+            let mut page = PAGE.lock().unwrap();
+            page.fill(0);
+            page[0..8].copy_from_slice(&(PAGE_BASE + 0x80).to_le_bytes());
+            page[48..56].copy_from_slice(&(PAGE_BASE + 0x90).to_le_bytes());
+            page[0x80..0x84].copy_from_slice(&1u32.to_le_bytes());
+            page[0x84..0x88].copy_from_slice(&2u32.to_le_bytes());
+        }
+        let objects = Objects::new();
+        objects.put(
+            7,
+            crate::api::Object::MemoryPool {
+                device: 0,
+                flags: 0,
+                storage: PAGE_BASE,
+                size: 0x100,
+            },
+        );
+        let host = Host {
+            user: std::ptr::null_mut(),
+            read_memory: Some(read_page),
+            write_memory: None,
+            present: None,
+            render_scale: 1.0,
+            wait_vblank: None,
+        };
+        let mut shape = FunctionShape::default();
+        let mut registers = Registers::default();
+        registers.x[2] = PAGE_BASE;
+        shape.record_call(Some(&host), &objects, &registers);
+        let mut text = String::new();
+        shape.write(&mut text, "ProgramSetShaders", 1);
+        assert!(
+            text.contains("shader +0x00 resolved=1 unreadable=0 unresolved=0"),
+            "{text}"
+        );
+        assert!(text.contains("pool-offsets=[0x80]"), "{text}");
+        assert!(text.contains("leading-nonzero-total=2"), "{text}");
+        assert!(!text.contains("400080"), "{text}");
+    }
+
+    #[test]
     fn query_answers_are_kept_per_selector() {
         let _serial = PAGE_TEST.lock().unwrap_or_else(|p| p.into_inner());
         let host = Host {
@@ -865,7 +944,7 @@ mod tests {
             let mut registers = Registers::default();
             registers.x[1] = selector;
             registers.x[2] = PAGE_BASE;
-            let snapshot = shape.record_call(Some(&host), &registers);
+            let snapshot = shape.record_call(Some(&host), &Objects::new(), &registers);
             PAGE.lock().unwrap()[0..4].copy_from_slice(&(selector as u32 * 100).to_le_bytes());
             shape.record_return(Some(&host), &Registers::default(), snapshot.as_ref());
         }
@@ -881,7 +960,7 @@ mod tests {
     fn sampling_stops_at_the_limit() {
         let mut shape = FunctionShape::default();
         for _ in 0..SAMPLE_LIMIT + 10 {
-            shape.record_call(None, &Registers::default());
+            shape.record_call(None, &Objects::new(), &Registers::default());
             shape.record_return(None, &Registers::default(), None);
         }
         assert_eq!(shape.sampled_calls(), SAMPLE_LIMIT);
@@ -893,7 +972,7 @@ mod tests {
         let mut shape = FunctionShape::default();
         let mut registers = Registers::default();
         registers.x[0] = 0x10_0000;
-        shape.record_call(None, &registers);
+        shape.record_call(None, &Objects::new(), &registers);
         assert_eq!(shape.x[0].kind(), "constant");
     }
 }

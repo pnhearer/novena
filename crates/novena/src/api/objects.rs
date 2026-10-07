@@ -231,6 +231,19 @@ pub struct Objects {
     map: Mutex<HashMap<u64, Object>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GpuAddress {
+    pub pool: u64,
+    pub offset: u64,
+    pub program_address: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GpuAddressError {
+    UnknownAddress,
+    OutsidePool { pool: u64 },
+}
+
 impl Objects {
     pub fn new() -> Self {
         Self::default()
@@ -277,6 +290,41 @@ impl Objects {
         self.lock().is_empty()
     }
 
+    /// Resolve a GPU address against the registered pool ranges. novena uses
+    /// each pool's program storage address as its GPU base.
+    pub fn resolve_gpu_address(&self, address: u64) -> Result<GpuAddress, GpuAddressError> {
+        let pools: Vec<(u64, u64, u64)> = self
+            .lock()
+            .iter()
+            .filter_map(|(pool, object)| match object {
+                Object::MemoryPool { storage, size, .. } => Some((*pool, *storage, *size)),
+                _ => None,
+            })
+            .collect();
+        let mut matched_base = None;
+        for (pool, base, size) in pools {
+            let Some(offset) = address.checked_sub(base) else {
+                continue;
+            };
+            if offset < size {
+                let Some(program_address) = base.checked_add(offset) else {
+                    return Err(GpuAddressError::UnknownAddress);
+                };
+                return Ok(GpuAddress {
+                    pool,
+                    offset,
+                    program_address,
+                });
+            }
+            matched_base = Some(pool);
+        }
+        Err(
+            matched_base.map_or(GpuAddressError::UnknownAddress, |pool| {
+                GpuAddressError::OutsidePool { pool }
+            }),
+        )
+    }
+
     /// Every texture some window presents.
     pub fn window_textures(&self) -> std::collections::HashSet<u64> {
         self.lock()
@@ -301,5 +349,40 @@ impl Objects {
             }) => recording_handles.remove(&handle),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_registered_pool_ranges() {
+        let objects = Objects::new();
+        objects.put(
+            1,
+            Object::MemoryPool {
+                device: 0,
+                flags: 0,
+                storage: 0x10_0000,
+                size: 0x100,
+            },
+        );
+        assert_eq!(
+            objects.resolve_gpu_address(0x10_0020),
+            Ok(GpuAddress {
+                pool: 1,
+                offset: 0x20,
+                program_address: 0x10_0020,
+            })
+        );
+        assert_eq!(
+            objects.resolve_gpu_address(0x10_0100),
+            Err(GpuAddressError::OutsidePool { pool: 1 })
+        );
+        assert_eq!(
+            objects.resolve_gpu_address(0x0f_0000),
+            Err(GpuAddressError::UnknownAddress)
+        );
     }
 }

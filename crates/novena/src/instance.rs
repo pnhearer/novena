@@ -234,7 +234,7 @@ impl Instance {
         // that only the counter is touched.
         let snapshot = if counter.fetch_add(1, Ordering::Relaxed) < crate::observe::SAMPLE_LIMIT {
             self.shape(function)
-                .record_call(self.host.as_ref(), registers)
+                .record_call(self.host.as_ref(), &self.objects, registers)
         } else {
             None
         };
