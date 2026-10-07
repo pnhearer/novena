@@ -13,6 +13,7 @@
 
 pub mod api;
 pub mod functions;
+pub mod global_memory;
 #[cfg(feature = "vulkan")]
 pub mod gpu;
 mod instance;

@@ -6,6 +6,54 @@
 use ash::{vk, Device, Entry, Instance};
 use std::collections::HashMap;
 use std::ffi::CString;
+use std::sync::Arc;
+
+mod memory;
+pub use memory::GlobalMemory;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ShaderFeatures {
+    pub storage_buffer8_bit_access: bool,
+    pub storage_buffer16_bit_access: bool,
+    pub shader_int8: bool,
+    pub shader_int16: bool,
+}
+
+impl ShaderFeatures {
+    /// Check the optional capabilities used by flat global memory modules.
+    /// This is a feature check, not a replacement for SPIR-V validation.
+    pub fn validate_global_shader(self, words: &[u32]) -> Result<(), &'static str> {
+        if words.len() < 5 || words[0] != 0x0723_0203 {
+            return Err("invalid SPIR-V header");
+        }
+        let mut offset = 5;
+        while offset < words.len() {
+            let count = (words[offset] >> 16) as usize;
+            let opcode = words[offset] & 0xffff;
+            if count == 0 || count > words.len() - offset {
+                return Err("invalid SPIR-V instruction length");
+            }
+            if opcode == 17 {
+                if count != 2 {
+                    return Err("invalid OpCapability length");
+                }
+                match words[offset + 1] {
+                    39 if !self.shader_int8 => return Err("shaderInt8 is unavailable"),
+                    22 if !self.shader_int16 => return Err("shaderInt16 is unavailable"),
+                    4448 if !self.storage_buffer8_bit_access => {
+                        return Err("storageBuffer8BitAccess is unavailable")
+                    }
+                    4433 if !self.storage_buffer16_bit_access => {
+                        return Err("storageBuffer16BitAccess is unavailable")
+                    }
+                    _ => {}
+                }
+            }
+            offset += count;
+        }
+        Ok(())
+    }
+}
 
 /// A device and its one graphics queue. Failure is represented as `None` so a
 /// host without Vulkan keeps using the CPU executor.
@@ -16,20 +64,48 @@ pub struct Context {
     pub device: Device,
     pub queue: vk::Queue,
     pub queue_family: u32,
+    pub shader_features: ShaderFeatures,
 }
 
 pub struct Backend {
     // Fields drop in declaration order. The images belong to the device in
     // `context`, so they must go first.
     pub images: Images,
-    context: Context,
+    pub global_memory: Option<GlobalMemory>,
+    context: Arc<Context>,
 }
 
 impl Backend {
     pub fn new(scale: f32) -> Option<Self> {
-        let context = Context::new()?;
+        let context = Arc::new(Context::new()?);
         let images = Images::new(&context, scale)?;
-        Some(Self { context, images })
+        Some(Self {
+            context,
+            images,
+            global_memory: None,
+        })
+    }
+
+    pub fn allocate_pool(&mut self, key: u64, storage: u64, size: u64) -> Option<u64> {
+        if self.global_memory.is_none() {
+            self.global_memory = Some(GlobalMemory::new(
+                &self.context,
+                crate::global_memory::ARENA_SIZE,
+            )?);
+        }
+        self.global_memory
+            .as_mut()?
+            .allocate_pool(key, storage, size)
+    }
+
+    pub fn release_pool(&mut self, key: u64) -> bool {
+        self.global_memory
+            .as_mut()
+            .is_some_and(|memory| memory.release_pool(key))
+    }
+
+    pub fn context(&self) -> &Arc<Context> {
+        &self.context
     }
     pub fn ensure(&mut self, key: u64, width: u64, height: u64, depth: bool) -> bool {
         self.images.ensure(&self.context, key, width, height, depth)
@@ -57,6 +133,19 @@ impl Backend {
 }
 
 impl Context {
+    /// Create a module after checking the optional global memory features.
+    /// The caller still validates SPIR-V and owns the returned Vulkan module.
+    pub fn create_global_shader_module(&self, words: &[u32]) -> Result<vk::ShaderModule, String> {
+        self.shader_features
+            .validate_global_shader(words)
+            .map_err(str::to_owned)?;
+        // SAFETY: the feature checks ran above; Vulkan consumes the supplied words.
+        unsafe {
+            self.device
+                .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(words), None)
+        }
+        .map_err(|error| format!("create global shader module: {error:?}"))
+    }
     /// Create a context, preferring a discrete GPU and then any usable GPU.
     pub fn new() -> Option<Self> {
         // SAFETY: loading the system Vulkan loader is the boundary of this
@@ -66,37 +155,18 @@ impl Context {
         let info = vk::ApplicationInfo::default()
             .application_name(&app)
             .engine_name(&app)
-            .api_version(vk::make_api_version(0, 1, 0, 0));
+            .api_version(vk::API_VERSION_1_2);
         let create = vk::InstanceCreateInfo::default().application_info(&info);
         // SAFETY: `create` points only to local, immutable Vulkan structs.
         let instance = unsafe { entry.create_instance(&create, None).ok()? };
         // SAFETY: the instance is live and owns this enumeration.
-        let devices = unsafe { instance.enumerate_physical_devices().ok()? };
-        let pick = devices
-            .iter()
-            .copied()
-            .find(|&device| {
-                // SAFETY: device was returned by this live instance.
-                unsafe {
-                    instance.get_physical_device_properties(device).device_type
-                        == vk::PhysicalDeviceType::DISCRETE_GPU
-                }
-            })
-            .or_else(|| devices.first().copied())?;
-        // SAFETY: device was returned by this live instance.
-        let families = unsafe { instance.get_physical_device_queue_family_properties(pick) };
-        let family = families
-            .iter()
-            .position(|f| f.queue_flags.contains(vk::QueueFlags::GRAPHICS))?
-            as u32;
-        let priority = [1.0_f32];
-        let queue_info = [vk::DeviceQueueCreateInfo::default()
-            .queue_family_index(family)
-            .queue_priorities(&priority)];
-        let device_info = vk::DeviceCreateInfo::default().queue_create_infos(&queue_info);
-        // SAFETY: the selected family supports graphics and the create info is valid.
-        let device = unsafe { instance.create_device(pick, &device_info, None).ok()? };
-        // SAFETY: queue zero was requested above.
+        let result = Self::create_device(&instance);
+        let Some((pick, device, family, shader_features)) = result else {
+            // SAFETY: no device was created and the instance is owned here.
+            unsafe { instance.destroy_instance(None) };
+            return None;
+        };
+        // SAFETY: queue zero was requested by create_device.
         let queue = unsafe { device.get_device_queue(family, 0) };
         Some(Self {
             entry,
@@ -105,7 +175,74 @@ impl Context {
             device,
             queue,
             queue_family: family,
+            shader_features,
         })
+    }
+
+    fn create_device(
+        instance: &Instance,
+    ) -> Option<(vk::PhysicalDevice, Device, u32, ShaderFeatures)> {
+        // SAFETY: instance is live for all enumeration and feature queries below.
+        let mut devices = unsafe { instance.enumerate_physical_devices().ok()? };
+        devices.sort_by_key(|&device| unsafe {
+            instance.get_physical_device_properties(device).device_type
+                != vk::PhysicalDeviceType::DISCRETE_GPU
+        });
+        for pick in devices {
+            if unsafe { instance.get_physical_device_properties(pick).api_version }
+                < vk::API_VERSION_1_2
+            {
+                continue;
+            }
+            let families = unsafe { instance.get_physical_device_queue_family_properties(pick) };
+            let Some(family) = families.iter().position(|f| {
+                f.queue_count > 0
+                    && f.queue_flags
+                        .contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
+            }) else {
+                continue;
+            };
+            let family = family as u32;
+            let mut v11 = vk::PhysicalDeviceVulkan11Features::default();
+            let mut v12 = vk::PhysicalDeviceVulkan12Features::default();
+            let mut features = vk::PhysicalDeviceFeatures2::default()
+                .push_next(&mut v11)
+                .push_next(&mut v12);
+            unsafe { instance.get_physical_device_features2(pick, &mut features) };
+            let core = features.features;
+            if core.shader_int64 == vk::FALSE || v12.buffer_device_address == vk::FALSE {
+                continue;
+            }
+            let shader_features = ShaderFeatures {
+                storage_buffer8_bit_access: v12.storage_buffer8_bit_access != vk::FALSE,
+                storage_buffer16_bit_access: v11.storage_buffer16_bit_access != vk::FALSE,
+                shader_int8: v12.shader_int8 != vk::FALSE,
+                shader_int16: core.shader_int16 != vk::FALSE,
+            };
+            let enabled = vk::PhysicalDeviceFeatures::default()
+                .shader_int64(true)
+                .shader_int16(shader_features.shader_int16);
+            let mut enabled11 = vk::PhysicalDeviceVulkan11Features::default()
+                .storage_buffer16_bit_access(shader_features.storage_buffer16_bit_access);
+            let mut enabled12 = vk::PhysicalDeviceVulkan12Features::default()
+                .buffer_device_address(true)
+                .storage_buffer8_bit_access(shader_features.storage_buffer8_bit_access)
+                .shader_int8(shader_features.shader_int8);
+            let priority = [1.0_f32];
+            let queue_info = [vk::DeviceQueueCreateInfo::default()
+                .queue_family_index(family)
+                .queue_priorities(&priority)];
+            let device_info = vk::DeviceCreateInfo::default()
+                .queue_create_infos(&queue_info)
+                .enabled_features(&enabled)
+                .push_next(&mut enabled11)
+                .push_next(&mut enabled12);
+            // SAFETY: the selected family supports graphics and the create info is valid.
+            if let Ok(device) = unsafe { instance.create_device(pick, &device_info, None) } {
+                return Some((pick, device, family, shader_features));
+            }
+        }
+        None
     }
 }
 
@@ -514,7 +651,31 @@ impl Drop for Images {
 
 #[cfg(test)]
 mod tests {
-    use super::Backend;
+    use super::{Backend, ShaderFeatures};
+
+    #[test]
+    fn rejects_unavailable_narrow_capabilities_before_module_creation() {
+        let supported = ShaderFeatures {
+            storage_buffer8_bit_access: true,
+            storage_buffer16_bit_access: true,
+            shader_int8: true,
+            shader_int16: true,
+        };
+        for capability in [39, 22, 4448, 4433] {
+            let words = [0x0723_0203, 0x10300, 0, 1, 0, (2 << 16) | 17, capability];
+            assert!(ShaderFeatures::default()
+                .validate_global_shader(&words)
+                .is_err());
+            assert!(supported.validate_global_shader(&words).is_ok());
+        }
+        assert!(supported.validate_global_shader(&[]).is_err());
+        assert!(supported
+            .validate_global_shader(&[0x0723_0203, 0x10300, 0, 1, 0, 0])
+            .is_err());
+        assert!(supported
+            .validate_global_shader(&[0x0723_0203, 0x10300, 0, 1, 0, (3 << 16) | 17, 39])
+            .is_err());
+    }
 
     #[test]
     fn clear_and_readback_at_scale_one() {

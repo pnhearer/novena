@@ -924,6 +924,7 @@ mod tests {
                 storage: PAGE_BASE,
                 size: 0x100,
                 gpu_address: None,
+                observed_gpu_address: None,
             },
         );
         let host = Host {

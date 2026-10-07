@@ -250,6 +250,7 @@ mod tests {
                 storage: base,
                 size: 0x4000,
                 gpu_address: None,
+                observed_gpu_address: None,
             },
         );
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -634,18 +635,32 @@ pub fn handler(name: &str) -> Option<Handler> {
         "nvnTextureGetSamples" => {
             |instance, _, registers| texture_answer(instance, registers, |_| 0)
         }
-        // The texture's bytes live in its pool's storage at the offset the
-        // program chose; see the note in memory.rs on graphics addresses.
+        // Pool aliases use the same flat address plus the texture offset.
         "nvnTextureGetTextureAddress" => |instance, _, registers| {
             let Some(Object::Texture { description, .. }) = instance.objects.get(registers.x[0])
             else {
                 return Status::BadArgument;
             };
-            let storage = match instance.objects.get(description.pool) {
-                Some(Object::MemoryPool { storage, .. }) => storage,
-                _ => 0,
+            let (base, size) = match instance.objects.get(description.pool) {
+                Some(Object::MemoryPool {
+                    storage,
+                    gpu_address,
+                    observed_gpu_address,
+                    size,
+                    ..
+                }) => (
+                    gpu_address.or(observed_gpu_address).unwrap_or(storage),
+                    size,
+                ),
+                _ => return Status::BadArgument,
             };
-            registers.x[0] = storage + description.pool_offset;
+            if description.pool_offset >= size {
+                return Status::BadArgument;
+            }
+            let Some(address) = base.checked_add(description.pool_offset) else {
+                return Status::BadArgument;
+            };
+            registers.x[0] = address;
             Status::Ok
         },
         // A view's offset into the texture's storage. Levels are laid out

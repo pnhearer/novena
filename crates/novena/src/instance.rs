@@ -447,7 +447,8 @@ impl Instance {
             let gpu_address = return_registers.x[0];
             self.objects.update(pool, |object| {
                 if let crate::api::Object::MemoryPool {
-                    gpu_address: base, ..
+                    observed_gpu_address: base,
+                    ..
                 } = object
                 {
                     *base = Some(gpu_address);

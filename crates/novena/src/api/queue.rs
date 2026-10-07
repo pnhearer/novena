@@ -20,9 +20,15 @@ fn builder_update(
 const COPY_CHUNK: usize = 64 * 1024;
 
 fn read_pool_bytes(instance: &Instance, address: u64, size: usize) -> Option<Vec<u8>> {
+    let resolution = instance.objects.resolve_gpu_address(address).ok()?;
+    if size as u64 > resolution.remaining {
+        return None;
+    }
     let mut bytes = vec![0; size];
     for (offset, chunk) in bytes.chunks_mut(COPY_CHUNK).enumerate() {
-        let address = address.checked_add((offset * COPY_CHUNK) as u64)?;
+        let address = resolution
+            .program_address
+            .checked_add((offset * COPY_CHUNK) as u64)?;
         if !instance.read_memory(address, chunk) {
             return None;
         }
@@ -148,6 +154,15 @@ pub fn handler(name: &str) -> Option<Handler> {
             let presented = instance.objects.window_textures();
             #[cfg(feature = "vulkan")]
             let mut gpu = instance.gpu.lock().unwrap_or_else(|p| p.into_inner());
+            #[cfg(feature = "vulkan")]
+            if let Some(memory) = gpu
+                .as_mut()
+                .and_then(|backend| backend.global_memory.as_mut())
+            {
+                if !memory.upload(|address, bytes| instance.read_memory(address, bytes)) {
+                    return Status::BadArgument;
+                }
+            }
             for i in 0..r.x[1].min(1024) {
                 let Some(handle) = read_u64(instance, r.x[2] + i * 8) else {
                     break;
@@ -564,4 +579,56 @@ pub fn handler(name: &str) -> Option<Handler> {
         },
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Host;
+    use std::ffi::c_void;
+
+    unsafe extern "C" fn read(_user: *mut c_void, address: u64, out: *mut u8, size: u64) -> i32 {
+        let Some(offset) = address.checked_sub(0x1000) else {
+            return 1;
+        };
+        if offset.checked_add(size).is_none_or(|end| end > 4) {
+            return 1;
+        }
+        let bytes = [10_u8, 20, 30, 40];
+        // SAFETY: the callback contract supplies a valid output slice and the
+        // checked range lies in this project's fixture.
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr().add(offset as usize), out, size as usize)
+        };
+        0
+    }
+
+    #[test]
+    fn buffer_copy_resolves_gpu_addresses_before_reading_cpu_storage() {
+        // SAFETY: the stateless callback accepts only its synthetic memory range.
+        let instance = unsafe {
+            Instance::with_host(Host {
+                user: std::ptr::null_mut(),
+                read_memory: Some(read),
+                write_memory: None,
+                present: None,
+                render_scale: 1.0,
+                wait_vblank: None,
+            })
+        };
+        instance.objects.put(
+            1,
+            Object::MemoryPool {
+                device: 0,
+                flags: 0,
+                storage: 0x1000,
+                size: 4,
+                gpu_address: Some(0x10000),
+                observed_gpu_address: None,
+            },
+        );
+        assert_eq!(read_pool_bytes(&instance, 0x10001, 2), Some(vec![20, 30]));
+        assert_eq!(read_pool_bytes(&instance, 0x10003, 2), None);
+        assert_eq!(read_pool_bytes(&instance, 0x1001, 2), None);
+    }
 }

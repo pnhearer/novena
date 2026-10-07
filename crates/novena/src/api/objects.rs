@@ -143,6 +143,8 @@ pub enum Object {
         storage: u64,
         size: u64,
         gpu_address: Option<u64>,
+        /// Original driver return used only to resolve observation reads.
+        observed_gpu_address: Option<u64>,
     },
     TextureBuilder(TextureDescription),
     Texture {
@@ -299,24 +301,36 @@ impl Objects {
         self.lock().is_empty()
     }
 
-    /// Resolve a GPU address against the registered pool ranges. novena uses
-    /// each pool's observed buffer address as its GPU base.
+    /// Resolve assigned or observed GPU ranges to CPU storage. Observed addresses
+    /// never replace an assigned Vulkan base.
     pub fn resolve_gpu_address(&self, address: u64) -> Result<GpuAddress, GpuAddressError> {
-        let pools: Vec<(u64, u64, u64, u64)> = self
+        let mut pools: Vec<(u64, u64, u64, u64, bool)> = self
             .lock()
             .iter()
-            .filter_map(|(pool, object)| match object {
+            .flat_map(|(pool, object)| match object {
                 Object::MemoryPool {
                     storage,
                     size,
                     gpu_address,
+                    observed_gpu_address,
                     ..
-                } => Some((*pool, *storage, gpu_address.unwrap_or(*storage), *size)),
-                _ => None,
+                } => {
+                    let base = gpu_address.or(*observed_gpu_address).unwrap_or(*storage);
+                    [
+                        Some((*pool, *storage, base, *size, false)),
+                        observed_gpu_address
+                            .filter(|observed| *observed != base)
+                            .map(|observed| (*pool, *storage, observed, *size, true)),
+                    ]
+                }
+                _ => [None, None],
             })
+            .flatten()
             .collect();
+        // An address in our device takes precedence over another driver's range.
+        pools.sort_by_key(|entry| entry.4);
         let mut matched_base = None;
-        for (pool, storage, base, size) in pools {
+        for (pool, storage, base, size, _) in pools {
             let Some(offset) = address.checked_sub(base) else {
                 continue;
             };
@@ -382,6 +396,7 @@ mod tests {
                 storage: 0x10_0000,
                 size: 0x100,
                 gpu_address: None,
+                observed_gpu_address: None,
             },
         );
         assert_eq!(

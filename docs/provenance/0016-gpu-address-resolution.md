@@ -1,5 +1,9 @@
 # 0016: GPU address resolution for pool storage
 
+2026-10-07: [Provenance 0022](0022-flat-global-memory.md) supersedes the
+program-storage GPU base choice when Vulkan is active. CPU-only behavior
+retains the mapping described below.
+
 - Date: 2026-10-07
 - Author: Khargoosh
 - Covers: memory pool GPU addresses and the `ProgramSetShaders` observation
