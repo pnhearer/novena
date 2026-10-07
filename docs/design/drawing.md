@@ -88,6 +88,12 @@ The smallest useful observation is one draw whose color depends on one known con
 
 Missing knowledge includes the record stride for counts other than 1, which wide value is code, code size, record stage, the meaning of the other fields, the mapping of `BindProgram` stage bits, and the pairing of translated stages with program inputs and outputs. The current first-value and unknown-stage choices are explicit implementation assumptions.
 
+The late-read behavior is a hypothesis, not an established observation: the
+maintainer measured shader records that resolve at `ProgramSetShaders` while
+their code bytes are still zero, and suspects a later GPU copy recorded in a
+command buffer fills the pool. Retries at bind and queue synchronization points
+are retained so a later measurement can confirm or reject that hypothesis.
+
 The smallest useful observation is a program with two shader records and a draw that uses both. Vary the `ProgramSetShaders` count and record order. Label each record at `+0x00`, `+0x30`, `+0x08`, and `+0x38`, resolve both wide values through the pool, and compare each translated result with the stage bit passed to `BindProgram`. Vary one stage bit at a time and inspect whether the draw still links and which inputs and outputs connect.
 
 ## Ordered first attempts

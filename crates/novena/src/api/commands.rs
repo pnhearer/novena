@@ -35,6 +35,18 @@ pub fn handler(name: &str) -> Option<Handler> {
         return None;
     }
     Some(match name {
+        "nvnCommandBufferBindProgram" => |instance, _, r| {
+            crate::api::resources::retry_pending(instance, r.x[1], "bind");
+            record(
+                instance,
+                0,
+                r,
+                RecordedCommand::Raw {
+                    function: 0,
+                    registers: r.x,
+                },
+            )
+        },
         "nvnCommandBufferSetRenderTargets" => |instance, _, r| {
             let count = r.x[1].min(16);
             let mut colors = Vec::with_capacity(count as usize);

@@ -3,10 +3,10 @@
 //! 0004-pointers.md.
 
 use super::{
-    objects::{Object, SamplerDescription, ShaderRecord, TextureDescription},
+    objects::{Object, SamplerDescription, ShaderRecord, ShaderTranslation, TextureDescription},
     read_f32x4, succeed, Handler,
 };
-use crate::instance::{Instance, Registers, Status, SHADER_STAGE_UNKNOWN};
+use crate::instance::{Instance, PendingShader, Registers, Status, SHADER_STAGE_UNKNOWN};
 use std::fs;
 
 const MAX_SHADER_BYTES: usize = 64 * 1024;
@@ -52,6 +52,57 @@ fn shader_bytes(instance: &Instance, address: u64) -> Result<Vec<u8>, &'static s
         return Err("no code after header");
     }
     Ok(bytes[SHADER_PREFIX..length].to_vec())
+}
+
+pub(crate) fn retry_pending(instance: &Instance, program: u64, point: &'static str) {
+    let entries = instance.pending_shaders(program);
+    for entry in entries {
+        if entry.failures >= 64 {
+            continue;
+        }
+        let mut bytes = vec![0; entry.limit];
+        if !instance.read_memory(entry.address, &mut bytes) {
+            instance.fail_pending_shader(program, entry.record_index);
+            continue;
+        }
+        let end = bytes.len();
+        let mut code_end = end;
+        for start in (SHADER_CODE_OFFSET..end.saturating_sub(63)).step_by(4) {
+            if bytes[start..start + 64].iter().all(|&byte| byte == 0) {
+                code_end = start;
+                break;
+            }
+        }
+        if code_end <= SHADER_CODE_OFFSET {
+            instance.fail_pending_shader(program, entry.record_index);
+            continue;
+        }
+        let Some(translator) = instance.shader_translator() else {
+            continue;
+        };
+        match translator.translate(SHADER_STAGE_UNKNOWN, &bytes[SHADER_PREFIX..code_end]) {
+            Ok(words) => {
+                instance.record_successful_shader_translation(&words);
+                instance.record_late_read(point);
+                instance.replace_pending_shader(program, entry.record_index);
+                instance.objects.update(program, |object| {
+                    if let Object::Program {
+                        shader_translations,
+                        ..
+                    } = object
+                    {
+                        if let Some(slot) = shader_translations.get_mut(entry.record_index) {
+                            *slot = ShaderTranslation::Spirv(words.clone());
+                        }
+                    }
+                });
+            }
+            Err(error) => {
+                instance.record_shader_translation_error(error);
+                instance.fail_pending_shader(program, entry.record_index);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -190,6 +241,7 @@ mod tests {
 
 fn translate_shaders(
     instance: &Instance,
+    program: u64,
     records: &[ShaderRecord],
 ) -> Vec<super::objects::ShaderTranslation> {
     if !instance.shader_translation_enabled() {
@@ -200,11 +252,38 @@ fn translate_shaders(
     };
     records
         .iter()
-        .map(|record| {
+        .enumerate()
+        .map(|(record_index, record)| {
             let code = match shader_bytes(instance, record.gpu_addresses[0]) {
                 Ok(code) => code,
                 Err(error) => {
-                    instance.record_shader_translation_error(error.into());
+                    if error == "no code after header" {
+                        if let Ok(resolution) = instance
+                            .objects
+                            .resolve_gpu_address(record.gpu_addresses[0])
+                        {
+                            let limit = usize::try_from(resolution.remaining)
+                                .unwrap_or(0)
+                                .min(MAX_SHADER_BYTES);
+                            let mut prefix = vec![0; SHADER_CODE_OFFSET.min(limit)];
+                            let zero = !prefix.is_empty()
+                                && instance.read_memory(resolution.program_address, &mut prefix)
+                                && prefix.iter().all(|&byte| byte == 0);
+                            instance.record_shader_zero_header(zero);
+                            instance.add_pending_shader(
+                                program,
+                                PendingShader {
+                                    record_index,
+                                    address: resolution.program_address,
+                                    limit,
+                                    failures: 0,
+                                },
+                            );
+                        }
+                    }
+                    if error != "no code after header" {
+                        instance.record_shader_translation_error(error.into());
+                    }
                     return super::objects::ShaderTranslation::Error(error.into());
                 }
             };
@@ -664,7 +743,7 @@ pub fn handler(name: &str) -> Option<Handler> {
                 .get(registers.x[0])
                 .and_then(|object| match object {
                     Object::Program { shader_records, .. } => {
-                        Some(translate_shaders(instance, &shader_records))
+                        Some(translate_shaders(instance, registers.x[0], &shader_records))
                     }
                     _ => None,
                 })

@@ -139,6 +139,9 @@ pub fn handler(name: &str) -> Option<Handler> {
             succeed(registers)
         },
         "nvnQueueSubmitCommands" => |instance, _, r| {
+            for program in instance.pending_programs() {
+                crate::api::resources::retry_pending(instance, program, "submit");
+            }
             // Only textures a window presents get a CPU image. A program
             // clears thousands of other render targets, and filling CPU
             // copies of all of them stalled the program it was tried on.
@@ -297,7 +300,26 @@ pub fn handler(name: &str) -> Option<Handler> {
                 Status::Ok
             }
         },
-        "nvnQueueFlush" | "nvnQueueFinish" => accept,
+        "nvnQueueFlush" => |instance, _, registers| {
+            for program in instance.pending_programs() {
+                crate::api::resources::retry_pending(instance, program, "flush");
+            }
+            accept(
+                instance,
+                crate::functions::lookup("nvnQueueFlush").unwrap(),
+                registers,
+            )
+        },
+        "nvnQueueFinish" => |instance, _, registers| {
+            for program in instance.pending_programs() {
+                crate::api::resources::retry_pending(instance, program, "finish");
+            }
+            accept(
+                instance,
+                crate::functions::lookup("nvnQueueFinish").unwrap(),
+                registers,
+            )
+        },
         "nvnQueuePresentTexture" => |instance, _, r| {
             let Some(Object::Window { textures, .. }) = instance.objects.get(r.x[1]) else {
                 return {

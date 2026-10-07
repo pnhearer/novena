@@ -7,7 +7,7 @@ use crate::functions::{self, FunctionId};
 use crate::gpu::Backend;
 use crate::observe::{CallSnapshot, FunctionShape};
 use std::cell::Cell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::c_void;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -16,6 +16,14 @@ use std::sync::{Arc, Mutex};
 
 pub type ShaderStage = u32;
 pub const SHADER_STAGE_UNKNOWN: ShaderStage = 0;
+
+#[derive(Clone, Copy)]
+pub(crate) struct PendingShader {
+    pub record_index: usize,
+    pub address: u64,
+    pub limit: usize,
+    pub failures: u8,
+}
 
 pub trait ShaderTranslator: Send + Sync {
     fn translate(&self, stage: ShaderStage, code: &[u8]) -> Result<Vec<u32>, String>;
@@ -124,6 +132,10 @@ pub struct Instance {
     successful_shader_translations: AtomicU64,
     distinct_shader_outputs: Mutex<BTreeSet<u64>>,
     shader_translation_errors: Mutex<BTreeMap<String, u64>>,
+    pending_shaders: Mutex<HashMap<u64, Vec<PendingShader>>>,
+    shader_late_reads: Mutex<BTreeMap<&'static str, u64>>,
+    shader_zero_header: AtomicU64,
+    shader_header_without_code: AtomicU64,
     #[cfg(feature = "vulkan")]
     pub(crate) gpu: Mutex<Option<Backend>>,
 }
@@ -165,6 +177,10 @@ impl Instance {
             successful_shader_translations: AtomicU64::new(0),
             distinct_shader_outputs: Mutex::new(BTreeSet::new()),
             shader_translation_errors: Mutex::new(BTreeMap::new()),
+            pending_shaders: Mutex::new(HashMap::new()),
+            shader_late_reads: Mutex::new(BTreeMap::new()),
+            shader_zero_header: AtomicU64::new(0),
+            shader_header_without_code: AtomicU64::new(0),
             #[cfg(feature = "vulkan")]
             gpu: Mutex::new(host.and_then(|h| Backend::new(h.render_scale))),
         }
@@ -236,6 +252,71 @@ impl Instance {
                     .flat_map(|word| word.to_le_bytes())
                     .collect::<Vec<_>>(),
             ));
+    }
+
+    pub(crate) fn add_pending_shader(&self, program: u64, pending: PendingShader) {
+        self.pending_shaders
+            .lock()
+            .unwrap()
+            .entry(program)
+            .or_default()
+            .push(pending);
+    }
+
+    pub(crate) fn pending_shaders(&self, program: u64) -> Vec<PendingShader> {
+        self.pending_shaders
+            .lock()
+            .unwrap()
+            .get(&program)
+            .cloned()
+            .unwrap_or_default()
+    }
+    pub(crate) fn pending_programs(&self) -> Vec<u64> {
+        self.pending_shaders
+            .lock()
+            .unwrap()
+            .keys()
+            .copied()
+            .collect()
+    }
+
+    pub(crate) fn replace_pending_shader(&self, program: u64, record_index: usize) {
+        if let Some(entries) = self.pending_shaders.lock().unwrap().get_mut(&program) {
+            entries.retain(|entry| entry.record_index != record_index);
+        }
+    }
+
+    pub(crate) fn fail_pending_shader(&self, program: u64, record_index: usize) {
+        if let Some(entry) = self
+            .pending_shaders
+            .lock()
+            .unwrap()
+            .get_mut(&program)
+            .and_then(|entries| {
+                entries
+                    .iter_mut()
+                    .find(|entry| entry.record_index == record_index)
+            })
+        {
+            entry.failures = entry.failures.saturating_add(1);
+        }
+    }
+
+    pub(crate) fn record_late_read(&self, point: &'static str) {
+        *self
+            .shader_late_reads
+            .lock()
+            .unwrap()
+            .entry(point)
+            .or_default() += 1;
+    }
+    pub(crate) fn record_shader_zero_header(&self, zero: bool) {
+        if zero {
+            self.shader_zero_header.fetch_add(1, Ordering::Relaxed)
+        } else {
+            self.shader_header_without_code
+                .fetch_add(1, Ordering::Relaxed)
+        };
     }
 
     pub(crate) fn next_shader_dump(&self, bytes: &[u8]) -> Option<(u64, u64)> {
@@ -415,6 +496,19 @@ impl Instance {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
+        let pending_shaders = self
+            .pending_shaders
+            .lock()
+            .unwrap()
+            .values()
+            .map(|entries| entries.iter().filter(|entry| entry.failures < 64).count() as u64)
+            .sum();
+        let mut shader_translation_errors = self.shader_translation_errors.lock().unwrap().clone();
+        if pending_shaders > 0 {
+            *shader_translation_errors
+                .entry("no code after header".into())
+                .or_default() += pending_shaders;
+        }
         Census {
             functions,
             unknown_requests,
@@ -426,11 +520,11 @@ impl Instance {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .len(),
-            shader_translation_errors: self
-                .shader_translation_errors
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone(),
+            shader_translation_errors,
+            pending_shaders,
+            shader_late_reads: self.shader_late_reads.lock().unwrap().clone(),
+            shader_zero_header: self.shader_zero_header.load(Ordering::Relaxed),
+            shader_header_without_code: self.shader_header_without_code.load(Ordering::Relaxed),
         }
     }
 }
@@ -455,6 +549,10 @@ pub struct Census {
     successful_shader_translations: u64,
     distinct_shader_outputs: usize,
     shader_translation_errors: BTreeMap<String, u64>,
+    pending_shaders: u64,
+    shader_late_reads: BTreeMap<&'static str, u64>,
+    shader_zero_header: u64,
+    shader_header_without_code: u64,
 }
 
 impl Census {
@@ -500,6 +598,16 @@ impl fmt::Display for Census {
         for (error, count) in &self.shader_translation_errors {
             writeln!(f, "shader-translation-error {count} {error}")?;
         }
+        for (point, count) in &self.shader_late_reads {
+            writeln!(f, "shader-late-read {point} {count}")?;
+        }
+        writeln!(f, "shader-still-pending {}", self.pending_shaders)?;
+        writeln!(f, "shader-zero-header {}", self.shader_zero_header)?;
+        writeln!(
+            f,
+            "shader-header-without-code {}",
+            self.shader_header_without_code
+        )?;
         writeln!(
             f,
             "shader-translations-successful {} distinct-outputs {}",
@@ -590,7 +698,7 @@ mod tests {
             text.contains("shader-translations-successful 0 distinct-outputs 0\n"),
             "{text}"
         );
-        assert_eq!(text.lines().count(), 6, "{text}");
+        assert_eq!(text.lines().count(), 9, "{text}");
     }
 
     #[test]
