@@ -4,6 +4,10 @@ Release archives contain the header, libraries, license files, `NOTICE`, a
 CMake package, and a pkg-config file. No Rust installation is needed to use a
 prebuilt archive.
 
+The repository also contains a C host example in `examples/c-host`. It resolves
+functions by name, records and submits a clear, presents a frame, writes census
+and shapes reports, and checks `novena_last_error` after an invalid lookup.
+
 ## C
 
 Compile with `-I/path/to/novena/include`, link with `-L/path/to/novena/lib
@@ -48,3 +52,16 @@ and its architecture aligned with the process.
 Rust unwinding stays enabled because every exported function catches panics at
 the FFI boundary and reports `NOVENA_INTERNAL_ERROR`; `panic = "abort"` would
 prevent that diagnostic and terminate the host process instead.
+
+## Vulkan feature
+
+Build the optional Vulkan backend with `cargo build --features vulkan`. The
+backend clears color and depth images, uploads supported buffer-to-texture
+copies, reads presented images back to the host, and applies the host's render
+scale. It does not execute draws or Vulkan texture-to-texture copies.
+
+The shader translation hook is a Rust API. Register a `ShaderTranslator` on an
+`Instance`, then enable translation before shader setup. novena resolves shader
+addresses through memory-pool ranges, bounds host reads to 64 KiB, and retains
+translated words or translation errors. The hook receives the unknown shader
+stage because the observed records do not establish a stage.

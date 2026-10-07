@@ -29,7 +29,10 @@ The callbacks can be called from any thread on which the program calls the graph
 
 ## What happens today
 
-The set-up path has behaviour. CPU clears and copies run for supported images. Draws and shader translation are not implemented. Calls outside the implemented set are counted and return NOVENA_UNIMPLEMENTED.
+The set-up path has behaviour. CPU clears and supported copies run for supported
+images. Draw commands and shader records are retained. Draws are not executed.
+Shader translation is an opt-in Rust hook, not a built-in translator. Calls
+outside the implemented set are counted and return NOVENA_UNIMPLEMENTED.
 
 `novena_instance_write_census` writes that as text:
 
@@ -53,7 +56,10 @@ Addresses are counted and never listed. Memory is not stored or printed verbatim
 
 The before-and-after comparison relies on the host reporting a function's return on the same thread as its call, with no other reported call in between.
 
-This is how signatures are worked out. See [provenance note 0006](provenance/0006-observing-shapes.md).
+Pool registration also lets novena resolve observed GPU-shaped values to the
+program storage behind a pool. The census and shapes reports include the
+observations used for that work. This is how signatures are worked out. See
+[provenance note 0006](provenance/0006-observing-shapes.md).
 
 ## Versioning
 
