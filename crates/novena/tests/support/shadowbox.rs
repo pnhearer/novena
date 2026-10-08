@@ -49,6 +49,8 @@ shadowbox = {{ path = {shadowbox:?} }}
                         | "uniform_banks_colour_two_draws"
                         | "uniform_banks_with_strip_and_normalized_attribute"
                         | "indexed_draw_executes_translated_triangle"
+                        | "depth_stencil_and_raster_pixels"
+                        | "indexed_strip_uniform_depth_pixels"
                 ) {
                     "tests/shadowbox/drawing.rs"
                 } else {

@@ -93,6 +93,8 @@ pub enum StateCommand {
         faces: u64,
         value: u64,
     },
+    /// Opt-in float-order hypothesis. See provenance 0028.
+    PolygonOffset([u64; 3]),
     Barrier(u64),
     TiledCacheAction(u64),
     BindUniformBuffer {

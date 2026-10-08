@@ -1,5 +1,6 @@
-//! State-only command recording. Signatures 0010, provenance note 0026.
-//! Only firm recording fields are decoded. No command here executes, writes
+//! State-only command recording. Signatures 0010, provenance notes 0026 and 0028.
+//! Polygon offset retains a raw three-register hypothesis for opt-in execution.
+//! No command here executes, writes
 //! program memory, signals synchronization, or allocates rendering resources.
 
 use super::{
@@ -20,6 +21,7 @@ pub(super) const NAMES: &[&str] = &[
     "nvnCommandBufferBindMultisampleState",
     "nvnCommandBufferBindPolygonState",
     "nvnCommandBufferBarrier",
+    "nvnCommandBufferSetPolygonOffsetClamp",
     "nvnCommandBufferSetStencilMask",
     "nvnCommandBufferSetStencilRef",
     "nvnCommandBufferSetStencilValueMask",
@@ -67,6 +69,7 @@ fn record_state(instance: &Instance, function: FunctionId, r: &mut Registers) ->
             faces: r.x[1],
             value: r.x[2],
         },
+        "SetPolygonOffsetClamp" => StateCommand::PolygonOffset([r.d[0], r.d[1], r.d[2]]),
         "Barrier" => StateCommand::Barrier(r.x[1]),
         "SetTiledCacheAction" => StateCommand::TiledCacheAction(r.x[1]),
         "BindUniformBuffer" => StateCommand::BindUniformBuffer {
@@ -131,6 +134,30 @@ mod tests {
         instance.objects.recording(r.x[0]).unwrap()
     }
 
+    #[test]
+    fn polygon_offset_keeps_full_float_words_in_order() {
+        let instance = Instance::new();
+        start(&instance, 0x200);
+        let mut r = Registers::default();
+        r.x[0] = 0x200;
+        r.d[..3].copy_from_slice(&[
+            0x1234_5678_0000_0001,
+            0x2345_6789_0000_0002,
+            0x3456_789a_0000_0003,
+        ]);
+        assert_eq!(
+            call(&instance, "CommandBufferSetPolygonOffsetClamp", &mut r),
+            Status::Ok
+        );
+        assert_eq!(
+            end(&instance, 0x200),
+            vec![RecordedCommand::State(StateCommand::PolygonOffset([
+                0x1234_5678_0000_0001,
+                0x2345_6789_0000_0002,
+                0x3456_789a_0000_0003
+            ]))]
+        );
+    }
     #[test]
     fn scalar_commands_keep_order_and_full_values_without_executing() {
         use StateCommand::*;
@@ -535,7 +562,6 @@ mod tests {
                 "nvnCommandBufferFenceSync",
                 "nvnCommandBufferRestoreZCullData",
                 "nvnCommandBufferSaveZCullData",
-                "nvnCommandBufferSetPolygonOffsetClamp",
                 "nvnDeviceGetProcAddress",
             ]
         );

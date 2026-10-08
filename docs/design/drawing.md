@@ -31,8 +31,8 @@ The supported recording has these limits:
 | Color target | One pool-backed 2D base level, tightly packed RGBA8, no views, zero flags and depth-stencil mode, host-selected identity swizzle |
 | Viewport and scissor | Explicit zero origin, positive sizes bounded by the target, Vulkan pixel coordinates |
 | Color state | Target zero, blend enable explicitly zero, all channels written |
-| Depth and stencil state | Test, write, and stencil enable explicitly zero, no depth attachment |
-| Polygon state | Explicit host-selected no-cull token, fill mode and one sample |
+| Depth and stencil state | Explicit enables; optional host-contract D32 plus S8 attachment, compare, operations, masks and reference |
+| Polygon state | Host-selected culling and polygon modes, host winding, optional offset hypothesis; one sample |
 | Depth range | Vulkan interval zero through one, optional recorded interval must match |
 
 Bindings capture side-table settings, so later setters do not change an
@@ -123,7 +123,7 @@ and canonical pool bytes are checked after each valid case. See
 All enum conversion beyond the host contract, integer shader inputs,
 packed attribute formats, nonzero viewport origins, coordinate conversion,
 specialization overrides, textures, samplers, implicit uniform bank mappings, general indexed semantics, instancing,
-depth, stencil, blend, masks, culling, polygon variation, multisampling, views,
+guest depth and stencil formats and enums, blend, color masks, multisampling, views,
 array layers, additional levels, multiple targets and asynchronous draw
 submission remain open. The sections below list the observations
 needed to close these gaps.
@@ -205,9 +205,44 @@ The smallest useful observation is two overlapping draws with known source and d
 
 `DepthStencilStateSetDepthTestEnable`, `DepthStencilStateSetDepthWriteEnable`, and `DepthStencilStateSetStencilTestEnable` each take a 0 or 1. The depth function takes values from 2, 3, 4, 5, 7, and 8. Stencil function and operation calls carry face, function, reference, mask, and three operation-like values. Command calls also set stencil masks and reference values. See [state objects](../signatures/0003-objects.md#state-objects) and [command buffer state binding](../signatures/0002-command-buffer.md#state-binding).
 
-Missing knowledge includes the state-object layout, depth comparison mapping, depth write behavior, stencil face values, comparison mapping, operation order, reference and mask order, depth attachment format, and depth coordinate convention. `ClearDepthStencil` has an open argument interpretation. The backend's D32 depth image is an implementation choice.
+Missing knowledge includes the state-object layout, depth comparison mapping, depth write behavior, stencil face values, comparison mapping, operation order, reference and mask order, depth attachment format, and depth coordinate convention. `ClearDepthStencil` has an open argument interpretation. The backend's legacy D32 clear image and opt-in D32 plus S8 draw image are implementation choices.
 
 The smallest useful observation is two overlapping draws at known depths, followed by one stencil comparison and one stencil operation. Toggle each enable and write flag. Vary one depth-function value, one stencil-function value, one reference, one mask, and one operation at a time. Inspect the depth and stencil attachment after each draw.
+
+The opt-in `FirstDrawContract::depth_raster` extends the bounded draw with
+`DepthRasterContract`. Its compare table uses Vulkan order: never, less, equal,
+less-or-equal, greater, not-equal, greater-or-equal, always. Its stencil table
+uses keep, zero, replace, increment-clamp, decrement-clamp, invert,
+increment-wrap, decrement-wrap. Face tokens identify front, back and both.
+No observed token gets a default meaning. The headless test uses synthetic
+values outside the observed sets.
+
+The depth target must match the color extent and use the host-selected format,
+2D target and identity swizzle. It has no view, flags, extra levels or layers.
+Its canonical arena storage is a tightly packed plane of little-endian f32
+depth values followed by a plane of stencil bytes. A separate transfer region
+loads and stores each aspect. This format is a host choice, not a measured
+texture layout. The image requires D32_SFLOAT_S8_UINT attachment and transfer
+support. Pool bounds include both planes. Draws load and store both aspects,
+with early and late fragment-test dependencies and fence completion.
+
+The executor treats the stencil-function arguments as face, compare, reference,
+value mask. It treats stencil operations as face, fail, depth fail, pass.
+`SetStencilMask` controls writes, `SetStencilValueMask` controls comparison and
+`SetStencilRef` overrides the reference. These are explicit hypotheses.
+Command values override bound object values independently for each face.
+Enabled stencil requires explicit functions, operations and write masks for
+both faces. Depth writes require enabled depth testing, following Vulkan.
+Unknown tokens and missing state reject the draw. The clear-call interpretation
+remains open; the proof initializes canonical arena bytes directly.
+
+The headless proof checks overlapping depths in both draw orders, disabled
+depth writes, all eight comparisons, a partial stencil write mask, a second
+draw selected by that mask, all eight stencil operations, and distinct stencil
+fail and depth fail operations. It compares presented pixels with canonical
+color bytes and reads the depth and stencil planes. These tests confirm the
+host interpretation, not guest behavior. Guest confirmation still requires
+the isolated observations above. See [provenance 0028](../provenance/0028-depth-raster.md).
 
 ## Rasterizer
 
@@ -216,6 +251,23 @@ The smallest useful observation is two overlapping draws at known depths, follow
 Missing knowledge includes front-face winding, the meaning of cull-face values, polygon modes, polygon offset fields, sample count and sample masks, and the layout of the bound objects.
 
 The smallest useful observation is one front-facing and one back-facing triangle. Reverse the vertex order and vary one polygon value at a time. Then vary each offset float with a sloped triangle and vary the multisample state with an edge that crosses a pixel.
+
+The extended host contract selects none, front, back and both culling, plus
+fill, line and point polygon modes. No observed front-face setter is established,
+so the host chooses clockwise or counter-clockwise winding. Positive viewport
+height uses Vulkan framebuffer coordinates. Non-solid modes require enabled
+`fillModeNonSolid`; nonzero bias clamp requires enabled `depthBiasClamp`.
+Unsupported device features reject pipeline creation.
+
+`SetPolygonOffsetClamp` now retains the three raw float-register words.
+Execution requires explicit opt-in to the hypothesis d0 slope factor,
+d1 constant factor, d2 clamp. Values must be finite f32 words.
+The headless proof checks both triangle orders under every cull mode and both
+host windings, pixel coverage for line and point modes, and depth bias.
+Constant, slope and clamp checks confirm distinct offset roles under the host
+hypothesis. The cache key includes all interpreted depth, stencil and raster state, plus
+attachment presence. The graphics persistence namespace advances to interface 2.
+Guest enum meanings and offset order remain open.
 
 ## Render targets and formats
 

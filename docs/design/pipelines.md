@@ -172,10 +172,12 @@ stream indices and strides, each attribute's stream, format, and offset,
 and the uniform or storage descriptor mode.
 Full equality prevents hash collisions from aliasing code. Attribute array
 indices map to shader locations as an explicit experiment assumption.
-The supported output is location zero in RGBA8 with one sample. No culling,
-blend, depth, or stencil are fixed for this cache. Their constancy makes them
-implicit key fields. The contract supports triangle lists, strips, fans, and
-the twelve float-converting formats in provenance 0028.
+The supported output is location zero in RGBA8 with one sample. No blend is fixed for this cache. The contract supports triangle lists, strips,
+fans, and the twelve float-converting formats in provenance 0028.
+Optional depth attachment presence, enable flags, comparison, per-face stencil
+operations, masks, reference, culling, winding, polygon mode and bias belong
+in the key. The graphics disk namespace uses interface 2.
+See [depth and rasterizer provenance](../provenance/0028-depth-raster.md).
 Guest addresses, vertex buffer contents, viewport, and scissor stay outside it.
 Specialization uses emitted defaults. Overrides remain open. Stage-local
 constant banks use explicit host mappings and aligned arena ranges.
@@ -188,7 +190,7 @@ separate disk namespaces. Graphics keys use retained translated words, so
 graphics workers never invoke the translator or persist translation records.
 
 A content hit shares an owned request before reflection and Vulkan creation.
-A miss queues the owned stage words and vertex input. The worker checks both
+A miss queues the owned stage words, vertex input and interpreted state. The worker checks both
 stages, reflects supported constant banks, creates descriptor and push layouts
 and a load/store render pass,
 and creates the pipeline through the guarded driver cache. Temporary modules
@@ -205,7 +207,7 @@ envelope, device identity and empty-cache fallback as compute.
 `graphics_pending_count` reports outstanding jobs; persistence statistics and
 `take_graphics_cache_diagnostics` expose disk loading and bounded diagnostics.
 `retry_graphics_pipeline` takes the translated stages, complete `VertexInput`,
-and `PrimitiveTopology` to forget exactly one failed content request.
+`PrimitiveTopology`, and interpreted `DrawPipelineState` to forget exactly one failed content request. Public Vulkan enum values are validated first.
 
 Draw execution requests a pipeline and polls once. Queued, compiling or
 queue-full work skips only that draw, with no wait or cache I/O on submission.
@@ -213,7 +215,7 @@ Other commands continue and the skipped draw is not replayed. A failed request
 returns `Unimplemented`. This is the host policy in provenance 0026, not an
 established guest semantic or equivalent output guarantee.
 
-The first queue executor requires explicit recorded disable flags and a host
+The queue executor requires explicit recorded enable flags and a host
 `FirstDrawContract` for unresolved tokens. It resolves the vertex slice through
 registered pools and checks the last fetched attribute, including first vertex,
 stride, offset, and format size in every active stream. Attachment bytes load

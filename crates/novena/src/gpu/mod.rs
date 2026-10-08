@@ -227,6 +227,47 @@ impl Backend {
         true
     }
 
+    pub(crate) fn ensure_depth_stencil(
+        &mut self,
+        key: u64,
+        description: &crate::api::TextureDescription,
+    ) -> bool {
+        let Some(bytes) = description
+            .width
+            .checked_mul(description.height)
+            .and_then(|n| n.checked_mul(5))
+            .and_then(|n| usize::try_from(n).ok())
+        else {
+            return false;
+        };
+        if description.width == 0
+            || description.height == 0
+            || description.pool == 0
+            || description.stride != 0
+        {
+            return false;
+        }
+        if self
+            .global_memory
+            .as_ref()
+            .and_then(|m| m.image_region(description.pool, description.pool_offset, bytes))
+            .is_none()
+        {
+            return false;
+        }
+        if !self.images.ensure_format(
+            key,
+            description.width,
+            description.height,
+            vk::Format::D32_SFLOAT_S8_UINT,
+        ) {
+            return false;
+        }
+        self.bindings
+            .insert(key, (description.pool, description.pool_offset, bytes));
+        true
+    }
+
     fn sync_texture(&mut self, key: u64, load: bool) -> Option<()> {
         if let Some(&(pool, offset, bytes)) = self.bindings.get(&key) {
             let (buffer, offset) = self
@@ -267,13 +308,21 @@ impl Backend {
     pub(crate) fn draw(
         &mut self,
         texture: u64,
+        depth: Option<u64>,
         pipeline: &graphics::GraphicsPipeline,
         draw: &graphics::Draw,
     ) -> Option<()> {
         self.sync_texture(texture, true)?;
+        if let Some(depth) = depth {
+            self.sync_texture(depth, true)?;
+        }
         self.images
-            .draw(texture, pipeline, self.global_memory.as_ref()?, draw)?;
-        self.sync_texture(texture, false)
+            .draw(texture, depth, pipeline, self.global_memory.as_ref()?, draw)?;
+        self.sync_texture(texture, false)?;
+        if let Some(depth) = depth {
+            self.sync_texture(depth, false)?;
+        }
+        Some(())
     }
 
     pub fn readback(&mut self, key: u64) -> Option<(u32, u32, Vec<u8>)> {
@@ -540,7 +589,9 @@ impl Context {
             };
             let enabled = vk::PhysicalDeviceFeatures::default()
                 .shader_int64(true)
-                .shader_int16(shader_features.shader_int16);
+                .shader_int16(shader_features.shader_int16)
+                .fill_mode_non_solid(core.fill_mode_non_solid != 0)
+                .depth_bias_clamp(core.depth_bias_clamp != 0);
             let mut enabled11 = vk::PhysicalDeviceVulkan11Features::default()
                 .storage_buffer16_bit_access(shader_features.storage_buffer16_bit_access);
             let mut enabled12 = vk::PhysicalDeviceVulkan12Features::default()

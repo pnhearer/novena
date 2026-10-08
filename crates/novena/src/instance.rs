@@ -315,12 +315,17 @@ impl Instance {
         stages: &[Vec<u32>],
         input: crate::gpu::graphics::VertexInput,
         topology: crate::gpu::graphics::PrimitiveTopology,
+        state: crate::gpu::graphics::DrawPipelineState,
     ) -> Result<bool, String> {
         let mut gpu = self.gpu.lock().unwrap_or_else(|p| p.into_inner());
         let backend = gpu.as_mut().ok_or("Vulkan backend is unavailable")?;
-        backend
-            .graphics
-            .retry_failed(stages, input, topology, backend.uniforms.storage_buffers)
+        backend.graphics.retry_failed(
+            stages,
+            input,
+            topology,
+            state,
+            backend.uniforms.storage_buffers,
+        )
     }
 
     pub fn set_shader_translator(&self, translator: Option<Arc<dyn ShaderTranslator>>) {

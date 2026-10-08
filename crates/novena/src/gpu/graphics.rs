@@ -12,7 +12,7 @@ use ash::vk;
 use std::{collections::HashMap, path::Path, sync::Arc};
 
 /// Opt-in host interpretation, not established guest enums. Provenance: 0028.
-/// Viewport/scissor use Vulkan pixel coordinates. Raster state uses fill,
+/// Viewport/scissor use Vulkan pixel coordinates. Without the depth/raster extension, raster state uses fill,
 /// one sample and all color channels. Duplicate tokens are rejected at use.
 #[derive(Clone, Debug)]
 pub struct FirstDrawContract {
@@ -28,6 +28,67 @@ pub struct FirstDrawContract {
     pub rgba8: u64,
     pub target_2d: u64,
     pub identity_swizzle: [u64; 4],
+    pub depth_raster: Option<DepthRasterContract>,
+}
+
+/// Host-selected tokens, not guest enum claims. See provenance 0028.
+#[derive(Clone, Copy, Debug)]
+pub struct DepthRasterContract {
+    pub d32s8: u64,
+    /// Never, less, equal, less-or-equal, greater, not-equal, greater-or-equal, always.
+    pub compare: [u64; 8],
+    /// Keep, zero, replace, increment-clamp, decrement-clamp, invert, increment-wrap, decrement-wrap.
+    pub stencil_ops: [u64; 8],
+    /// Front, back, both.
+    pub faces: [u64; 3],
+    /// Front, back, both. No culling uses FirstDrawContract::cull_none.
+    pub cull: [u64; 3],
+    /// Fill, line, point.
+    pub polygon: [u64; 3],
+    /// No recorded front-face setter is established. This is a host choice.
+    pub clockwise: bool,
+    /// Opt into the d0 slope, d1 constant, d2 clamp hypothesis.
+    pub polygon_offset: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+pub struct StencilState {
+    pub fail: i32,
+    pub depth_fail: i32,
+    pub pass: i32,
+    pub compare: i32,
+    pub mask: u32,
+    pub write_mask: u32,
+    pub reference: u32,
+}
+impl StencilState {
+    fn vk(self) -> vk::StencilOpState {
+        vk::StencilOpState::default()
+            .fail_op(vk::StencilOp::from_raw(self.fail))
+            .depth_fail_op(vk::StencilOp::from_raw(self.depth_fail))
+            .pass_op(vk::StencilOp::from_raw(self.pass))
+            .compare_op(vk::CompareOp::from_raw(self.compare))
+            .compare_mask(self.mask)
+            .write_mask(self.write_mask)
+            .reference(self.reference)
+    }
+}
+
+/// Interpreted pipeline state, also used for explicit cache retry.
+/// Enum integers are public Vulkan values. Retry validates them before use.
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+pub struct DrawPipelineState {
+    pub attachment: bool,
+    pub depth_test: bool,
+    pub depth_write: bool,
+    pub depth_compare: i32,
+    pub stencil_test: bool,
+    pub stencil: [StencilState; 2],
+    pub cull: u32,
+    pub polygon: i32,
+    pub clockwise: bool,
+    /// Slope, constant, clamp as finite f32 bits.
+    pub bias: [u32; 3],
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -127,6 +188,7 @@ struct Key {
     input: VertexInput,
     topology: PrimitiveTopology,
     storage: bool,
+    state: DrawPipelineState,
 }
 
 pub(crate) struct GraphicsPipelines {
@@ -189,9 +251,10 @@ impl GraphicsPipelines {
         stages: &[Vec<u32>],
         input: VertexInput,
         topology: PrimitiveTopology,
+        state: DrawPipelineState,
         storage: bool,
     ) -> Result<Option<Arc<GraphicsPipeline>>, String> {
-        let key = Key::new(stages, input, topology, self.uses_storage(storage))?;
+        let key = Key::new(stages, input, topology, state, self.uses_storage(storage))?;
         let request = match self.pool.request(key) {
             Ok(request) => request,
             Err(RequestError::QueueFull) => return Ok(None),
@@ -208,12 +271,14 @@ impl GraphicsPipelines {
         stages: &[Vec<u32>],
         input: VertexInput,
         topology: PrimitiveTopology,
+        state: DrawPipelineState,
         storage: bool,
     ) -> Result<bool, String> {
         Ok(self.pool.retry_failed(&Key::new(
             stages,
             input,
             topology,
+            state,
             self.uses_storage(storage),
         )?))
     }
@@ -238,8 +303,25 @@ impl Key {
         stages: &[Vec<u32>],
         input: VertexInput,
         topology: PrimitiveTopology,
+        state: DrawPipelineState,
         storage: bool,
     ) -> Result<Self, String> {
+        if !(0..=7).contains(&state.depth_compare)
+            || state.stencil.iter().any(|s| {
+                !(0..=7).contains(&s.compare)
+                    || [s.fail, s.depth_fail, s.pass]
+                        .iter()
+                        .any(|op| !(0..=7).contains(op))
+            })
+            || state.cull > 3
+            || !(0..=2).contains(&state.polygon)
+            || state
+                .bias
+                .iter()
+                .any(|bits| !f32::from_bits(*bits).is_finite())
+        {
+            return Err("invalid interpreted depth or raster state".into());
+        }
         if stages.len() != 2 {
             return Err("first draw requires exactly two translated stages".into());
         }
@@ -264,6 +346,7 @@ impl Key {
             input,
             topology,
             storage,
+            state,
         })
     }
 }
@@ -466,6 +549,17 @@ impl GraphicsPipeline {
         {
             return Err("constant banks exceed device descriptor limits".into());
         }
+        let features = unsafe {
+            context
+                .instance
+                .get_physical_device_features(context.physical_device)
+        };
+        if key.state.polygon != 0 && features.fill_mode_non_solid == 0 {
+            return Err("non-solid polygon modes are unavailable".into());
+        }
+        if f32::from_bits(key.state.bias[2]) != 0.0 && features.depth_bias_clamp == 0 {
+            return Err("depth bias clamp is unavailable".into());
+        }
         let mut result = Self {
             context: context.clone(),
             render_pass: vk::RenderPass::null(),
@@ -475,9 +569,9 @@ impl GraphicsPipeline {
             banks,
             storage: key.storage,
         };
-        // SAFETY: these are fixed public Vulkan states, with owned partial handles.
+        // SAFETY: validated public Vulkan states, with owned partial handles.
         unsafe {
-            let attachments = [vk::AttachmentDescription::default()
+            let mut attachments = vec![vk::AttachmentDescription::default()
                 .format(vk::Format::R8G8B8A8_UNORM)
                 .samples(vk::SampleCountFlags::TYPE_1)
                 .load_op(vk::AttachmentLoadOp::LOAD)
@@ -486,12 +580,32 @@ impl GraphicsPipeline {
                 .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
                 .initial_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                 .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)];
+            if key.state.attachment {
+                attachments.push(
+                    vk::AttachmentDescription::default()
+                        .format(vk::Format::D32_SFLOAT_S8_UINT)
+                        .samples(vk::SampleCountFlags::TYPE_1)
+                        .load_op(vk::AttachmentLoadOp::LOAD)
+                        .store_op(vk::AttachmentStoreOp::STORE)
+                        .stencil_load_op(vk::AttachmentLoadOp::LOAD)
+                        .stencil_store_op(vk::AttachmentStoreOp::STORE)
+                        .initial_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                        .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL),
+                );
+            }
             let colors = [vk::AttachmentReference::default()
                 .attachment(0)
                 .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)];
-            let subpasses = [vk::SubpassDescription::default()
+            let depth_ref = vk::AttachmentReference::default()
+                .attachment(1)
+                .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            let mut subpass = vk::SubpassDescription::default()
                 .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-                .color_attachments(&colors)];
+                .color_attachments(&colors);
+            if key.state.attachment {
+                subpass = subpass.depth_stencil_attachment(&depth_ref);
+            }
+            let subpasses = [subpass];
             result.render_pass = context
                 .device
                 .create_render_pass(
@@ -599,13 +713,27 @@ impl GraphicsPipeline {
             .viewport_count(1)
             .scissor_count(1);
         let raster = vk::PipelineRasterizationStateCreateInfo::default()
-            .polygon_mode(vk::PolygonMode::FILL)
-            .cull_mode(vk::CullModeFlags::NONE)
-            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .polygon_mode(vk::PolygonMode::from_raw(key.state.polygon))
+            .cull_mode(vk::CullModeFlags::from_raw(key.state.cull))
+            .front_face(if key.state.clockwise {
+                vk::FrontFace::CLOCKWISE
+            } else {
+                vk::FrontFace::COUNTER_CLOCKWISE
+            })
+            .depth_bias_enable(key.state.bias != [0; 3])
+            .depth_bias_slope_factor(f32::from_bits(key.state.bias[0]))
+            .depth_bias_constant_factor(f32::from_bits(key.state.bias[1]))
+            .depth_bias_clamp(f32::from_bits(key.state.bias[2]))
             .line_width(1.0);
         let samples = vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-        let depth = vk::PipelineDepthStencilStateCreateInfo::default();
+        let depth = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(key.state.depth_test)
+            .depth_write_enable(key.state.depth_write)
+            .depth_compare_op(vk::CompareOp::from_raw(key.state.depth_compare))
+            .stencil_test_enable(key.state.stencil_test)
+            .front(key.state.stencil[0].vk())
+            .back(key.state.stencil[1].vk());
         let colors = [vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA)];
         let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&colors);
@@ -798,6 +926,53 @@ mod tests {
         instruction(&mut words, 59, &[3, 4, storage]);
         instruction(&mut words, 71, &[4, 30, location]);
         words
+    }
+    #[test]
+    fn retry_key_rejects_invalid_public_state_before_driver_use() {
+        let stages = [interface(0, 1, 0), interface(4, 3, 0)];
+        let input = VertexInput {
+            bindings: vec![VertexBinding {
+                binding: 0,
+                stride: 16,
+            }],
+            attributes: vec![VertexAttribute {
+                binding: 0,
+                format: VertexFormat::Float4,
+                offset: 0,
+            }],
+        };
+        let invalid = DrawPipelineState {
+            polygon: 3,
+            ..Default::default()
+        };
+        assert!(Key::new(
+            &stages,
+            input.clone(),
+            PrimitiveTopology::TriangleList,
+            invalid,
+            false
+        )
+        .is_err());
+        let invalid = DrawPipelineState {
+            bias: [f32::INFINITY.to_bits(), 0, 0],
+            ..Default::default()
+        };
+        assert!(Key::new(
+            &stages,
+            input.clone(),
+            PrimitiveTopology::TriangleList,
+            invalid,
+            false
+        )
+        .is_err());
+        assert!(Key::new(
+            &stages,
+            input.clone(),
+            PrimitiveTopology::TriangleList,
+            DrawPipelineState::default(),
+            false
+        )
+        .is_ok());
     }
     #[test]
     fn derives_stage_and_single_float4_location_from_translation() {

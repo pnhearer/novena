@@ -815,6 +815,7 @@ fn contract() -> FirstDrawContract {
         identity_swizzle: [0; 4],
         index_u16: 0xf006,
         index_u32: 0xf007,
+        depth_raster: None,
     }
 }
 
@@ -1682,13 +1683,57 @@ fn uniform_banks_colour_two_draws() {
 #[test]
 #[ignore = "requires Vulkan, the flat arena, glslangValidator and spirv-val; never skips"]
 fn uniform_banks_with_strip_and_normalized_attribute() {
+    uniform_strip_proof(false);
+}
+
+#[test]
+#[ignore = "requires Vulkan, the flat arena, glslangValidator and spirv-val; never skips"]
+fn indexed_strip_uniform_depth_pixels() {
+    uniform_strip_proof(true);
+}
+
+fn uniform_strip_proof(indexed_depth: bool) {
     use novena::gpu::uniforms::{UniformBankMapping, UniformBufferContract, UniformStage};
     let mut c = contract();
     c.topologies = vec![(0xf007, PrimitiveTopology::TriangleStrip)];
     c.attribute_formats.push((0xf106, VertexFormat::Unorm8x4));
     c.attribute_state_stride = Some(32);
     c.stream_state_stride = Some(16);
+    if indexed_depth {
+        c.depth_raster = depth_contract(false).depth_raster;
+    }
     let f = Fixture::new(c);
+    if indexed_depth {
+        call(&f.instance, "nvnTextureBuilderSetDefaults", &[3]);
+        call(&f.instance, "nvnTextureBuilderSetSize2D", &[3, 64, 64]);
+        call(&f.instance, "nvnTextureBuilderSetFormat", &[3, 0xf006]);
+        call(&f.instance, "nvnTextureBuilderSetTarget", &[3, 0xf005]);
+        call(&f.instance, "nvnTextureBuilderSetStorage", &[3, 2, 0x20000]);
+        call(&f.instance, "nvnTextureInitialize", &[5, 3]);
+        call(
+            &f.instance,
+            "nvnDepthStencilStateSetDepthTestEnable",
+            &[23, 1],
+        );
+        call(
+            &f.instance,
+            "nvnDepthStencilStateSetDepthWriteEnable",
+            &[23, 1],
+        );
+        call(
+            &f.instance,
+            "nvnDepthStencilStateSetDepthFunc",
+            &[23, 0xf101],
+        );
+        put(
+            &f.state,
+            0x1700,
+            &[65535_u16, 2, 3, 4, 5, 65535]
+                .into_iter()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>(),
+        );
+    }
     f.program(
         Arc::new(SourceShaders {
             vertex: compile_source(
@@ -1759,7 +1804,18 @@ void main() { color = bank.data[1] * tint; }
         put(&f.state, (0x1000 + offset + 16) as usize, &floats(&color));
     }
     let record = |offset, color_size| {
+        if indexed_depth {
+            put(&f.state, 0x21000, &1.0_f32.to_le_bytes().repeat(4096));
+            put(&f.state, 0x25000, &[0; 4096]);
+        }
         f.begin();
+        if indexed_depth {
+            call(
+                &f.instance,
+                "nvnCommandBufferSetRenderTargets",
+                &[7, 1, 0x100, 0, 5, 0],
+            );
+        }
         call(
             &f.instance,
             "nvnCommandBufferBindVertexBuffer",
@@ -1790,11 +1846,26 @@ void main() { color = bank.data[1] * tint; }
             "nvnCommandBufferBindUniformBuffer",
             &[7, 1, 0, f.base + offset, 32],
         );
-        call(
-            &f.instance,
-            "nvnCommandBufferDrawArrays",
-            &[7, 0xf007, 1, 4],
-        );
+        if indexed_depth {
+            call(
+                &f.instance,
+                "nvnCommandBufferDrawElementsBaseVertex",
+                &[
+                    7,
+                    0xf007,
+                    0xf006,
+                    4,
+                    f.base + 0x702,
+                    u64::from((-1_i32) as u32),
+                ],
+            );
+        } else {
+            call(
+                &f.instance,
+                "nvnCommandBufferDrawArrays",
+                &[7, 0xf007, 1, 4],
+            );
+        }
     };
     for storage in [false, true] {
         f.instance
@@ -1823,6 +1894,13 @@ void main() { color = bank.data[1] * tint; }
             record(offset, 5);
             submit(&f.instance, &f.state, Status::Ok);
             check_geometry(&f.pixels(), &vertices, &[[0, 1, 2], [1, 2, 3]], color);
+            if indexed_depth {
+                let memory = f.state.memory.lock().unwrap();
+                let center = 0x21000 + (24 * 64 + 32) * 4;
+                assert_eq!(&memory[center..center + 4], &0.0_f32.to_le_bytes());
+                assert_eq!(&memory[0x21000..0x21004], &1.0_f32.to_le_bytes());
+                assert!(memory[0x25000..0x26000].iter().all(|&value| value == 0));
+            }
         }
         record(red, 4);
         submit(&f.instance, &f.state, Status::BadArgument);
@@ -1839,5 +1917,511 @@ void main() { color = bank.data[1] * tint; }
             hits: 6 - misses
         })
     );
-    println!("MATCH strip, normalized zero-stride second stream, stage-local banks, uniform/storage modes, rebinding, cache reuse and short vertex range");
+    println!("MATCH strip, normalized zero-stride second stream, stage-local banks, uniform/storage modes, rebinding, cache reuse and short vertex range; indexed depth {indexed_depth}");
+}
+
+fn depth_contract(clockwise: bool) -> FirstDrawContract {
+    FirstDrawContract {
+        topologies: vec![(0xf001, PrimitiveTopology::TriangleList)],
+        attribute_formats: vec![(0xf002, VertexFormat::Float4)],
+        attribute_state_stride: None,
+        stream_state_stride: None,
+        index_u16: 0xf006,
+        index_u32: 0xf007,
+        cull_none: 0xf003,
+        rgba8: 0xf004,
+        target_2d: 0xf005,
+        identity_swizzle: [0; 4],
+        depth_raster: Some(novena::gpu::graphics::DepthRasterContract {
+            d32s8: 0xf006,
+            compare: [
+                0xf100, 0xf101, 0xf102, 0xf103, 0xf104, 0xf105, 0xf106, 0xf107,
+            ],
+            stencil_ops: [
+                0xf200, 0xf201, 0xf202, 0xf203, 0xf204, 0xf205, 0xf206, 0xf207,
+            ],
+            faces: [0xf301, 0xf302, 0xf303],
+            cull: [0xf401, 0xf402, 0xf403],
+            polygon: [0xf500, 0xf501, 0xf502],
+            clockwise,
+            polygon_offset: true,
+        }),
+    }
+}
+
+struct DepthProof {
+    instance: Instance,
+    state: Box<State>,
+    base: u64,
+}
+impl DepthProof {
+    fn new() -> Self {
+        let state = Box::new(State {
+            memory: Mutex::new(vec![0; 0x20000]),
+            frames: Mutex::new(Vec::new()),
+        });
+        let instance = unsafe {
+            Instance::with_host(Host {
+                user: std::ptr::from_ref(&*state).cast_mut().cast(),
+                read_memory: Some(read),
+                write_memory: Some(write),
+                present: Some(present),
+                ..Host::default()
+            })
+        };
+        assert!(instance.set_first_draw_contract(Some(depth_contract(false))));
+        call(&instance, "nvnMemoryPoolBuilderSetDefaults", &[1]);
+        call(
+            &instance,
+            "nvnMemoryPoolBuilderSetStorage",
+            &[1, 0x1000, 0xc000],
+        );
+        call(&instance, "nvnMemoryPoolInitialize", &[2, 1]);
+        let base = call(&instance, "nvnMemoryPoolGetBufferAddress", &[2]);
+        for (texture, format, offset) in [(4, 0xf004, 0x1000), (5, 0xf006, 0x6000)] {
+            call(&instance, "nvnTextureBuilderSetDefaults", &[3]);
+            call(&instance, "nvnTextureBuilderSetSize2D", &[3, 64, 64]);
+            call(&instance, "nvnTextureBuilderSetFormat", &[3, format]);
+            call(&instance, "nvnTextureBuilderSetTarget", &[3, 0xf005]);
+            call(&instance, "nvnTextureBuilderSetStorage", &[3, 2, offset]);
+            call(&instance, "nvnTextureInitialize", &[texture, 3]);
+        }
+        put(&state, 0x100, &4_u64.to_le_bytes());
+        call(&instance, "nvnWindowBuilderSetDefaults", &[8]);
+        call(&instance, "nvnWindowBuilderSetTextures", &[8, 1, 0x100]);
+        call(&instance, "nvnWindowInitialize", &[9, 8]);
+        call(&instance, "nvnCommandBufferInitialize", &[7, 0]);
+        for (kind, address) in [
+            ("VertexStreamState", 20),
+            ("VertexAttribState", 21),
+            ("ColorState", 22),
+            ("DepthStencilState", 23),
+            ("PolygonState", 24),
+        ] {
+            call(&instance, &format!("nvn{kind}SetDefaults"), &[address]);
+        }
+        call(&instance, "nvnVertexStreamStateSetStride", &[20, 16]);
+        call(&instance, "nvnVertexStreamStateSetDivisor", &[20, 0]);
+        call(&instance, "nvnVertexAttribStateSetFormat", &[21, 0xf002, 0]);
+        call(&instance, "nvnVertexAttribStateSetStreamIndex", &[21, 0]);
+        call(&instance, "nvnColorStateSetBlendEnable", &[22, 0, 0]);
+        for setting in ["DepthTestEnable", "DepthWriteEnable", "StencilTestEnable"] {
+            call(
+                &instance,
+                &format!("nvnDepthStencilStateSet{setting}"),
+                &[23, 0],
+            );
+        }
+        call(&instance, "nvnDepthStencilStateSetDepthFunc", &[23, 0xf101]);
+        call(&instance, "nvnPolygonStateSetCullFace", &[24, 0xf003]);
+        call(&instance, "nvnPolygonStateSetPolygonMode", &[24, 0xf500]);
+        instance.set_shader_translator(Some(Arc::new(Translator(AtomicUsize::new(0)))));
+        instance.set_shader_translation_enabled(true);
+        put(&state, 0x1500, &shader(false, 0.0));
+        for (program, address, records, green) in
+            [(12, 0x1300, 0x400, 0.25), (13, 0x1700, 0x480, 0.75)]
+        {
+            put(&state, address, &shader(true, green));
+            put(
+                &state,
+                records,
+                &(base + address as u64 - 0x1000).to_le_bytes(),
+            );
+            put(&state, records + 0x40, &(base + 0x500).to_le_bytes());
+            call(&instance, "nvnProgramInitialize", &[program, 0]);
+            call(
+                &instance,
+                "nvnProgramSetShaders",
+                &[program, 2, records as u64],
+            );
+        }
+        Self {
+            instance,
+            state,
+            base,
+        }
+    }
+    fn reset(&self, depth: f32, stencil: u8) {
+        put(&self.state, 0x2000, &[0, 0, 255, 255].repeat(4096));
+        put(&self.state, 0x7000, &depth.to_le_bytes().repeat(4096));
+        put(&self.state, 0xb000, &[stencil; 4096]);
+    }
+    fn vertices(&self, z: f32, reverse: bool) {
+        let mut vertices = [
+            [-0.75, -0.75, z, 1.0],
+            [0.75, -0.75, z, 1.0],
+            [0.0, 0.75, z, 1.0],
+        ];
+        if reverse {
+            vertices.swap(1, 2);
+        }
+        put(
+            &self.state,
+            0x1080,
+            &vertices
+                .into_iter()
+                .flatten()
+                .flat_map(f32::to_le_bytes)
+                .collect::<Vec<_>>(),
+        );
+    }
+    fn record(&self, program: u64, stencil: [u64; 3], scissor: u64, bias: Option<[f32; 3]>) {
+        let i = &self.instance;
+        call(i, "nvnCommandBufferBeginRecording", &[7]);
+        call(
+            i,
+            "nvnCommandBufferSetRenderTargets",
+            &[7, 1, 0x100, 0, 5, 0],
+        );
+        call(i, "nvnCommandBufferBindProgram", &[7, program, 0xffff]);
+        call(
+            i,
+            "nvnCommandBufferBindVertexBuffer",
+            &[7, 0, self.base + 0x80, 48],
+        );
+        call(i, "nvnCommandBufferBindVertexStreamState", &[7, 1, 20]);
+        call(i, "nvnCommandBufferBindVertexAttribState", &[7, 1, 21]);
+        call(i, "nvnCommandBufferBindColorState", &[7, 22]);
+        call(i, "nvnCommandBufferBindDepthStencilState", &[7, 23]);
+        call(i, "nvnCommandBufferBindPolygonState", &[7, 24]);
+        call(
+            i,
+            "nvnCommandBufferSetStencilMask",
+            &[7, 0xf303, stencil[0]],
+        );
+        call(i, "nvnCommandBufferSetStencilRef", &[7, 0xf303, stencil[1]]);
+        call(
+            i,
+            "nvnCommandBufferSetStencilValueMask",
+            &[7, 0xf303, stencil[2]],
+        );
+        call(i, "nvnCommandBufferSetViewport", &[7, 0, 0, 64, 64]);
+        call(i, "nvnCommandBufferSetScissor", &[7, 0, 0, scissor, 64]);
+        if let Some(bias) = bias {
+            let mut r = Registers::default();
+            r.x[0] = 7;
+            for (j, value) in bias.into_iter().enumerate() {
+                r.d[j] = u64::from(value.to_bits());
+            }
+            assert_eq!(
+                i.call(
+                    functions::lookup("nvnCommandBufferSetPolygonOffsetClamp").unwrap(),
+                    &mut r
+                ),
+                Status::Ok
+            );
+        }
+        call(i, "nvnCommandBufferDrawArrays", &[7, 0xf001, 0, 3]);
+    }
+    // A warmup can execute. Restore arena bytes before the measured draw.
+    fn warm(&self, program: u64, mask: u64, reference: u64, scissor: u64, bias: Option<[f32; 3]>) {
+        self.record(program, [mask, reference, 0xff], scissor, bias);
+        submit(&self.instance, &self.state, Status::Ok);
+        wait_for_graphics(&self.instance);
+    }
+    fn draw(&self, program: u64, mask: u64, reference: u64, scissor: u64, bias: Option<[f32; 3]>) {
+        self.record(program, [mask, reference, 0xff], scissor, bias);
+        submit(&self.instance, &self.state, Status::Ok);
+    }
+    fn pixel(&self, x: usize, y: usize) -> [u8; 4] {
+        call(&self.instance, "nvnQueuePresentTexture", &[0, 9, 0]);
+        let frames = self.state.frames.lock().unwrap();
+        let p = &frames.last().unwrap().2[(y * 64 + x) * 4..(y * 64 + x + 1) * 4];
+        let bytes = self.state.memory.lock().unwrap();
+        assert_eq!(
+            p,
+            &bytes[0x2000 + (y * 64 + x) * 4..0x2000 + (y * 64 + x + 1) * 4]
+        );
+        p.try_into().unwrap()
+    }
+    fn depth(&self) -> f32 {
+        let memory = self.state.memory.lock().unwrap();
+        let at = 0x7000 + (24 * 64 + 32) * 4;
+        f32::from_le_bytes(memory[at..at + 4].try_into().unwrap())
+    }
+    fn stencil(&self, x: usize) -> u8 {
+        self.state.memory.lock().unwrap()[0xb000 + 24 * 64 + x]
+    }
+    fn setting(&self, name: &str, value: u64) {
+        call(
+            &self.instance,
+            &format!("nvnDepthStencilStateSet{name}"),
+            &[23, value],
+        );
+    }
+    fn stencil_state(&self, compare: u64, ops: [u64; 3]) {
+        call(
+            &self.instance,
+            "nvnDepthStencilStateSetStencilFunc",
+            &[23, 0xf303, compare, 0, 0xff],
+        );
+        call(
+            &self.instance,
+            "nvnDepthStencilStateSetStencilOp",
+            &[23, 0xf303, ops[0], ops[1], ops[2]],
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires Vulkan, the flat arena, spirv-val and Shadowbox; never skips"]
+fn depth_stencil_and_raster_pixels() {
+    let p = DepthProof::new();
+    let first = [255, 64, 128, 255];
+    let second = [255, 191, 128, 255];
+    let clear = [0, 0, 255, 255];
+    p.vertices(0.25, false);
+    p.reset(1.0, 0);
+    p.setting("DepthTestEnable", 1);
+    p.setting("DepthWriteEnable", 1);
+    p.warm(12, 0xff, 0, 64, None);
+    p.warm(13, 0xff, 0, 64, None);
+    p.reset(1.0, 0);
+    p.draw(12, 0xff, 0, 64, None);
+    assert_eq!(p.depth(), 0.25);
+    p.vertices(0.75, false);
+    p.draw(13, 0xff, 0, 64, None);
+    assert_eq!(p.pixel(32, 24), first);
+    assert_eq!(p.depth(), 0.25);
+    // Reversing draw order still leaves the nearer fragment.
+    p.reset(1.0, 0);
+    p.draw(13, 0xff, 0, 64, None);
+    p.vertices(0.25, false);
+    p.draw(12, 0xff, 0, 64, None);
+    assert_eq!(p.pixel(32, 24), first);
+    // Disabled writes preserve the initial depth and allow the farther draw.
+    p.setting("DepthWriteEnable", 0);
+    p.warm(12, 0xff, 0, 64, None);
+    p.warm(13, 0xff, 0, 64, None);
+    p.reset(1.0, 0);
+    p.draw(12, 0xff, 0, 64, None);
+    p.vertices(0.75, false);
+    p.draw(13, 0xff, 0, 64, None);
+    assert_eq!(p.pixel(32, 24), second);
+    assert_eq!(p.depth(), 1.0);
+    // Depth write enable has no effect when the depth test is disabled.
+    p.setting("DepthTestEnable", 0);
+    p.setting("DepthWriteEnable", 1);
+    p.vertices(0.25, false);
+    p.warm(12, 0xff, 0, 64, None);
+    p.reset(0.5, 0);
+    p.draw(12, 0xff, 0, 64, None);
+    assert_eq!(p.pixel(32, 24), first);
+    assert_eq!(p.depth(), 0.5);
+    p.setting("DepthTestEnable", 1);
+    p.setting("DepthWriteEnable", 0);
+    // Every compare token is exercised on equal and unequal depths.
+    for (op, pass) in [
+        (0, false),
+        (1, false),
+        (2, true),
+        (3, true),
+        (4, false),
+        (5, false),
+        (6, true),
+        (7, true),
+    ] {
+        p.setting("DepthFunc", 0xf100 + op);
+        p.vertices(0.5, false);
+        p.warm(12, 0xff, 0, 64, None);
+        p.reset(0.5, 0);
+        p.draw(12, 0xff, 0, 64, None);
+        assert_eq!(p.pixel(32, 24), if pass { first } else { clear });
+        p.reset(0.75, 0);
+        p.draw(12, 0xff, 0, 64, None);
+        assert_eq!(
+            p.pixel(32, 24),
+            if matches!(op, 1 | 3 | 5 | 7) {
+                first
+            } else {
+                clear
+            }
+        );
+    }
+    p.setting("DepthTestEnable", 0);
+    p.setting("StencilTestEnable", 1);
+    p.stencil_state(0xf107, [0xf200, 0xf200, 0xf202]);
+    p.warm(12, 0x0f, 0xa5, 32, None);
+    p.reset(1.0, 0xb0);
+    p.draw(12, 0x0f, 0xa5, 32, None);
+    assert_eq!(p.stencil(24), 0xb5);
+    assert_eq!(p.stencil(40), 0xb0);
+    // Compare against the mask through a second draw, with writes disabled.
+    p.stencil_state(0xf102, [0xf200; 3]);
+    p.warm(13, 0, 0xb5, 64, None);
+    // Warmup may color the left side. Rebuild the mask before measuring.
+    p.stencil_state(0xf107, [0xf200, 0xf200, 0xf202]);
+    p.reset(1.0, 0xb0);
+    p.draw(12, 0x0f, 0xa5, 32, None);
+    p.stencil_state(0xf102, [0xf200; 3]);
+    p.draw(13, 0, 0xb5, 64, None);
+    assert_eq!(p.pixel(24, 24), second);
+    assert_eq!(p.pixel(40, 24), clear);
+    assert_eq!(p.stencil(24), 0xb5);
+    assert_eq!(p.stencil(40), 0xb0);
+    // Comparison masks ignore the high reference and stored bits independently of writes.
+    p.record(13, [0, 5, 15], 64, None);
+    submit(&p.instance, &p.state, Status::Ok);
+    wait_for_graphics(&p.instance);
+    p.reset(1.0, 0xa5);
+    p.record(13, [0, 5, 15], 64, None);
+    submit(&p.instance, &p.state, Status::Ok);
+    assert_eq!(p.pixel(32, 24), second);
+    assert_eq!(p.stencil(32), 0xa5);
+    p.warm(13, 0, 5, 64, None);
+    p.reset(1.0, 0xa5);
+    p.draw(13, 0, 5, 64, None);
+    assert_eq!(p.pixel(32, 24), clear);
+    // Dynamic references distinguish front and back when culling is disabled.
+    p.stencil_state(0xf107, [0xf200, 0xf200, 0xf202]);
+    for reverse in [false, true] {
+        p.vertices(0.5, reverse);
+        for measured in [false, true] {
+            p.reset(1.0, 0);
+            p.record(12, [0xff, 0, 0xff], 64, None);
+            call(
+                &p.instance,
+                "nvnCommandBufferSetStencilRef",
+                &[7, 0xf301, 5],
+            );
+            call(
+                &p.instance,
+                "nvnCommandBufferSetStencilRef",
+                &[7, 0xf302, 6],
+            );
+            call(
+                &p.instance,
+                "nvnCommandBufferDrawArrays",
+                &[7, 0xf001, 0, 3],
+            );
+            submit(&p.instance, &p.state, Status::Ok);
+            wait_for_graphics(&p.instance);
+            if measured {
+                assert_eq!(p.stencil(32), if reverse { 5 } else { 6 });
+            }
+        }
+    }
+    p.vertices(0.5, false);
+    // All operation mappings, including clamping and wrapping.
+    for (op, initial, reference, expected) in [
+        (0, 9, 3, 9),
+        (1, 9, 3, 0),
+        (2, 9, 3, 3),
+        (3, 255, 0, 255),
+        (4, 0, 0, 0),
+        (5, 0x55, 0, 0xaa),
+        (6, 255, 0, 0),
+        (7, 0, 0, 255),
+    ] {
+        p.stencil_state(0xf107, [0xf200, 0xf200, 0xf200 + op]);
+        p.warm(12, 0xff, reference, 64, None);
+        p.reset(1.0, initial);
+        p.draw(12, 0xff, reference, 64, None);
+        assert_eq!(p.stencil(32), expected);
+    }
+    // Distinguish stencil fail, depth fail and pass positions.
+    p.stencil_state(0xf100, [0xf202, 0xf201, 0xf200]);
+    p.warm(12, 0xff, 7, 64, None);
+    p.reset(1.0, 9);
+    p.draw(12, 0xff, 7, 64, None);
+    assert_eq!(p.stencil(32), 7);
+    assert_eq!(p.pixel(32, 24), clear);
+    p.setting("DepthTestEnable", 1);
+    p.setting("DepthFunc", 0xf100);
+    p.stencil_state(0xf107, [0xf200, 0xf202, 0xf201]);
+    p.warm(12, 0xff, 6, 64, None);
+    p.reset(1.0, 9);
+    p.draw(12, 0xff, 6, 64, None);
+    assert_eq!(p.stencil(32), 6);
+    assert_eq!(p.pixel(32, 24), clear);
+    p.setting("StencilTestEnable", 0);
+    p.setting("DepthTestEnable", 0);
+    for clockwise in [false, true] {
+        assert!(p
+            .instance
+            .set_first_draw_contract(Some(depth_contract(clockwise))));
+        for cull in [0xf003, 0xf401, 0xf402, 0xf403] {
+            call(&p.instance, "nvnPolygonStateSetCullFace", &[24, cull]);
+            for reverse in [false, true] {
+                p.vertices(0.5, reverse);
+                p.warm(12, 0, 0, 64, None);
+                p.reset(1.0, 0);
+                p.draw(12, 0, 0, 64, None);
+                // Positive viewport height: the original order is clockwise in framebuffer coordinates.
+                let front = clockwise != reverse;
+                let visible =
+                    cull == 0xf003 || (cull == 0xf401 && !front) || (cull == 0xf402 && front);
+                assert_eq!(
+                    p.pixel(32, 24),
+                    if visible { first } else { clear },
+                    "cull={cull:x} clockwise={clockwise} reverse={reverse}"
+                );
+            }
+        }
+    }
+    call(&p.instance, "nvnPolygonStateSetCullFace", &[24, 0xf003]);
+    for mode in [0xf501, 0xf502] {
+        call(&p.instance, "nvnPolygonStateSetPolygonMode", &[24, mode]);
+        p.warm(12, 0, 0, 64, None);
+        p.reset(1.0, 0);
+        p.draw(12, 0, 0, 64, None);
+        assert_eq!(p.pixel(32, 24), clear);
+        let memory = p.state.memory.lock().unwrap();
+        assert!(
+            memory[0x2000..0x6000].as_chunks::<4>().0.contains(&first),
+            "non-solid mode must rasterize"
+        );
+    }
+    call(&p.instance, "nvnPolygonStateSetPolygonMode", &[24, 0xf500]);
+    // A positive constant bias rejects equal-depth fragments under LESS_OR_EQUAL.
+    p.setting("DepthTestEnable", 1);
+    p.setting("DepthFunc", 0xf103);
+    p.vertices(0.5, false);
+    p.warm(12, 0, 0, 64, None);
+    p.warm(13, 0, 0, 64, Some([0.0, 1_000_000.0, 0.0]));
+    p.reset(0.5, 0);
+    p.draw(12, 0, 0, 64, None);
+    p.draw(13, 0, 0, 64, Some([0.0, 1_000_000.0, 0.0]));
+    assert_eq!(p.pixel(32, 24), first);
+    // Slope bias changes the depth plane; clamp bounds that change.
+    p.setting("DepthWriteEnable", 1);
+    p.setting("DepthFunc", 0xf107);
+    let vertices = [
+        [-0.75_f32, -0.75, 0.25, 1.0],
+        [0.75, -0.75, 0.75, 1.0],
+        [0.0, 0.75, 0.5, 1.0],
+    ];
+    put(
+        &p.state,
+        0x1080,
+        &vertices
+            .into_iter()
+            .flatten()
+            .flat_map(f32::to_le_bytes)
+            .collect::<Vec<_>>(),
+    );
+    for bias in [None, Some([12.0, 0.0, 0.0]), Some([12.0, 0.0, 0.02])] {
+        p.warm(12, 0, 0, 64, bias);
+    }
+    p.reset(1.0, 0);
+    p.draw(12, 0, 0, 64, None);
+    let baseline = p.depth();
+    p.reset(1.0, 0);
+    p.draw(12, 0, 0, 64, Some([12.0, 0.0, 0.0]));
+    let slope = p.depth();
+    p.reset(1.0, 0);
+    p.draw(12, 0, 0, 64, Some([12.0, 0.0, 0.02]));
+    let clamped = p.depth();
+    assert!(
+        (slope - baseline - 0.125).abs() < 0.001,
+        "slope delta {}",
+        slope - baseline
+    );
+    assert!(
+        (clamped - baseline - 0.02).abs() < 0.001,
+        "clamp delta {}",
+        clamped - baseline
+    );
+    assert_eq!(p.pixel(32, 24), first);
+    println!("MATCH depth ordering, depth write mask, compares, stencil mask and operations, both windings, front face, polygon modes and depth bias through recorded state, arena and pixel readback");
 }

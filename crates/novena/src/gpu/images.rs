@@ -1,4 +1,4 @@
-//! Render images and transfers to canonical arena bytes. Provenance: 0026.
+//! Render images and transfers to canonical arena bytes. Provenance: 0026 and 0028.
 
 use super::{commands::Commands, find_memory_type, Context};
 use ash::{vk, Device};
@@ -57,6 +57,24 @@ impl Image {
                 return None;
             }
             usage |= vk::ImageUsageFlags::COLOR_ATTACHMENT;
+        }
+        if matches!(
+            format,
+            vk::Format::D32_SFLOAT | vk::Format::D32_SFLOAT_S8_UINT
+        ) {
+            let properties = unsafe {
+                context
+                    .instance
+                    .get_physical_device_format_properties(context.physical_device, format)
+            };
+            if !properties.optimal_tiling_features.contains(
+                vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT
+                    | vk::FormatFeatureFlags::TRANSFER_SRC
+                    | vk::FormatFeatureFlags::TRANSFER_DST,
+            ) {
+                return None;
+            }
+            usage |= vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
         }
         let image = unsafe {
             context
@@ -240,16 +258,24 @@ impl Images {
     }
 
     pub fn ensure(&mut self, key: u64, width: u64, height: u64, depth: bool) -> bool {
+        self.ensure_format(
+            key,
+            width,
+            height,
+            if depth {
+                vk::Format::D32_SFLOAT
+            } else {
+                vk::Format::R8G8B8A8_UNORM
+            },
+        )
+    }
+
+    pub fn ensure_format(&mut self, key: u64, width: u64, height: u64, format: vk::Format) -> bool {
         let Ok(width) = u32::try_from(width.max(1)) else {
             return false;
         };
         let Ok(height) = u32::try_from(height.max(1)) else {
             return false;
-        };
-        let format = if depth {
-            vk::Format::D32_SFLOAT
-        } else {
-            vk::Format::R8G8B8A8_UNORM
         };
         if let Some(image) = self.images.get(&key) {
             return image.info.extent.width == width
@@ -305,6 +331,7 @@ impl Images {
     pub fn draw(
         &mut self,
         key: u64,
+        depth: Option<u64>,
         pipeline: &super::graphics::GraphicsPipeline,
         memory: &super::GlobalMemory,
         draw: &super::graphics::Draw,
@@ -324,11 +351,34 @@ impl Images {
                 )
                 .ok()?
         };
+        let mut views = vec![view];
+        if let Some(depth) = depth {
+            let info = self.images.get(&depth)?.info;
+            let depth_view = unsafe {
+                device.create_image_view(
+                    &vk::ImageViewCreateInfo::default()
+                        .image(info.image)
+                        .view_type(vk::ImageViewType::TYPE_2D)
+                        .format(info.format)
+                        .subresource_range(range(info.format)),
+                    None,
+                )
+            };
+            match depth_view {
+                Ok(view) => views.push(view),
+                Err(_) => {
+                    unsafe {
+                        device.destroy_image_view(view, None);
+                    }
+                    return None;
+                }
+            }
+        }
         let framebuffer = unsafe {
             device.create_framebuffer(
                 &vk::FramebufferCreateInfo::default()
                     .render_pass(pipeline.render_pass)
-                    .attachments(&[view])
+                    .attachments(&views)
                     .width(image.info.extent.width)
                     .height(image.info.extent.height)
                     .layers(1),
@@ -337,7 +387,9 @@ impl Images {
         };
         let Ok(framebuffer) = framebuffer else {
             unsafe {
-                device.destroy_image_view(view, None);
+                for view in &views {
+                    device.destroy_image_view(*view, None);
+                }
             }
             return None;
         };
@@ -346,6 +398,12 @@ impl Images {
             let image = self.images.get_mut(&key)?;
             buffer_barrier(device, cmd);
             image.transition(cmd, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+            let extent = image.info.extent;
+            if let Some(depth) = depth {
+                self.images
+                    .get_mut(&depth)?
+                    .transition(cmd, vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            }
             unsafe {
                 device.cmd_begin_render_pass(
                     cmd,
@@ -353,8 +411,8 @@ impl Images {
                         .render_pass(pipeline.render_pass)
                         .framebuffer(framebuffer)
                         .render_area(vk::Rect2D::default().extent(vk::Extent2D {
-                            width: image.info.extent.width,
-                            height: image.info.extent.height,
+                            width: extent.width,
+                            height: extent.height,
                         })),
                     vk::SubpassContents::INLINE,
                 );
@@ -369,7 +427,9 @@ impl Images {
                 let _ = device.device_wait_idle();
             }
             device.destroy_framebuffer(framebuffer, None);
-            device.destroy_image_view(view, None);
+            for view in &views {
+                device.destroy_image_view(*view, None);
+            }
         }
         result
     }
@@ -418,7 +478,7 @@ impl Images {
             vk::ImageLayout::TRANSFER_SRC_OPTIMAL
         };
         image.transition(cmd, layout);
-        let region = buffer_region(image.info, offset);
+        let regions = buffer_regions(image.info, offset);
         unsafe {
             if load {
                 self.context.device.cmd_copy_buffer_to_image(
@@ -426,7 +486,7 @@ impl Images {
                     buffer,
                     image.info.image,
                     layout,
-                    &[region],
+                    &regions,
                 );
             } else {
                 self.context.device.cmd_copy_image_to_buffer(
@@ -434,7 +494,7 @@ impl Images {
                     image.info.image,
                     layout,
                     buffer,
-                    &[region],
+                    &regions,
                 );
                 buffer_barrier(&self.context.device, cmd);
             }
@@ -497,7 +557,7 @@ impl Images {
                 image.info.image,
                 image.info.layout,
                 staging.buffer,
-                &[buffer_region(image.info, 0)],
+                &buffer_regions(image.info, 0),
             );
         }
         buffer_barrier(&self.context.device, cmd);
@@ -524,31 +584,63 @@ impl Images {
 }
 
 pub(super) fn image_size(info: ImageInfo) -> u64 {
-    u64::from(info.extent.width) * u64::from(info.extent.height) * 4
+    u64::from(info.extent.width)
+        * u64::from(info.extent.height)
+        * if info.format == vk::Format::D32_SFLOAT_S8_UINT {
+            5
+        } else {
+            4
+        }
 }
 
 pub(super) fn range(format: vk::Format) -> vk::ImageSubresourceRange {
     vk::ImageSubresourceRange::default()
-        .aspect_mask(layers(format).aspect_mask)
+        .aspect_mask(if format == vk::Format::D32_SFLOAT_S8_UINT {
+            vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL
+        } else {
+            layers(format).aspect_mask
+        })
         .level_count(1)
         .layer_count(1)
 }
 
 fn layers(format: vk::Format) -> vk::ImageSubresourceLayers {
     vk::ImageSubresourceLayers::default()
-        .aspect_mask(if format == vk::Format::D32_SFLOAT {
-            vk::ImageAspectFlags::DEPTH
-        } else {
-            vk::ImageAspectFlags::COLOR
-        })
+        .aspect_mask(
+            if matches!(
+                format,
+                vk::Format::D32_SFLOAT | vk::Format::D32_SFLOAT_S8_UINT
+            ) {
+                vk::ImageAspectFlags::DEPTH
+            } else {
+                vk::ImageAspectFlags::COLOR
+            },
+        )
         .layer_count(1)
 }
 
-fn buffer_region(info: ImageInfo, offset: u64) -> vk::BufferImageCopy {
-    vk::BufferImageCopy::default()
+fn buffer_regions(info: ImageInfo, offset: u64) -> Vec<vk::BufferImageCopy> {
+    let depth = vk::BufferImageCopy::default()
         .buffer_offset(offset)
         .image_subresource(layers(info.format))
-        .image_extent(info.extent)
+        .image_extent(info.extent);
+    if info.format == vk::Format::D32_SFLOAT_S8_UINT {
+        vec![
+            depth,
+            vk::BufferImageCopy::default()
+                .buffer_offset(
+                    offset + u64::from(info.extent.width) * u64::from(info.extent.height) * 4,
+                )
+                .image_subresource(
+                    vk::ImageSubresourceLayers::default()
+                        .aspect_mask(vk::ImageAspectFlags::STENCIL)
+                        .layer_count(1),
+                )
+                .image_extent(info.extent),
+        ]
+    } else {
+        vec![depth]
+    }
 }
 
 pub(super) fn transition(
@@ -572,6 +664,13 @@ pub(super) fn transition(
         (
             vk::PipelineStageFlags::BOTTOM_OF_PIPE,
             vk::AccessFlags::empty(),
+        )
+    } else if layout == vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL {
+        (
+            vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+                | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+            vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
+                | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
         )
     } else if layout == vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL {
         (

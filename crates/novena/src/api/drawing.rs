@@ -3,8 +3,8 @@ use super::objects::{Object, RecordedCommand, ShaderTranslation, StateCommand, S
 use crate::{
     gpu::{
         graphics::{
-            execution_model, mapped, Draw, DrawVertices, VertexAttribute, VertexBinding,
-            VertexInput,
+            execution_model, mapped, DepthRasterContract, Draw, DrawPipelineState, DrawVertices,
+            VertexAttribute, VertexBinding, VertexInput,
         },
         uniforms::{self, UniformStage, BANK_SIZE},
         Backend,
@@ -68,6 +68,8 @@ pub(super) struct State {
     viewport: Option<[u64; 5]>,
     scissor: Option<[u64; 5]>,
     unsupported: bool,
+    stencil_commands: Vec<(&'static str, u64, u64)>,
+    bias: Option<[u64; 3]>,
 }
 
 impl State {
@@ -98,6 +100,14 @@ impl State {
             {
                 self.states.insert(kind, settings);
             }
+            RecordedCommand::State(StateCommand::Stencil {
+                setting,
+                faces,
+                value,
+            }) => {
+                self.stencil_commands.push((setting, faces, value));
+            }
+            RecordedCommand::State(StateCommand::PolygonOffset(bias)) => self.bias = Some(bias),
             RecordedCommand::SetViewport(viewport) => self.viewport = Some(viewport),
             RecordedCommand::SetScissor(scissor) => self.scissor = Some(scissor),
             RecordedCommand::SetDepthRange(range) => {
@@ -122,6 +132,128 @@ impl State {
         Ok(settings)
     }
 
+    fn pipeline_state(
+        &self,
+        extension: Option<DepthRasterContract>,
+        cull_none: u64,
+        attachment: bool,
+    ) -> Result<DrawPipelineState, Status> {
+        let settings = self.settings(
+            "DepthStencilState",
+            &[
+                "DepthTestEnable",
+                "DepthWriteEnable",
+                "StencilTestEnable",
+                "DepthFunc",
+                "StencilFunc",
+                "StencilOp",
+            ],
+        )?;
+        let mut state = DrawPipelineState {
+            attachment,
+            depth_test: boolean(value(settings, "DepthTestEnable")?[0])?,
+            depth_write: boolean(value(settings, "DepthWriteEnable")?[0])?,
+            stencil_test: boolean(value(settings, "StencilTestEnable")?[0])?,
+            ..Default::default()
+        };
+        let polygon = self.settings("PolygonState", &["CullFace", "PolygonMode"])?;
+        let cull = value(polygon, "CullFace")?[0];
+        let Some(extension) = extension else {
+            if state.attachment
+                || state.depth_test
+                || state.depth_write
+                || state.stencil_test
+                || settings
+                    .iter()
+                    .any(|(name, _)| matches!(*name, "DepthFunc" | "StencilFunc" | "StencilOp"))
+                || polygon.iter().any(|(name, _)| *name == "PolygonMode")
+                || cull != cull_none
+                || !self.stencil_commands.is_empty()
+                || self.bias.is_some()
+            {
+                return Err(Status::Unimplemented);
+            }
+            return Ok(state);
+        };
+        if (state.depth_test || state.depth_write || state.stencil_test) && !attachment {
+            return Err(Status::Unimplemented);
+        }
+        state.clockwise = extension.clockwise;
+        state.cull = if cull == cull_none {
+            0
+        } else {
+            [1, 2, 3][token(cull, &extension.cull)? as usize]
+        };
+        if let Ok(mode) = value(polygon, "PolygonMode") {
+            state.polygon = token(mode[0], &extension.polygon)?;
+        }
+        if state.depth_test {
+            state.depth_compare = token(value(settings, "DepthFunc")?[0], &extension.compare)?;
+        }
+        // Replay face-specific setters so a later front-only setter preserves the back face.
+        let mut functions = [false; 2];
+        let mut ops = [false; 2];
+        for &(name, args) in settings {
+            if !matches!(name, "StencilFunc" | "StencilOp") {
+                continue;
+            }
+            let faces = face_mask(args[0], &extension)?;
+            for i in 0..2 {
+                if faces & (1 << i) == 0 {
+                    continue;
+                }
+                if name == "StencilFunc" {
+                    state.stencil[i].compare = token(args[1], &extension.compare)?;
+                    state.stencil[i].reference = byte(args[2])?;
+                    state.stencil[i].mask = byte(args[3])?;
+                    functions[i] = true;
+                } else {
+                    // Hypothesis: fail, depth fail, pass.
+                    state.stencil[i].fail = token(args[1], &extension.stencil_ops)?;
+                    state.stencil[i].depth_fail = token(args[2], &extension.stencil_ops)?;
+                    state.stencil[i].pass = token(args[3], &extension.stencil_ops)?;
+                    ops[i] = true;
+                }
+            }
+        }
+        let mut masks = [false; 2];
+        for &(setting, selector, v) in &self.stencil_commands {
+            let faces = face_mask(selector, &extension)?;
+            let v = byte(v)?;
+            for (i, stencil) in state.stencil.iter_mut().enumerate() {
+                if faces & (1 << i) == 0 {
+                    continue;
+                }
+                match setting {
+                    "StencilMask" => {
+                        stencil.write_mask = v;
+                        masks[i] = true;
+                    }
+                    "StencilRef" => stencil.reference = v,
+                    "StencilValueMask" => stencil.mask = v,
+                    _ => return Err(Status::Unimplemented),
+                }
+            }
+        }
+        if state.stencil_test && !(0..2).all(|i| functions[i] && ops[i] && masks[i]) {
+            return Err(Status::Unimplemented);
+        }
+        if let Some(bias) = self.bias {
+            if !extension.polygon_offset {
+                return Err(Status::Unimplemented);
+            }
+            for (i, bits) in bias.into_iter().enumerate() {
+                let bits = u32::try_from(bits).map_err(|_| Status::BadArgument)?;
+                let v = f32::from_bits(bits);
+                if !v.is_finite() {
+                    return Err(Status::BadArgument);
+                }
+                state.bias[i] = if v == 0.0 { 0 } else { bits };
+            }
+        }
+        Ok(state)
+    }
+
     pub fn execute(
         &self,
         instance: &Instance,
@@ -138,7 +270,7 @@ impl State {
         } = request;
         let contract = backend.first_draw.as_ref().ok_or(Status::Unimplemented)?;
         let topology = mapped(&contract.topologies, primitive).ok_or(Status::Unimplemented)?;
-        if self.unsupported || targets.len() != 1 || depth != 0 || views != [0, 0] {
+        if self.unsupported || targets.len() != 1 || views != [0, 0] {
             return Err(Status::Unimplemented);
         }
         let Some(Object::Texture { description, .. }) = instance.objects.get(targets[0]) else {
@@ -161,19 +293,31 @@ impl State {
         if color.iter().any(|(_, args)| args[0] != 0) || value(color, "BlendEnable")?[1] != 0 {
             return Err(Status::Unimplemented);
         }
-        let depth_state = self.settings(
-            "DepthStencilState",
-            &["DepthTestEnable", "DepthWriteEnable", "StencilTestEnable"],
-        )?;
-        for name in ["DepthTestEnable", "DepthWriteEnable", "StencilTestEnable"] {
-            if value(depth_state, name)?[0] != 0 {
+        let pipeline_state =
+            self.pipeline_state(contract.depth_raster, contract.cull_none, depth != 0)?;
+        let depth_description = if depth != 0 {
+            let extension = contract.depth_raster.ok_or(Status::Unimplemented)?;
+            let Some(Object::Texture { description: d, .. }) = instance.objects.get(depth) else {
+                return Err(Status::BadArgument);
+            };
+            if depth == targets[0] || d.width != description.width || d.height != description.height
+            {
+                return Err(Status::BadArgument);
+            }
+            if d.format != extension.d32s8
+                || d.target != contract.target_2d
+                || d.swizzle != contract.identity_swizzle
+                || d.depth > 1
+                || d.levels > 1
+                || d.flags != 0
+                || d.depth_stencil_mode != 0
+            {
                 return Err(Status::Unimplemented);
             }
-        }
-        let polygon = self.settings("PolygonState", &["CullFace"])?;
-        if value(polygon, "CullFace")?[0] != contract.cull_none {
-            return Err(Status::Unimplemented);
-        }
+            Some(d)
+        } else {
+            None
+        };
         let context = backend.context().clone();
         let memory = backend.global_memory.as_mut().ok_or(Status::BadArgument)?;
         let mut input = VertexInput {
@@ -403,13 +547,18 @@ impl State {
         }
         let Some(pipeline) = backend
             .graphics
-            .request(&stages, input, topology, storage)
+            .request(&stages, input, topology, pipeline_state, storage)
             .map_err(|_| Status::Unimplemented)?
         else {
             return Ok(());
         };
         if !backend.ensure_texture(targets[0], &description, false) {
             return Err(Status::BadArgument);
+        }
+        if let Some(description) = &depth_description {
+            if !backend.ensure_depth_stencil(depth, description) {
+                return Err(Status::BadArgument);
+            }
         }
         let descriptors = pipeline
             .descriptors(&uniform_buffers)
@@ -433,7 +582,12 @@ impl State {
             }),
         };
         backend
-            .draw(targets[0], &pipeline, &draw)
+            .draw(
+                targets[0],
+                depth_description.map(|_| depth),
+                &pipeline,
+                &draw,
+            )
             .ok_or(Status::InternalError)
     }
 
@@ -452,6 +606,30 @@ impl State {
         }
         Ok(settings)
     }
+}
+
+fn boolean(v: u64) -> Result<bool, Status> {
+    match v {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(Status::Unimplemented),
+    }
+}
+fn token(v: u64, tokens: &[u64]) -> Result<i32, Status> {
+    let mut matches = tokens.iter().enumerate().filter(|(_, t)| **t == v);
+    let (index, _) = matches.next().ok_or(Status::Unimplemented)?;
+    if matches.next().is_some() {
+        return Err(Status::BadArgument);
+    }
+    Ok(index as i32)
+}
+fn face_mask(v: u64, extension: &DepthRasterContract) -> Result<u32, Status> {
+    Ok([1, 2, 3][token(v, &extension.faces)? as usize])
+}
+fn byte(v: u64) -> Result<u32, Status> {
+    u8::try_from(v)
+        .map(u32::from)
+        .map_err(|_| Status::BadArgument)
 }
 
 fn value(settings: &Settings, name: &str) -> Result<[u64; 6], Status> {
@@ -511,6 +689,112 @@ fn indexed_vertex_end(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn contract() -> DepthRasterContract {
+        DepthRasterContract {
+            d32s8: 90,
+            compare: [100, 101, 102, 103, 104, 105, 106, 107],
+            stencil_ops: [200, 201, 202, 203, 204, 205, 206, 207],
+            faces: [301, 302, 303],
+            cull: [401, 402, 403],
+            polygon: [500, 501, 502],
+            clockwise: false,
+            polygon_offset: true,
+        }
+    }
+    fn state() -> State {
+        let mut state = State::default();
+        state.states.insert(
+            "DepthStencilState",
+            Some(vec![
+                ("DepthTestEnable", [0; 6]),
+                ("DepthWriteEnable", [0; 6]),
+                ("StencilTestEnable", [1, 0, 0, 0, 0, 0]),
+                ("StencilFunc", [303, 107, 4, 15, 0, 0]),
+                ("StencilOp", [303, 200, 201, 202, 0, 0]),
+                ("StencilFunc", [301, 102, 7, 31, 0, 0]),
+            ]),
+        );
+        state.states.insert(
+            "PolygonState",
+            Some(vec![
+                ("CullFace", [0; 6]),
+                ("PolygonMode", [500, 0, 0, 0, 0, 0]),
+            ]),
+        );
+        state.stencil_commands = vec![
+            ("StencilMask", 303, 255),
+            ("StencilMask", 302, 3),
+            ("StencilRef", 302, 9),
+            ("StencilValueMask", 301, 127),
+        ];
+        state
+    }
+    #[test]
+    fn face_setters_and_command_masks_preserve_the_other_face() {
+        let s = state().pipeline_state(Some(contract()), 0, true).unwrap();
+        assert_eq!(
+            (
+                s.stencil[0].compare,
+                s.stencil[0].reference,
+                s.stencil[0].mask,
+                s.stencil[0].write_mask
+            ),
+            (2, 7, 127, 255)
+        );
+        assert_eq!(
+            (
+                s.stencil[1].compare,
+                s.stencil[1].reference,
+                s.stencil[1].mask,
+                s.stencil[1].write_mask
+            ),
+            (7, 9, 15, 3)
+        );
+        assert_eq!(
+            (
+                s.stencil[0].fail,
+                s.stencil[0].depth_fail,
+                s.stencil[0].pass
+            ),
+            (0, 1, 2)
+        );
+    }
+    #[test]
+    fn rejects_unknown_tokens_missing_masks_and_nonfinite_bias() {
+        let mut s = state();
+        assert_eq!(s.pipeline_state(None, 0, true), Err(Status::Unimplemented));
+        assert_eq!(
+            s.pipeline_state(Some(contract()), 0, false),
+            Err(Status::Unimplemented)
+        );
+        s.stencil_commands.clear();
+        assert_eq!(
+            s.pipeline_state(Some(contract()), 0, true),
+            Err(Status::Unimplemented)
+        );
+        s.stencil_commands.push(("StencilMask", 303, 256));
+        assert_eq!(
+            s.pipeline_state(Some(contract()), 0, true),
+            Err(Status::BadArgument)
+        );
+        s.stencil_commands = vec![("StencilMask", 303, 255)];
+        s.bias = Some([u64::from(f32::NAN.to_bits()), 0, 0]);
+        assert_eq!(
+            s.pipeline_state(Some(contract()), 0, true),
+            Err(Status::BadArgument)
+        );
+        s.bias = Some([0, u64::from(2.0_f32.to_bits()), 0]);
+        let parsed = s.pipeline_state(Some(contract()), 0, true).unwrap();
+        assert_eq!(parsed.bias, [0, 2.0_f32.to_bits(), 0]);
+        let mut c = contract();
+        c.polygon_offset = false;
+        assert_eq!(
+            s.pipeline_state(Some(c), 0, true),
+            Err(Status::Unimplemented)
+        );
+        assert_eq!(token(999, &c.compare), Err(Status::Unimplemented));
+        assert_eq!(token(1, &[1, 1]), Err(Status::BadArgument));
+    }
     #[test]
     fn vertex_bounds_include_first_offset_and_last_attribute() {
         assert_eq!(vertex_end(2, 3, 32, 8, 16), Some(152));
