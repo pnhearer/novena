@@ -247,6 +247,36 @@ impl Instance {
         Ok(())
     }
 
+    /// Configure explicit texture slot and sampler enum choices. Provenance: 0030.
+    #[cfg(feature = "vulkan")]
+    pub fn set_texture_contract(
+        &self,
+        contract: crate::gpu::textures::TextureContract,
+    ) -> Result<(), String> {
+        contract.validate()?;
+        let mut gpu = self.gpu.lock().unwrap_or_else(|p| p.into_inner());
+        gpu.as_mut()
+            .ok_or("Vulkan backend is unavailable")?
+            .texture_contract = contract;
+        Ok(())
+    }
+
+    /// Opt into blend and channel argument hypotheses. Provenance: 0030.
+    #[cfg(feature = "vulkan")]
+    pub fn set_blend_contract(
+        &self,
+        contract: Option<crate::gpu::graphics::BlendContract>,
+    ) -> Result<(), String> {
+        if let Some(c) = &contract {
+            c.validate()?;
+        }
+        let mut gpu = self.gpu.lock().unwrap_or_else(|p| p.into_inner());
+        gpu.as_mut()
+            .ok_or("Vulkan backend is unavailable")?
+            .blend_contract = contract;
+        Ok(())
+    }
+
     #[cfg(feature = "vulkan")]
     pub fn graphics_cache_stats(&self) -> Option<crate::gpu::pipelines::CacheStats> {
         self.gpu

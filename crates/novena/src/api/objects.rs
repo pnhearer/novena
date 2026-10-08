@@ -95,6 +95,10 @@ pub enum StateCommand {
         /// This does not establish a program-memory layout. Provenance 0028.
         experiment_settings: Option<Vec<StateSettings>>,
     },
+    SetDescriptorPool {
+        sampler: bool,
+        pool: u64,
+    },
     BindSamplerReference {
         stage: u64,
         index: u64,
@@ -246,7 +250,7 @@ pub enum Object {
         memory: u64,
         offset: u64,
         count: u64,
-        registered: HashMap<u32, u64>,
+        registered: HashMap<u32, (u64, u64)>,
     },
     SamplerPool {
         memory: u64,

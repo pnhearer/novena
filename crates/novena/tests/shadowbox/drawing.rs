@@ -2425,3 +2425,660 @@ fn depth_stencil_and_raster_pixels() {
     assert_eq!(p.pixel(32, 24), first);
     println!("MATCH depth ordering, depth write mask, compares, stencil mask and operations, both windings, front face, polygon modes and depth bias through recorded state, arena and pixel readback");
 }
+
+fn texture_contract(set: u32) -> novena::gpu::textures::TextureContract {
+    use ash::vk;
+    use novena::gpu::{textures::TextureMapping, uniforms::UniformStage};
+    novena::gpu::textures::TextureContract {
+        bindings: vec![TextureMapping {
+            stage: 5,
+            index: 3,
+            target: UniformStage::Fragment,
+            set,
+            image: 0,
+            sampler: 1,
+        }],
+        filters: vec![(100, vk::Filter::NEAREST), (101, vk::Filter::LINEAR)],
+        wraps: vec![
+            (200, vk::SamplerAddressMode::REPEAT),
+            (201, vk::SamplerAddressMode::MIRRORED_REPEAT),
+            (202, vk::SamplerAddressMode::CLAMP_TO_EDGE),
+            (203, vk::SamplerAddressMode::CLAMP_TO_BORDER),
+        ],
+        compare_disabled: 300,
+        combined: vec![(0x1234_5678, 256, 257)],
+    }
+}
+
+fn blend_contract() -> novena::gpu::graphics::BlendContract {
+    use ash::vk;
+    novena::gpu::graphics::BlendContract {
+        factors: vec![
+            (400, vk::BlendFactor::ZERO),
+            (401, vk::BlendFactor::ONE),
+            (402, vk::BlendFactor::SRC_ALPHA),
+            (403, vk::BlendFactor::ONE_MINUS_SRC_ALPHA),
+        ],
+        operations: vec![
+            (500, vk::BlendOp::ADD),
+            (501, vk::BlendOp::SUBTRACT),
+            (502, vk::BlendOp::REVERSE_SUBTRACT),
+            (503, vk::BlendOp::MIN),
+            (504, vk::BlendOp::MAX),
+        ],
+        function_order: [0, 1, 2, 3],
+        equation_order: [0, 1],
+        channel_order: [0, 1, 2, 3],
+    }
+}
+
+fn texture_resources(f: &Fixture) {
+    let i = &f.instance;
+    call(i, "nvnTextureBuilderSetDefaults", &[30]);
+    call(i, "nvnTextureBuilderSetSize2D", &[30, 2, 2]);
+    call(i, "nvnTextureBuilderSetFormat", &[30, 0xf004]);
+    call(i, "nvnTextureBuilderSetTarget", &[30, 0xf005]);
+    call(i, "nvnTextureBuilderSetStorage", &[30, 2, 0x6000]);
+    call(i, "nvnTextureInitialize", &[31, 30]);
+    // Two white and two black texels. Every texel has half alpha.
+    put(
+        &f.state,
+        0x7000,
+        &[
+            255, 255, 255, 128, 0, 0, 0, 128, 0, 0, 0, 128, 255, 255, 255, 128,
+        ],
+    );
+    call(i, "nvnTexturePoolInitialize", &[32, 2, 0, 512]);
+    call(i, "nvnSamplerPoolInitialize", &[33, 2, 0, 512]);
+    call(i, "nvnTexturePoolRegisterTexture", &[32, 256, 31, 0]);
+    assert_eq!(call(i, "nvnDeviceGetSeparateTextureHandle", &[0, 256]), 256);
+    call(i, "nvnSamplerBuilderSetDefaults", &[34]);
+    call(i, "nvnSamplerBuilderSetCompare", &[34, 300, 0]);
+    let mut r = Registers::default();
+    r.x[0] = 34;
+    r.d[0] = u64::from(1.0_f32.to_bits());
+    assert_eq!(
+        i.call(
+            functions::lookup("nvnSamplerBuilderSetMaxAnisotropy").unwrap(),
+            &mut r
+        ),
+        Status::Ok
+    );
+}
+
+fn texture_sampler(f: &Fixture, filter: u64, wrap: u64) {
+    call(
+        &f.instance,
+        "nvnSamplerBuilderSetMinMagFilter",
+        &[34, filter, filter],
+    );
+    call(
+        &f.instance,
+        "nvnSamplerBuilderSetWrapMode",
+        &[34, wrap, wrap, wrap],
+    );
+    call(&f.instance, "nvnSamplerInitialize", &[35, 34]);
+    call(&f.instance, "nvnSamplerPoolRegisterSampler", &[33, 257, 35]);
+    assert_eq!(
+        call(&f.instance, "nvnDeviceGetSeparateSamplerHandle", &[0, 257]),
+        257
+    );
+}
+
+fn texture_draw(f: &Fixture, combined: bool, blend: bool, mask: bool) {
+    texture_draw_state(f, combined, blend, mask);
+    call(
+        &f.instance,
+        "nvnCommandBufferDrawArrays",
+        &[7, 0xf001, 1, 3],
+    );
+}
+
+fn texture_draw_state(f: &Fixture, combined: bool, blend: bool, mask: bool) {
+    f.begin();
+    let i = &f.instance;
+    call(
+        i,
+        "nvnCommandBufferBindVertexBuffer",
+        &[7, 0, f.base + 0x80, 128],
+    );
+    call(i, "nvnCommandBufferBindVertexStreamState", &[7, 1, 20]);
+    call(i, "nvnCommandBufferBindVertexAttribState", &[7, 1, 21]);
+    call(i, "nvnCommandBufferSetTexturePool", &[7, 32]);
+    call(i, "nvnCommandBufferSetSamplerPool", &[7, 33]);
+    if combined {
+        call(i, "nvnCommandBufferBindTexture", &[7, 5, 3, 0x1234_5678]);
+    } else {
+        call(i, "nvnCommandBufferBindSeparateTexture", &[7, 5, 3, 256]);
+        call(i, "nvnCommandBufferBindSeparateSampler", &[7, 5, 3, 257]);
+    }
+    if blend {
+        call(i, "nvnCommandBufferBindBlendState", &[7, 36]);
+    }
+    if mask {
+        call(i, "nvnCommandBufferBindChannelMaskState", &[7, 37]);
+    }
+}
+
+fn texture_vertices(f: &Fixture) {
+    // One oversized triangle covers every pixel, with no diagonal seam.
+    for (n, p) in [
+        [-1.0, -1.0, 0.0, 1.0],
+        [3.0, -1.0, 0.0, 1.0],
+        [-1.0, 3.0, 0.0, 1.0],
+    ]
+    .iter()
+    .enumerate()
+    {
+        put(&f.state, 0x1080 + (n + 1) * 32 + 8, &floats(p));
+    }
+}
+
+fn checker_reference(u: f32, v: f32, linear: bool, wrap: u64) -> [u8; 4] {
+    let texel = |x: i32, y: i32| -> [f32; 4] {
+        let coord = |p: i32| -> Option<i32> {
+            match wrap {
+                200 => Some(p.rem_euclid(2)),
+                201 => {
+                    let p = p.rem_euclid(4);
+                    Some(if p < 2 { p } else { 3 - p })
+                }
+                202 => Some(p.clamp(0, 1)),
+                203 => (0..2).contains(&p).then_some(p),
+                _ => unreachable!(),
+            }
+        };
+        match (coord(x), coord(y)) {
+            (Some(x), Some(y)) => {
+                let c = if x == y { 255.0 } else { 0.0 };
+                [c, c, c, 128.0]
+            }
+            _ => [0.0; 4],
+        }
+    };
+    if !linear {
+        return texel((u * 2.0).floor() as i32, (v * 2.0).floor() as i32).map(|v| v as u8);
+    }
+    let x = u * 2.0 - 0.5;
+    let y = v * 2.0 - 0.5;
+    let ix = x.floor() as i32;
+    let iy = y.floor() as i32;
+    let fx = x - x.floor();
+    let fy = y - y.floor();
+    let mut color = [0.0; 4];
+    for (dx, wx) in [(0, 1.0 - fx), (1, fx)] {
+        for (dy, wy) in [(0, 1.0 - fy), (1, fy)] {
+            let p = texel(ix + dx, iy + dy);
+            for c in 0..4 {
+                color[c] += p[c] * wx * wy;
+            }
+        }
+    }
+    color.map(|v| v.round() as u8)
+}
+
+#[test]
+#[ignore = "requires Vulkan, glslangValidator, spirv-val and Shadowbox; never skips"]
+fn textured_checkerboard_and_blend_pixels() {
+    let f = Fixture::new(contract());
+    texture_resources(&f);
+    texture_vertices(&f);
+    f.instance
+        .set_texture_contract(texture_contract(1))
+        .unwrap();
+    f.instance
+        .set_blend_contract(Some(blend_contract()))
+        .unwrap();
+    let vertex = compile_source(
+        "vert",
+        "#version 450\nlayout(location=0) in vec4 p; void main(){ gl_Position=p; }",
+    );
+    let fragment=compile_source("frag", "#version 450\nlayout(set=1,binding=0) uniform texture2D t; layout(set=1,binding=1) uniform sampler s; layout(location=0) out vec4 c; void main(){ c=texture(sampler2D(t,s), gl_FragCoord.xy/32.0-vec2(0.5)); }");
+    f.program(
+        Arc::new(SourceShaders { vertex, fragment }),
+        &shader(true, 0.0),
+        &shader(false, 0.0),
+    );
+    texture_sampler(&f, 100, 200);
+    texture_draw(&f, false, false, false);
+    submit(&f.instance, &f.state, Status::Ok);
+    wait_for_graphics(&f.instance);
+    for filter in [100, 101] {
+        for wrap in [200, 201, 202, 203] {
+            for combined in [false, true] {
+                texture_sampler(&f, filter, wrap);
+                texture_draw(&f, combined, false, false);
+                submit(&f.instance, &f.state, Status::Ok);
+                let pixels = f.pixels();
+                for y in 0..64 {
+                    for x in 0..64 {
+                        let expected = checker_reference(
+                            (x as f32 + 0.5) / 32.0 - 0.5,
+                            (y as f32 + 0.5) / 32.0 - 0.5,
+                            filter == 101,
+                            wrap,
+                        );
+                        let actual = &pixels[(y * 64 + x) * 4..(y * 64 + x + 1) * 4];
+                        for c in 0..4 {
+                            assert!(actual[c].abs_diff(expected[c])<=2, "filter {filter} wrap {wrap} combined {combined} at {x},{y} channel {c}: {} != {}",actual[c],expected[c]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(f.instance.graphics_cache_stats().unwrap().misses, 1);
+    call(&f.instance, "nvnBlendStateSetDefaults", &[36]);
+    call(&f.instance, "nvnBlendStateSetBlendTarget", &[36, 0]);
+    call(
+        &f.instance,
+        "nvnBlendStateSetBlendFunc",
+        &[36, 402, 403, 401, 400],
+    );
+    call(
+        &f.instance,
+        "nvnBlendStateSetBlendEquation",
+        &[36, 500, 500],
+    );
+    call(&f.instance, "nvnColorStateSetBlendEnable", &[22, 0, 1]);
+    call(&f.instance, "nvnChannelMaskStateSetDefaults", &[37]);
+    call(
+        &f.instance,
+        "nvnChannelMaskStateSetChannelMask",
+        &[37, 0, 1, 0, 1, 0],
+    );
+    texture_sampler(&f, 100, 200);
+    for mask in [false, true] {
+        texture_draw(&f, false, true, mask);
+        submit(&f.instance, &f.state, Status::Ok);
+        wait_for_graphics(&f.instance);
+        texture_draw(&f, false, true, mask);
+        submit(&f.instance, &f.state, Status::Ok);
+        let pixels = f.pixels();
+        for y in 0..64 {
+            for x in 0..64 {
+                let p = checker_reference(
+                    (x as f32 + 0.5) / 32.0 - 0.5,
+                    (y as f32 + 0.5) / 32.0 - 0.5,
+                    false,
+                    200,
+                );
+                let white = p[0] != 0;
+                let expected = if mask {
+                    if white {
+                        [128, 0, 255, 255]
+                    } else {
+                        [0, 0, 127, 255]
+                    }
+                } else if white {
+                    [128, 128, 255, 128]
+                } else {
+                    [0, 0, 127, 128]
+                };
+                for c in 0..4 {
+                    assert!(
+                        pixels[(y * 64 + x) * 4 + c].abs_diff(expected[c]) <= 1,
+                        "blend mask {mask} at {x},{y}"
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(f.instance.graphics_cache_stats().unwrap().misses, 3);
+    // A registered view, unknown handle and compare sampling fail closed on a ready pipeline.
+    call(
+        &f.instance,
+        "nvnTexturePoolRegisterTexture",
+        &[32, 256, 31, 999],
+    );
+    texture_draw(&f, false, true, false);
+    submit(&f.instance, &f.state, Status::Unimplemented);
+    call(
+        &f.instance,
+        "nvnTexturePoolRegisterTexture",
+        &[32, 256, 31, 0],
+    );
+    call(&f.instance, "nvnSamplerBuilderSetCompare", &[34, 999, 0]);
+    texture_sampler(&f, 100, 200);
+    texture_draw(&f, false, true, false);
+    submit(&f.instance, &f.state, Status::Unimplemented);
+    println!("MATCH all checkerboard pixels: nearest, linear, four wraps, separate and combined references, alpha blending, channel masks and cache reuse");
+}
+
+#[test]
+#[ignore = "requires Vulkan, spirv-val and Shadowbox; never skips"]
+fn translated_texture_pixels() {
+    let f = Fixture::new(contract());
+    texture_resources(&f);
+    texture_vertices(&f);
+    texture_sampler(&f, 100, 200);
+    f.instance
+        .set_texture_contract(texture_contract(0))
+        .unwrap();
+    // envytools gm107: TEX.B.LZ, R0 output, R4 coordinates, R6 constant handle,
+    // 2D bit 29, all four components in bits 31..34, level-zero bit 37.
+    let mut header = [0_u32; 20];
+    header[0] = 2 | (3 << 5) | (5 << 10) | (1 << 14);
+    header[18] = 15;
+    let fragment = pack_shader(
+        header,
+        vec![
+            mov(4, 0.25),
+            mov(5, 0.25),
+            mov(6, f32::from_bits(7)),
+            0xdeb8_0000_0000_0000
+                | ALWAYS
+                | (4 << 8)
+                | (6 << 20)
+                | (1 << 29)
+                | (15 << 31)
+                | (1 << 37),
+        ],
+    );
+    f.program(
+        Arc::new(Translator(AtomicUsize::new(0))),
+        &fragment,
+        &shader(false, 0.0),
+    );
+    texture_draw(&f, false, false, false);
+    submit(&f.instance, &f.state, Status::Ok);
+    wait_for_graphics(&f.instance);
+    texture_draw(&f, false, false, false);
+    submit(&f.instance, &f.state, Status::Ok);
+    assert!(f
+        .pixels()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| *p == [255, 255, 255, 128]));
+    // Re-register the same handle with a different image. The cached image view must follow it.
+    call(&f.instance, "nvnTextureBuilderSetStorage", &[30, 2, 0x6100]);
+    call(&f.instance, "nvnTextureInitialize", &[38, 30]);
+    put(&f.state, 0x7100, &[10, 20, 30, 40].repeat(4));
+    call(
+        &f.instance,
+        "nvnTexturePoolRegisterTexture",
+        &[32, 256, 38, 0],
+    );
+    texture_draw(&f, false, false, false);
+    submit(&f.instance, &f.state, Status::Ok);
+    assert!(f
+        .pixels()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| *p == [10, 20, 30, 40]));
+    assert_eq!(f.instance.graphics_cache_stats().unwrap().misses, 1);
+    call(&f.instance, "nvnTextureBuilderSetSize2D", &[30, 1, 1]);
+    call(&f.instance, "nvnTextureInitialize", &[38, 30]);
+    texture_draw(&f, false, false, false);
+    submit(&f.instance, &f.state, Status::Ok);
+    assert!(f
+        .pixels()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| *p == [10, 20, 30, 40]));
+    // Each separate setter overrides its component of a combined reference.
+    call(&f.instance, "nvnSamplerPoolRegisterSampler", &[33, 258, 35]);
+    texture_draw(&f, true, false, false);
+    call(
+        &f.instance,
+        "nvnCommandBufferBindSeparateSampler",
+        &[7, 5, 3, 258],
+    );
+    call(
+        &f.instance,
+        "nvnCommandBufferDrawArrays",
+        &[7, 0xf001, 1, 3],
+    );
+    submit(&f.instance, &f.state, Status::Ok);
+    assert!(f
+        .pixels()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| *p == [10, 20, 30, 40]));
+    call(
+        &f.instance,
+        "nvnTexturePoolRegisterTexture",
+        &[32, 258, 31, 0],
+    );
+    texture_draw(&f, true, false, false);
+    call(
+        &f.instance,
+        "nvnCommandBufferBindSeparateTexture",
+        &[7, 5, 3, 258],
+    );
+    call(
+        &f.instance,
+        "nvnCommandBufferDrawArrays",
+        &[7, 0xf001, 1, 3],
+    );
+    submit(&f.instance, &f.state, Status::Ok);
+    assert!(f
+        .pixels()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| *p == [255, 255, 255, 128]));
+    println!("MATCH translated separate texture/sampler descriptors, constant handle source and re-registration");
+}
+
+#[test]
+#[ignore = "requires Vulkan, glslangValidator and spirv-val; never skips"]
+fn multiple_target_blend_pixels() {
+    let f = Fixture::new(contract());
+    texture_vertices(&f);
+    f.instance
+        .set_blend_contract(Some(blend_contract()))
+        .unwrap();
+    call(&f.instance, "nvnTextureBuilderSetStorage", &[3, 2, 0x8000]);
+    call(&f.instance, "nvnTextureInitialize", &[40, 3]);
+    put(
+        &f.state,
+        0x100,
+        &[4_u64, 40]
+            .into_iter()
+            .flat_map(u64::to_le_bytes)
+            .collect::<Vec<_>>(),
+    );
+    f.program(Arc::new(SourceShaders {
+        vertex:compile_source("vert","#version 450\nlayout(location=0) in vec4 p; void main(){gl_Position=p;}"),
+        fragment:compile_source("frag","#version 450\nlayout(location=0) out vec4 a; layout(location=1) out vec4 b; void main(){a=vec4(1,0,0,0.5); b=vec4(0,1,0,0.25);}"),
+    }),&shader(true,0.0),&shader(false,0.0));
+    for target in [0, 1] {
+        call(&f.instance, "nvnColorStateSetBlendEnable", &[22, target, 1]);
+        call(&f.instance, "nvnBlendStateSetDefaults", &[36 + target]);
+        call(
+            &f.instance,
+            "nvnBlendStateSetBlendTarget",
+            &[36 + target, target],
+        );
+        call(
+            &f.instance,
+            "nvnBlendStateSetBlendFunc",
+            if target == 0 {
+                &[36, 402, 403, 401, 400]
+            } else {
+                &[37, 401, 400, 400, 401]
+            },
+        );
+        call(
+            &f.instance,
+            "nvnBlendStateSetBlendEquation",
+            &[36 + target, 500, 500],
+        );
+    }
+    call(&f.instance, "nvnChannelMaskStateSetDefaults", &[38]);
+    call(
+        &f.instance,
+        "nvnChannelMaskStateSetChannelMask",
+        &[38, 0, 1, 1, 1, 1],
+    );
+    call(
+        &f.instance,
+        "nvnChannelMaskStateSetChannelMask",
+        &[38, 1, 0, 1, 1, 0],
+    );
+    let draw = || {
+        triangle_state(&f.instance, &f.state, f.base + 0x80, 128);
+        call(
+            &f.instance,
+            "nvnCommandBufferSetRenderTargets",
+            &[7, 2, 0x100, 0, 0, 0],
+        );
+        put(&f.state, 0x200, &floats(&[0.0, 0.0, 1.0, 1.0]));
+        put(&f.state, 0x220, &floats(&[1.0, 0.0, 0.0, 1.0]));
+        call(
+            &f.instance,
+            "nvnCommandBufferClearColor",
+            &[7, 0, 0x200, 15],
+        );
+        call(
+            &f.instance,
+            "nvnCommandBufferClearColor",
+            &[7, 1, 0x220, 15],
+        );
+        // Reverse binding order catches accidental global blend replacement.
+        call(&f.instance, "nvnCommandBufferBindBlendState", &[7, 37]);
+        call(&f.instance, "nvnCommandBufferBindBlendState", &[7, 36]);
+        call(
+            &f.instance,
+            "nvnCommandBufferBindChannelMaskState",
+            &[7, 38],
+        );
+        call(
+            &f.instance,
+            "nvnCommandBufferDrawArrays",
+            &[7, 0xf001, 1, 3],
+        );
+    };
+    draw();
+    submit(&f.instance, &f.state, Status::Ok);
+    wait_for_graphics(&f.instance);
+    draw();
+    submit(&f.instance, &f.state, Status::Ok);
+    assert!(f
+        .pixels()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| p[0].abs_diff(128) <= 1
+            && p[1] == 0
+            && p[2].abs_diff(127) <= 1
+            && p[3].abs_diff(128) <= 1));
+    assert!(f.state.memory.lock().unwrap()[0x9000..0xd000]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| *p == [255, 255, 0, 255]));
+    call(
+        &f.instance,
+        "nvnChannelMaskStateSetChannelMask",
+        &[38, 1, 1, 1, 1, 1],
+    );
+    draw();
+    submit(&f.instance, &f.state, Status::Ok);
+    wait_for_graphics(&f.instance);
+    draw();
+    submit(&f.instance, &f.state, Status::Ok);
+    assert!(f.state.memory.lock().unwrap()[0x9000..0xd000]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| *p == [0, 255, 0, 255]));
+    assert_eq!(f.instance.graphics_cache_stats().unwrap().misses, 2);
+    println!("MATCH independent blend equations, alpha factors, write masks and cache keys for two render targets");
+}
+
+#[test]
+#[ignore = "requires Vulkan, glslangValidator and spirv-val; never skips"]
+fn textured_uniform_banks_and_persistence() {
+    use novena::gpu::uniforms::{UniformBankMapping, UniformBufferContract, UniformStage};
+    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tmp/textured-cache");
+    if cache.exists() {
+        fs::remove_dir_all(&cache).unwrap();
+    }
+    let identity = novena::gpu::pipelines::TranslationIdentity {
+        version: "original-textured-uniform-1".into(),
+        configuration: "four stage descriptor sets".into(),
+    };
+    for storage in [false, true] {
+        let f = Fixture::new(contract());
+        texture_resources(&f);
+        texture_vertices(&f);
+        texture_sampler(&f, 100, 200);
+        f.instance
+            .set_graphics_pipeline_cache(&cache, &identity, 2, 8)
+            .unwrap();
+        assert_eq!(
+            f.instance
+                .graphics_persistence_stats()
+                .unwrap()
+                .driver_cache_loaded,
+            storage
+        );
+        f.instance
+            .set_texture_contract(texture_contract(1))
+            .unwrap();
+        f.instance
+            .set_uniform_buffer_contract(UniformBufferContract {
+                bindings: vec![UniformBankMapping {
+                    stage: 5,
+                    index: 2,
+                    target: UniformStage::Fragment,
+                    bank: 2,
+                }],
+                storage_buffers: storage,
+            })
+            .unwrap();
+        f.program(Arc::new(SourceShaders {
+            vertex:compile_source("vert","#version 450\nlayout(location=0) in vec4 p; void main(){gl_Position=p;}"),
+            fragment:compile_source("frag","#version 450\nlayout(set=1,binding=0) uniform texture2D t; layout(set=1,binding=1) uniform sampler s; layout(set=0,binding=2,std140) uniform Bank {vec4 data[4096];} bank; layout(location=0) out vec4 c; void main(){c=texture(sampler2D(t,s),gl_FragCoord.xy/32.0-vec2(0.5))*bank.data[1];}"),
+        }),&shader(true,0.0),&shader(false,0.0));
+        let draw = || {
+            texture_draw_state(&f, false, false, false);
+            call(
+                &f.instance,
+                "nvnCommandBufferBindUniformBuffer",
+                &[7, 5, 2, f.base + 0xe000, 32],
+            );
+            call(
+                &f.instance,
+                "nvnCommandBufferDrawArrays",
+                &[7, 0xf001, 1, 3],
+            );
+        };
+        put(&f.state, 0xf000, &floats(&[0.0; 8]));
+        draw();
+        submit(&f.instance, &f.state, Status::Ok);
+        wait_for_graphics(&f.instance);
+        assert!(driver_file(&cache).is_file());
+        for tint in [[1.0, 0.5, 0.25, 1.0], [0.25, 1.0, 0.5, 0.5]] {
+            put(&f.state, 0xf010, &floats(&tint));
+            draw();
+            submit(&f.instance, &f.state, Status::Ok);
+            let pixels = f.pixels();
+            for y in 0..64 {
+                for x in 0..64 {
+                    let sample = checker_reference(
+                        (x as f32 + 0.5) / 32.0 - 0.5,
+                        (y as f32 + 0.5) / 32.0 - 0.5,
+                        false,
+                        200,
+                    );
+                    for c in 0..4 {
+                        let expected = (f32::from(sample[c]) * tint[c]).round() as u8;
+                        assert!(
+                            pixels[(y * 64 + x) * 4 + c].abs_diff(expected) <= 1,
+                            "texture bank storage {storage} at {x},{y}"
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(f.instance.graphics_cache_stats().unwrap().misses, 1);
+    }
+    println!("MATCH texture descriptors beside stage-local uniform and storage banks, rebinding, pipeline reuse and driver-cache reopening");
+}

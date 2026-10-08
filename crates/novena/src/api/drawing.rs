@@ -58,12 +58,23 @@ impl IndexFormat {
     }
 }
 
+#[derive(Clone, Copy)]
+enum TextureReference {
+    Separate(u64),
+    Combined(u64),
+}
+
 #[derive(Default)]
 pub(super) struct State {
     program: Option<u64>,
     buffers: HashMap<u64, (u64, u64)>,
     vertex_states: HashMap<&'static str, Option<Vec<Settings>>>,
     uniforms: HashMap<(u64, u64), (u64, u64)>,
+    texture_pool: Option<u64>,
+    sampler_pool: Option<u64>,
+    textures: HashMap<(u64, u64), TextureReference>,
+    samplers: HashMap<(u64, u64), TextureReference>,
+    blends: HashMap<u64, Option<Settings>>,
     states: HashMap<&'static str, Option<Settings>>,
     viewport: Option<[u64; 5]>,
     scissor: Option<[u64; 5]>,
@@ -75,6 +86,48 @@ pub(super) struct State {
 impl State {
     pub fn record(&mut self, command: RecordedCommand) {
         match command {
+            RecordedCommand::State(StateCommand::SetDescriptorPool { sampler, pool }) => {
+                if sampler {
+                    self.sampler_pool = Some(pool);
+                } else {
+                    self.texture_pool = Some(pool);
+                }
+            }
+            RecordedCommand::State(StateCommand::BindHandle {
+                kind,
+                stage,
+                index,
+                handle,
+            }) if matches!(kind, "Texture" | "SeparateTexture") => {
+                if kind == "Texture" {
+                    self.textures
+                        .insert((stage, index), TextureReference::Combined(handle));
+                    self.samplers
+                        .insert((stage, index), TextureReference::Combined(handle));
+                } else {
+                    self.textures
+                        .insert((stage, index), TextureReference::Separate(handle));
+                }
+            }
+            RecordedCommand::State(StateCommand::BindSamplerReference {
+                stage,
+                index,
+                reference,
+            }) => {
+                self.samplers
+                    .insert((stage, index), TextureReference::Separate(reference));
+            }
+            RecordedCommand::State(StateCommand::BindState {
+                kind: "BlendState",
+                settings,
+                ..
+            }) => {
+                if let Some(target) = settings.as_ref().and_then(|s| value(s, "BlendTarget").ok()) {
+                    self.blends.insert(target[0], settings);
+                } else {
+                    self.unsupported = true;
+                }
+            }
             RecordedCommand::State(StateCommand::BindUniformBuffer {
                 stage,
                 index,
@@ -107,7 +160,10 @@ impl State {
             }
             RecordedCommand::BindState { kind, settings }
             | RecordedCommand::State(StateCommand::BindState { kind, settings, .. })
-                if matches!(kind, "ColorState" | "DepthStencilState" | "PolygonState") =>
+                if matches!(
+                    kind,
+                    "ColorState" | "ChannelMaskState" | "DepthStencilState" | "PolygonState"
+                ) =>
             {
                 self.states.insert(kind, settings);
             }
@@ -281,37 +337,65 @@ impl State {
         } = request;
         let contract = backend.first_draw.as_ref().ok_or(Status::Unimplemented)?;
         let topology = mapped(&contract.topologies, primitive).ok_or(Status::Unimplemented)?;
-        if self.unsupported || targets.len() != 1 || views != [0, 0] {
+        if self.unsupported || (targets.is_empty() || targets.len() > 8) || views != [0, 0] {
             return Err(Status::Unimplemented);
         }
         let Some(Object::Texture { description, .. }) = instance.objects.get(targets[0]) else {
             return Err(Status::BadArgument);
         };
-        if description.pool == 0
-            || description.format != contract.rgba8
-            || description.depth > 1
-            || description.levels > 1
-            || description.target != contract.target_2d
-            || description.swizzle != contract.identity_swizzle
-            || description.flags != 0
-            || description.depth_stencil_mode != 0
-        {
-            return Err(Status::Unimplemented);
+        let mut descriptions = Vec::new();
+        for &target in targets {
+            let Some(Object::Texture { description: d, .. }) = instance.objects.get(target) else {
+                return Err(Status::BadArgument);
+            };
+            if d.width == 0
+                || d.height == 0
+                || d.width != description.width
+                || d.height != description.height
+            {
+                return Err(Status::BadArgument);
+            }
+            if d.pool == 0
+                || d.format != contract.rgba8
+                || d.depth > 1
+                || d.levels > 1
+                || d.target != contract.target_2d
+                || d.swizzle != contract.identity_swizzle
+                || d.flags != 0
+                || d.depth_stencil_mode != 0
+            {
+                return Err(Status::Unimplemented);
+            }
+            let bytes = d
+                .width
+                .checked_mul(d.height)
+                .and_then(|n| n.checked_mul(4))
+                .ok_or(Status::BadArgument)?;
+            if descriptions
+                .iter()
+                .any(|other: &super::objects::TextureDescription| {
+                    other.pool == d.pool
+                        && ranges_overlap(other.pool_offset, bytes, d.pool_offset, bytes)
+                })
+            {
+                return Err(Status::Unimplemented);
+            }
+            descriptions.push(d);
         }
         let streams = self.vertex_settings("VertexStreamState", &["Stride", "Divisor"])?;
         let attributes = self.vertex_settings("VertexAttribState", &["Format", "StreamIndex"])?;
-        let color = self.settings("ColorState", &["BlendEnable"])?;
-        if color.iter().any(|(_, args)| args[0] != 0) || value(color, "BlendEnable")?[1] != 0 {
-            return Err(Status::Unimplemented);
-        }
-        let pipeline_state =
+        let mut pipeline_state =
             self.pipeline_state(contract.depth_raster, contract.cull_none, depth != 0)?;
+        pipeline_state.color_count = targets.len() as u32;
+        pipeline_state.colors = self.color_state(backend.blend_contract.as_ref(), targets.len())?;
         let depth_description = if depth != 0 {
             let extension = contract.depth_raster.ok_or(Status::Unimplemented)?;
             let Some(Object::Texture { description: d, .. }) = instance.objects.get(depth) else {
                 return Err(Status::BadArgument);
             };
-            if depth == targets[0] || d.width != description.width || d.height != description.height
+            if targets.contains(&depth)
+                || d.width != description.width
+                || d.height != description.height
             {
                 return Err(Status::BadArgument);
             }
@@ -323,6 +407,17 @@ impl State {
                 || d.flags != 0
                 || d.depth_stencil_mode != 0
             {
+                return Err(Status::Unimplemented);
+            }
+            if descriptions.iter().any(|color| {
+                color.pool == d.pool
+                    && ranges_overlap(
+                        color.pool_offset,
+                        color.width.saturating_mul(color.height).saturating_mul(4),
+                        d.pool_offset,
+                        d.width.saturating_mul(d.height).saturating_mul(5),
+                    )
+            }) {
                 return Err(Status::Unimplemented);
             }
             Some(d)
@@ -563,16 +658,140 @@ impl State {
         else {
             return Ok(());
         };
-        if !backend.ensure_texture(targets[0], &description, false) {
-            return Err(Status::BadArgument);
+        for (&target, d) in targets.iter().zip(&descriptions) {
+            if !backend.ensure_texture(target, d, false) {
+                return Err(Status::BadArgument);
+            }
         }
         if let Some(description) = &depth_description {
             if !backend.ensure_depth_stencil(depth, description) {
                 return Err(Status::BadArgument);
             }
         }
+        let texture_contract = backend.texture_contract.clone();
+        let mut texture_infos = Vec::new();
+        for b in &pipeline.textures {
+            let mapping = texture_contract
+                .bindings
+                .iter()
+                .find(|m| {
+                    m.target == b.stage
+                        && m.set == b.set
+                        && if b.ty == vk::DescriptorType::SAMPLED_IMAGE {
+                            m.image == b.binding
+                        } else {
+                            m.sampler == b.binding
+                        }
+                })
+                .ok_or(Status::Unimplemented)?;
+            let source = (mapping.stage, mapping.index);
+            let image = b.ty == vk::DescriptorType::SAMPLED_IMAGE;
+            let reference = if image {
+                self.textures.get(&source)
+            } else {
+                self.samplers.get(&source)
+            }
+            .ok_or(Status::Unimplemented)?;
+            let id = match reference {
+                TextureReference::Separate(handle) => {
+                    u32::try_from(*handle).map_err(|_| Status::Unimplemented)?
+                }
+                TextureReference::Combined(handle) => {
+                    let (_, texture, sampler) = texture_contract
+                        .combined
+                        .iter()
+                        .find(|(h, _, _)| h == handle)
+                        .ok_or(Status::Unimplemented)?;
+                    if image {
+                        *texture
+                    } else {
+                        *sampler
+                    }
+                }
+            };
+            if image {
+                let pool = self.texture_pool.ok_or(Status::Unimplemented)?;
+                let Some(Object::TexturePool { registered, .. }) = instance.objects.get(pool)
+                else {
+                    return Err(Status::BadArgument);
+                };
+                let &(texture, view) = registered.get(&id).ok_or(Status::Unimplemented)?;
+                if view != 0 {
+                    return Err(Status::Unimplemented);
+                }
+                let Some(Object::Texture { description: d, .. }) = instance.objects.get(texture)
+                else {
+                    return Err(Status::BadArgument);
+                };
+                if d.width == 0 || d.height == 0 {
+                    return Err(Status::BadArgument);
+                }
+                if depth == texture
+                    || depth_description.as_ref().is_some_and(|other| {
+                        d.pool == other.pool
+                            && ranges_overlap(
+                                d.pool_offset,
+                                d.width.saturating_mul(d.height).saturating_mul(4),
+                                other.pool_offset,
+                                other.width.saturating_mul(other.height).saturating_mul(5),
+                            )
+                    })
+                {
+                    return Err(Status::Unimplemented);
+                }
+                if targets.contains(&texture)
+                    || descriptions.iter().any(|other| {
+                        d.pool == other.pool
+                            && ranges_overlap(
+                                d.pool_offset,
+                                d.width.saturating_mul(d.height).saturating_mul(4),
+                                other.pool_offset,
+                                other.width.saturating_mul(other.height).saturating_mul(4),
+                            )
+                    })
+                {
+                    return Err(Status::Unimplemented);
+                }
+                let c = backend.first_draw.as_ref().ok_or(Status::Unimplemented)?;
+                if d.pool == 0
+                    || d.format != c.rgba8
+                    || d.target != c.target_2d
+                    || d.depth > 1
+                    || d.levels > 1
+                    || d.swizzle != c.identity_swizzle
+                    || d.flags != 0
+                    || d.depth_stencil_mode != 0
+                {
+                    return Err(Status::Unimplemented);
+                }
+                let view = backend
+                    .sampled_texture(texture, &d)
+                    .ok_or(Status::BadArgument)?;
+                texture_infos.push(
+                    vk::DescriptorImageInfo::default()
+                        .image_view(view)
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+                );
+            } else {
+                let pool = self.sampler_pool.ok_or(Status::Unimplemented)?;
+                let Some(Object::SamplerPool { registered, .. }) = instance.objects.get(pool)
+                else {
+                    return Err(Status::BadArgument);
+                };
+                let sampler = registered.get(&id).ok_or(Status::Unimplemented)?;
+                let Some(Object::Sampler(d)) = instance.objects.get(*sampler) else {
+                    return Err(Status::BadArgument);
+                };
+                let key = crate::gpu::textures::SamplerKey::new(&d, &texture_contract)
+                    .ok_or(Status::Unimplemented)?;
+                let sampler = backend
+                    .sampler(pool, id, key)
+                    .ok_or(Status::InternalError)?;
+                texture_infos.push(vk::DescriptorImageInfo::default().sampler(sampler));
+            }
+        }
         let descriptors = pipeline
-            .descriptors(&uniform_buffers)
+            .descriptors(&uniform_buffers, &texture_infos)
             .map_err(|_| Status::InternalError)?;
         let draw = Draw {
             descriptors,
@@ -593,13 +812,70 @@ impl State {
             }),
         };
         backend
-            .draw(
-                targets[0],
-                depth_description.map(|_| depth),
-                &pipeline,
-                &draw,
-            )
+            .draw(targets, depth_description.map(|_| depth), &pipeline, &draw)
             .ok_or(Status::InternalError)
+    }
+
+    fn color_state(
+        &self,
+        contract: Option<&crate::gpu::graphics::BlendContract>,
+        count: usize,
+    ) -> Result<[crate::gpu::graphics::ColorAttachmentState; 8], Status> {
+        let mut colors = [crate::gpu::graphics::ColorAttachmentState::default(); 8];
+        let settings = self.settings("ColorState", &["BlendEnable"])?;
+        let mut known = [false; 8];
+        for &(_, args) in settings {
+            let at = usize::try_from(args[0]).map_err(|_| Status::BadArgument)?;
+            let c = colors.get_mut(at).ok_or(Status::Unimplemented)?;
+            c.enable = boolean(args[1])?;
+            known[at] = true;
+        }
+        if !known[..count].iter().all(|k| *k) {
+            return Err(Status::Unimplemented);
+        }
+        for (at, color) in colors.iter_mut().enumerate() {
+            if !color.enable {
+                continue;
+            }
+            let contract = contract.ok_or(Status::Unimplemented)?;
+            let settings = self
+                .blends
+                .get(&(at as u64))
+                .and_then(Option::as_ref)
+                .ok_or(Status::Unimplemented)?;
+            if settings
+                .iter()
+                .any(|(name, _)| !matches!(*name, "BlendTarget" | "BlendFunc" | "BlendEquation"))
+            {
+                return Err(Status::Unimplemented);
+            }
+            let f = value(settings, "BlendFunc")?;
+            let e = value(settings, "BlendEquation")?;
+            for i in 0..4 {
+                color.factors[i] = mapped(&contract.factors, f[contract.function_order[i]])
+                    .ok_or(Status::Unimplemented)?
+                    .as_raw();
+            }
+            for i in 0..2 {
+                color.operations[i] = mapped(&contract.operations, e[contract.equation_order[i]])
+                    .ok_or(Status::Unimplemented)?
+                    .as_raw();
+            }
+        }
+        if self.states.contains_key("ChannelMaskState") {
+            let c = contract.ok_or(Status::Unimplemented)?;
+            for &(_, args) in self.settings("ChannelMaskState", &["ChannelMask"])? {
+                let at = usize::try_from(args[0]).map_err(|_| Status::BadArgument)?;
+                let color = colors.get_mut(at).ok_or(Status::Unimplemented)?;
+                color.write_mask = 0;
+                for i in 0..4 {
+                    if boolean(args[1 + c.channel_order[i]])? {
+                        color.write_mask |= 1 << i;
+                    }
+                }
+            }
+        }
+        Ok(colors)
     }
 
     fn vertex_settings(&self, kind: &str, allowed: &[&str]) -> Result<&Vec<Settings>, Status> {
@@ -617,6 +893,10 @@ impl State {
         }
         Ok(settings)
     }
+}
+
+fn ranges_overlap(a: u64, an: u64, b: u64, bn: u64) -> bool {
+    a.checked_add(an).is_none_or(|end| b < end) && b.checked_add(bn).is_none_or(|end| a < end)
 }
 
 fn boolean(v: u64) -> Result<bool, Status> {

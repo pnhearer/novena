@@ -74,10 +74,85 @@ impl StencilState {
     }
 }
 
+/// Explicit hypotheses for blend setter argument order and channel order.
+/// Factor and operation integers are public Vulkan values, not guest enums.
+#[derive(Clone)]
+pub struct BlendContract {
+    pub factors: Vec<(u64, vk::BlendFactor)>,
+    pub operations: Vec<(u64, vk::BlendOp)>,
+    /// Indices in the four arguments: source color, destination color, source alpha, destination alpha.
+    pub function_order: [usize; 4],
+    /// Indices in the two equation arguments: color, alpha.
+    pub equation_order: [usize; 2],
+    /// Indices in the four channel arguments: red, green, blue, alpha.
+    pub channel_order: [usize; 4],
+}
+impl BlendContract {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        for order in [
+            &self.function_order[..],
+            &self.equation_order[..],
+            &self.channel_order[..],
+        ] {
+            let mut sorted = order.to_vec();
+            sorted.sort_unstable();
+            if sorted != (0..order.len()).collect::<Vec<_>>() {
+                return Err("invalid blend argument permutation".into());
+            }
+        }
+        if self
+            .factors
+            .iter()
+            .any(|(_, v)| !(0..=10).contains(&v.as_raw()))
+            || self
+                .operations
+                .iter()
+                .any(|(_, v)| !(0..=4).contains(&v.as_raw()))
+        {
+            return Err("unsupported blend factor or operation".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub struct ColorAttachmentState {
+    pub enable: bool,
+    pub factors: [i32; 4],
+    pub operations: [i32; 2],
+    pub write_mask: u32,
+}
+impl Default for ColorAttachmentState {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            factors: [1, 0, 1, 0],
+            operations: [0; 2],
+            write_mask: 15,
+        }
+    }
+}
+impl ColorAttachmentState {
+    fn vk(self) -> vk::PipelineColorBlendAttachmentState {
+        vk::PipelineColorBlendAttachmentState::default()
+            .blend_enable(self.enable)
+            .src_color_blend_factor(vk::BlendFactor::from_raw(self.factors[0]))
+            .dst_color_blend_factor(vk::BlendFactor::from_raw(self.factors[1]))
+            .src_alpha_blend_factor(vk::BlendFactor::from_raw(self.factors[2]))
+            .dst_alpha_blend_factor(vk::BlendFactor::from_raw(self.factors[3]))
+            .color_blend_op(vk::BlendOp::from_raw(self.operations[0]))
+            .alpha_blend_op(vk::BlendOp::from_raw(self.operations[1]))
+            .color_write_mask(vk::ColorComponentFlags::from_raw(self.write_mask))
+    }
+}
+
 /// Interpreted pipeline state, also used for explicit cache retry.
 /// Enum integers are public Vulkan values. Retry validates them before use.
 #[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub struct DrawPipelineState {
+    /// Zero preserves the original single-target retry contract. Otherwise 1 through 8.
+    pub color_count: u32,
+    pub colors: [ColorAttachmentState; 8],
     pub attachment: bool,
     pub depth_test: bool,
     pub depth_write: bool,
@@ -217,7 +292,7 @@ impl GraphicsPipelines {
     ) -> Result<Self, String> {
         let driver = DriverCache::new(
             context,
-            b"novena graphics main interface 2 disk 1",
+            b"novena graphics main interface 3 disk 1",
             persistence,
         )?;
         let worker_driver = driver.clone();
@@ -306,7 +381,13 @@ impl Key {
         state: DrawPipelineState,
         storage: bool,
     ) -> Result<Self, String> {
-        if !(0..=7).contains(&state.depth_compare)
+        if state.color_count > 8
+            || state.colors.iter().any(|c| {
+                c.write_mask > 15
+                    || c.factors.iter().any(|v| !(0..=10).contains(v))
+                    || c.operations.iter().any(|v| !(0..=4).contains(v))
+            })
+            || !(0..=7).contains(&state.depth_compare)
             || state.stencil.iter().any(|s| {
                 !(0..=7).contains(&s.compare)
                     || [s.fail, s.depth_fail, s.pass]
@@ -466,6 +547,7 @@ pub(crate) struct GraphicsPipeline {
     layout: vk::PipelineLayout,
     set_layouts: Vec<vk::DescriptorSetLayout>,
     pub banks: Vec<Bank>,
+    pub textures: Vec<super::textures::Binding>,
     pub storage: bool,
 }
 
@@ -473,6 +555,11 @@ impl GraphicsPipeline {
     fn create(context: &Arc<Context>, cache: vk::PipelineCache, key: &Key) -> Result<Self, String> {
         let mut banks = uniforms::banks(&key.vertex, UniformStage::Vertex)?;
         banks.extend(uniforms::banks(&key.fragment, UniformStage::Fragment)?);
+        let mut textures = super::textures::bindings(&key.vertex, UniformStage::Vertex)?;
+        textures.extend(super::textures::bindings(
+            &key.fragment,
+            UniformStage::Fragment,
+        )?);
         let inputs = float_interface(&key.vertex, 1)?;
         if inputs.is_empty()
             || inputs.len() != key.input.attributes.len()
@@ -486,8 +573,11 @@ impl GraphicsPipeline {
         if float_interface(&key.vertex, 3)? != float_interface(&key.fragment, 1)? {
             return Err("vertex and fragment varying interfaces differ".into());
         }
-        if float_interface(&key.fragment, 3)? != [(0, 4)] {
-            return Err("draw requires float4 color output location zero".into());
+        let color_count = key.state.color_count.max(1);
+        if float_interface(&key.fragment, 3)?
+            != (0..color_count).map(|i| (i, 4)).collect::<Vec<_>>()
+        {
+            return Err("draw requires one float4 output per color target".into());
         }
         let limits = unsafe {
             context
@@ -495,6 +585,9 @@ impl GraphicsPipeline {
                 .get_physical_device_properties(context.physical_device)
         }
         .limits;
+        if color_count > limits.max_color_attachments {
+            return Err("too many color attachments".into());
+        }
         if key.input.attributes.len() > limits.max_vertex_input_attributes as usize {
             return Err("too many vertex attributes".into());
         }
@@ -549,11 +642,57 @@ impl GraphicsPipeline {
         {
             return Err("constant banks exceed device descriptor limits".into());
         }
+        let images = textures
+            .iter()
+            .filter(|b| b.ty == vk::DescriptorType::SAMPLED_IMAGE)
+            .count();
+        let samplers = textures.len() - images;
+        if images > limits.max_descriptor_set_sampled_images as usize
+            || samplers > limits.max_descriptor_set_samplers as usize
+            || [UniformStage::Vertex, UniformStage::Fragment]
+                .iter()
+                .any(|stage| {
+                    let stage_textures = textures.iter().filter(|b| b.stage == *stage);
+                    let images = stage_textures
+                        .clone()
+                        .filter(|b| b.ty == vk::DescriptorType::SAMPLED_IMAGE)
+                        .count();
+                    let samplers = stage_textures.count() - images;
+                    let banks = banks.iter().filter(|b| b.stage == *stage).count();
+                    images > limits.max_per_stage_descriptor_sampled_images as usize
+                        || samplers > limits.max_per_stage_descriptor_samplers as usize
+                        || banks + images + samplers > limits.max_per_stage_resources as usize
+                })
+        {
+            return Err("texture descriptors exceed device limits".into());
+        }
+        if key.state.colors[..color_count as usize]
+            .iter()
+            .any(|c| c.enable)
+            && !unsafe {
+                context.instance.get_physical_device_format_properties(
+                    context.physical_device,
+                    vk::Format::R8G8B8A8_UNORM,
+                )
+            }
+            .optimal_tiling_features
+            .contains(vk::FormatFeatureFlags::COLOR_ATTACHMENT_BLEND)
+        {
+            return Err("color attachment blending is unavailable".into());
+        }
         let features = unsafe {
             context
                 .instance
                 .get_physical_device_features(context.physical_device)
         };
+        if color_count > 1
+            && features.independent_blend == 0
+            && key.state.colors[..color_count as usize]
+                .iter()
+                .any(|c| *c != key.state.colors[0])
+        {
+            return Err("independent blend state is unavailable".into());
+        }
         if key.state.polygon != 0 && features.fill_mode_non_solid == 0 {
             return Err("non-solid polygon modes are unavailable".into());
         }
@@ -567,19 +706,23 @@ impl GraphicsPipeline {
             layout: vk::PipelineLayout::null(),
             set_layouts: Vec::new(),
             banks,
+            textures,
             storage: key.storage,
         };
         // SAFETY: validated public Vulkan states, with owned partial handles.
         unsafe {
-            let mut attachments = vec![vk::AttachmentDescription::default()
-                .format(vk::Format::R8G8B8A8_UNORM)
-                .samples(vk::SampleCountFlags::TYPE_1)
-                .load_op(vk::AttachmentLoadOp::LOAD)
-                .store_op(vk::AttachmentStoreOp::STORE)
-                .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-                .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-                .initial_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)];
+            let mut attachments = vec![
+                vk::AttachmentDescription::default()
+                    .format(vk::Format::R8G8B8A8_UNORM)
+                    .samples(vk::SampleCountFlags::TYPE_1)
+                    .load_op(vk::AttachmentLoadOp::LOAD)
+                    .store_op(vk::AttachmentStoreOp::STORE)
+                    .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+                    .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+                    .initial_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+                color_count as usize
+            ];
             if key.state.attachment {
                 attachments.push(
                     vk::AttachmentDescription::default()
@@ -593,11 +736,15 @@ impl GraphicsPipeline {
                         .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL),
                 );
             }
-            let colors = [vk::AttachmentReference::default()
-                .attachment(0)
-                .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)];
+            let colors: Vec<_> = (0..color_count)
+                .map(|i| {
+                    vk::AttachmentReference::default()
+                        .attachment(i)
+                        .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                })
+                .collect();
             let depth_ref = vk::AttachmentReference::default()
-                .attachment(1)
+                .attachment(color_count)
                 .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
             let mut subpass = vk::SubpassDescription::default()
                 .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
@@ -615,20 +762,38 @@ impl GraphicsPipeline {
                     None,
                 )
                 .map_err(|e| format!("create draw render pass: {e:?}"))?;
-            if !result.banks.is_empty() {
-                for stage in [UniformStage::Vertex, UniformStage::Fragment] {
-                    let bindings: Vec<_> = result
-                        .banks
-                        .iter()
-                        .filter(|b| b.stage == stage)
-                        .map(|b| {
-                            vk::DescriptorSetLayoutBinding::default()
-                                .binding(b.bank)
-                                .descriptor_type(result.descriptor_type())
-                                .descriptor_count(1)
-                                .stage_flags(stage.flags())
-                        })
-                        .collect();
+            if !result.banks.is_empty() || !result.textures.is_empty() {
+                if limits.max_bound_descriptor_sets < 4 {
+                    return Err("four draw descriptor sets are unavailable".into());
+                }
+                for set in 0..4 {
+                    let stage = if set % 2 == 0 {
+                        UniformStage::Vertex
+                    } else {
+                        UniformStage::Fragment
+                    };
+                    let bindings: Vec<_> =
+                        result
+                            .banks
+                            .iter()
+                            .filter(|b| b.stage == stage && set < 2)
+                            .map(|b| {
+                                vk::DescriptorSetLayoutBinding::default()
+                                    .binding(b.bank)
+                                    .descriptor_type(result.descriptor_type())
+                                    .descriptor_count(1)
+                                    .stage_flags(stage.flags())
+                            })
+                            .chain(result.textures.iter().filter(|b| b.stage_set() == set).map(
+                                |b| {
+                                    vk::DescriptorSetLayoutBinding::default()
+                                        .binding(b.lowered())
+                                        .descriptor_type(b.ty)
+                                        .descriptor_count(1)
+                                        .stage_flags(stage.flags())
+                                },
+                            ))
+                            .collect();
                     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
                     let mut support = vk::DescriptorSetLayoutSupport::default();
                     context
@@ -734,8 +899,10 @@ impl GraphicsPipeline {
             .stencil_test_enable(key.state.stencil_test)
             .front(key.state.stencil[0].vk())
             .back(key.state.stencil[1].vk());
-        let colors = [vk::PipelineColorBlendAttachmentState::default()
-            .color_write_mask(vk::ColorComponentFlags::RGBA)];
+        let colors: Vec<_> = key.state.colors[..color_count as usize]
+            .iter()
+            .map(|c| c.vk())
+            .collect();
         let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&colors);
         let dynamic = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
         let dynamics = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic);
@@ -785,8 +952,9 @@ impl GraphicsPipeline {
     pub fn descriptors(
         &self,
         buffers: &[vk::DescriptorBufferInfo],
+        images: &[vk::DescriptorImageInfo],
     ) -> Result<DrawDescriptors, String> {
-        if buffers.len() != self.banks.len() {
+        if buffers.len() != self.banks.len() || images.len() != self.textures.len() {
             return Err("missing constant bank ranges".into());
         }
         let mut result = DrawDescriptors {
@@ -794,19 +962,42 @@ impl GraphicsPipeline {
             pool: vk::DescriptorPool::null(),
             sets: Vec::new(),
         };
-        if self.banks.is_empty() {
+        if self.banks.is_empty() && self.textures.is_empty() {
             return Ok(result);
         }
         unsafe {
-            let sizes = [vk::DescriptorPoolSize::default()
-                .ty(self.descriptor_type())
-                .descriptor_count(buffers.len() as u32)];
+            let mut sizes = Vec::new();
+            for (ty, count) in [
+                (self.descriptor_type(), buffers.len()),
+                (
+                    vk::DescriptorType::SAMPLED_IMAGE,
+                    self.textures
+                        .iter()
+                        .filter(|b| b.ty == vk::DescriptorType::SAMPLED_IMAGE)
+                        .count(),
+                ),
+                (
+                    vk::DescriptorType::SAMPLER,
+                    self.textures
+                        .iter()
+                        .filter(|b| b.ty == vk::DescriptorType::SAMPLER)
+                        .count(),
+                ),
+            ] {
+                if count != 0 {
+                    sizes.push(
+                        vk::DescriptorPoolSize::default()
+                            .ty(ty)
+                            .descriptor_count(count as u32),
+                    );
+                }
+            }
             result.pool = self
                 .context
                 .device
                 .create_descriptor_pool(
                     &vk::DescriptorPoolCreateInfo::default()
-                        .max_sets(2)
+                        .max_sets(4)
                         .pool_sizes(&sizes),
                     None,
                 )
@@ -820,7 +1011,7 @@ impl GraphicsPipeline {
                         .set_layouts(&self.set_layouts),
                 )
                 .map_err(|e| format!("allocate draw descriptors: {e:?}"))?;
-            let writes: Vec<_> = self
+            let mut writes: Vec<_> = self
                 .banks
                 .iter()
                 .zip(buffers)
@@ -832,6 +1023,13 @@ impl GraphicsPipeline {
                         .buffer_info(std::slice::from_ref(buffer))
                 })
                 .collect();
+            writes.extend(self.textures.iter().zip(images).map(|(b, info)| {
+                vk::WriteDescriptorSet::default()
+                    .dst_set(result.sets[b.stage_set() as usize])
+                    .dst_binding(b.lowered())
+                    .descriptor_type(b.ty)
+                    .image_info(std::slice::from_ref(info))
+            }));
             self.context.device.update_descriptor_sets(&writes, &[]);
         }
         Ok(result)

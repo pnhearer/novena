@@ -25,10 +25,10 @@ What works today:
 - Render scaling and optional vblank pacing through the host interface.
 - CPU clears for window-presented textures and an optional Vulkan backend for arena-backed color and depth clears, supported texture copies, and native swapchain or offscreen presentation.
 - Recorded draw commands, 24 documented command-state handlers, and retained shader records.
-- An opt-in Vulkan first draw with one float4 vertex attribute, one RGBA8 target,
-  translated vertex and fragment stages, and disabled depth, stencil, blend,
-  and culling, plus explicit host uniform bank mappings backed by arena ranges.
-  See [drawing support](docs/design/drawing.md).
+- An opt-in Vulkan draw path with translated vertex and fragment stages,
+  vertex streams, indexed geometry, uniform banks, explicit depth and raster
+  state, sampled RGBA8 images, and per-target blending and write masks. A Rust
+  host supplies format and enum contracts. See [drawing support](docs/design/drawing.md).
 - GPU address resolution through registered memory pools, including pools learned from observed calls.
 - An opt-in `ShaderTranslator` hook that receives bounded shader bytes during shader setup and retains translated words or error counts.
 - An off-by-default translated-shader dump for local debugging. A host can set

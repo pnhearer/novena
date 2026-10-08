@@ -16,6 +16,7 @@ pub(super) struct Image {
     context: Arc<Context>,
     memory: vk::DeviceMemory,
     pub info: ImageInfo,
+    view: vk::ImageView,
 }
 
 impl Image {
@@ -50,13 +51,14 @@ impl Image {
                     .instance
                     .get_physical_device_format_properties(context.physical_device, format)
             };
-            if !properties
-                .optimal_tiling_features
-                .contains(vk::FormatFeatureFlags::COLOR_ATTACHMENT)
-            {
+            if !properties.optimal_tiling_features.contains(
+                vk::FormatFeatureFlags::COLOR_ATTACHMENT
+                    | vk::FormatFeatureFlags::SAMPLED_IMAGE
+                    | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR,
+            ) {
                 return None;
             }
-            usage |= vk::ImageUsageFlags::COLOR_ATTACHMENT;
+            usage |= vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED;
         }
         if matches!(
             format,
@@ -97,6 +99,7 @@ impl Image {
         let mut result = Self {
             context: Arc::clone(context),
             memory: vk::DeviceMemory::null(),
+            view: vk::ImageView::null(),
             info: ImageInfo {
                 image,
                 extent,
@@ -130,6 +133,25 @@ impl Image {
         Some(result)
     }
 
+    pub fn view(&mut self) -> Option<vk::ImageView> {
+        if self.view == vk::ImageView::null() {
+            self.view = unsafe {
+                self.context
+                    .device
+                    .create_image_view(
+                        &vk::ImageViewCreateInfo::default()
+                            .image(self.info.image)
+                            .view_type(vk::ImageViewType::TYPE_2D)
+                            .format(self.info.format)
+                            .subresource_range(range(self.info.format)),
+                        None,
+                    )
+                    .ok()?
+            };
+        }
+        Some(self.view)
+    }
+
     pub fn transition(&mut self, command: vk::CommandBuffer, layout: vk::ImageLayout) {
         transition(&self.context.device, command, self.info, layout);
         self.info.layout = layout;
@@ -141,6 +163,7 @@ impl Drop for Image {
         unsafe {
             // Includes presentation copies and callers using the context directly.
             let _ = self.context.device.device_wait_idle();
+            self.context.device.destroy_image_view(self.view, None);
             self.context.device.destroy_image(self.info.image, None);
             self.context.device.free_memory(self.memory, None);
         }
@@ -293,6 +316,16 @@ impl Images {
         self.images.remove(&key);
     }
 
+    pub fn sampled(&mut self, key: u64) -> Option<vk::ImageView> {
+        let (cmd, _) = self.commands.begin()?;
+        let image = self.images.get_mut(&key)?;
+        image.transition(cmd, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        let view = image.view()?;
+        self.commands.submit(false, None)?;
+        self.commands.wait()?;
+        Some(view)
+    }
+
     pub fn clear_color(&mut self, key: u64, color: [f32; 4], mask: u32) -> Option<()> {
         if mask & 15 == 0 {
             return Some(());
@@ -330,75 +363,42 @@ impl Images {
 
     pub fn draw(
         &mut self,
-        key: u64,
+        keys: &[u64],
         depth: Option<u64>,
         pipeline: &super::graphics::GraphicsPipeline,
         memory: &super::GlobalMemory,
         draw: &super::graphics::Draw,
     ) -> Option<()> {
-        let image = self.images.get(&key)?;
+        let extent = self.images.get(keys.first()?)?.info.extent;
+        let mut views = Vec::new();
+        for key in keys {
+            views.push(self.images.get_mut(key)?.view()?);
+        }
+        if let Some(depth) = depth {
+            views.push(self.images.get_mut(&depth)?.view()?);
+        }
         let device = &self.context.device;
-        // Temporary attachment objects remain live through the submission fence.
-        let view = unsafe {
+        let framebuffer = unsafe {
             device
-                .create_image_view(
-                    &vk::ImageViewCreateInfo::default()
-                        .image(image.info.image)
-                        .view_type(vk::ImageViewType::TYPE_2D)
-                        .format(image.info.format)
-                        .subresource_range(range(image.info.format)),
+                .create_framebuffer(
+                    &vk::FramebufferCreateInfo::default()
+                        .render_pass(pipeline.render_pass)
+                        .attachments(&views)
+                        .width(extent.width)
+                        .height(extent.height)
+                        .layers(1),
                     None,
                 )
                 .ok()?
         };
-        let mut views = vec![view];
-        if let Some(depth) = depth {
-            let info = self.images.get(&depth)?.info;
-            let depth_view = unsafe {
-                device.create_image_view(
-                    &vk::ImageViewCreateInfo::default()
-                        .image(info.image)
-                        .view_type(vk::ImageViewType::TYPE_2D)
-                        .format(info.format)
-                        .subresource_range(range(info.format)),
-                    None,
-                )
-            };
-            match depth_view {
-                Ok(view) => views.push(view),
-                Err(_) => {
-                    unsafe {
-                        device.destroy_image_view(view, None);
-                    }
-                    return None;
-                }
-            }
-        }
-        let framebuffer = unsafe {
-            device.create_framebuffer(
-                &vk::FramebufferCreateInfo::default()
-                    .render_pass(pipeline.render_pass)
-                    .attachments(&views)
-                    .width(image.info.extent.width)
-                    .height(image.info.extent.height)
-                    .layers(1),
-                None,
-            )
-        };
-        let Ok(framebuffer) = framebuffer else {
-            unsafe {
-                for view in &views {
-                    device.destroy_image_view(*view, None);
-                }
-            }
-            return None;
-        };
         let result = (|| {
             let (cmd, _) = self.commands.begin()?;
-            let image = self.images.get_mut(&key)?;
             buffer_barrier(device, cmd);
-            image.transition(cmd, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
-            let extent = image.info.extent;
+            for key in keys {
+                self.images
+                    .get_mut(key)?
+                    .transition(cmd, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+            }
             if let Some(depth) = depth {
                 self.images
                     .get_mut(&depth)?
@@ -427,9 +427,6 @@ impl Images {
                 let _ = device.device_wait_idle();
             }
             device.destroy_framebuffer(framebuffer, None);
-            for view in &views {
-                device.destroy_image_view(*view, None);
-            }
         }
         result
     }
@@ -671,6 +668,11 @@ pub(super) fn transition(
                 | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
             vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
                 | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+        )
+    } else if layout == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL {
+        (
+            vk::PipelineStageFlags::VERTEX_SHADER | vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::AccessFlags::SHADER_READ,
         )
     } else if layout == vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL {
         (

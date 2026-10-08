@@ -15,6 +15,7 @@ mod memory;
 mod pipeline_disk;
 mod pipeline_workers;
 mod present;
+pub mod textures;
 pub mod uniforms;
 use images::{Image, Images};
 use present::Window;
@@ -81,6 +82,9 @@ pub struct Context {
 
 pub struct Backend {
     pub(crate) first_draw: Option<graphics::FirstDrawContract>,
+    pub(crate) texture_contract: textures::TextureContract,
+    pub(crate) blend_contract: Option<graphics::BlendContract>,
+    samplers: HashMap<(u64, u32), textures::Sampler>,
     pub(crate) uniforms: uniforms::UniformBufferContract,
     pub(crate) graphics: graphics::GraphicsPipelines,
     windows: HashMap<u64, Window>,
@@ -101,6 +105,9 @@ impl Backend {
         let images = Images::new(&context)?;
         Some(Self {
             first_draw: None,
+            texture_contract: textures::TextureContract::default(),
+            blend_contract: None,
+            samplers: HashMap::new(),
             uniforms: uniforms::UniformBufferContract::default(),
             graphics: graphics::GraphicsPipelines::new(&context)?,
             windows: HashMap::new(),
@@ -279,6 +286,31 @@ impl Backend {
         Some(())
     }
 
+    pub(crate) fn sampled_texture(
+        &mut self,
+        key: u64,
+        description: &crate::api::TextureDescription,
+    ) -> Option<vk::ImageView> {
+        if !self.ensure_texture(key, description, false) {
+            return None;
+        }
+        self.sync_texture(key, true)?;
+        self.images.sampled(key)
+    }
+
+    pub(crate) fn sampler(
+        &mut self,
+        pool: u64,
+        id: u32,
+        key: textures::SamplerKey,
+    ) -> Option<vk::Sampler> {
+        if self.samplers.get(&(pool, id)).is_none_or(|s| s.key != key) {
+            self.samplers
+                .insert((pool, id), textures::Sampler::new(&self.context, key)?);
+        }
+        Some(self.samplers.get(&(pool, id))?.handle)
+    }
+
     pub fn release_texture(&mut self, key: u64) {
         self.images.remove(key);
         self.bindings.remove(&key);
@@ -307,18 +339,27 @@ impl Backend {
 
     pub(crate) fn draw(
         &mut self,
-        texture: u64,
+        textures: &[u64],
         depth: Option<u64>,
         pipeline: &graphics::GraphicsPipeline,
         draw: &graphics::Draw,
     ) -> Option<()> {
-        self.sync_texture(texture, true)?;
+        for &texture in textures {
+            self.sync_texture(texture, true)?;
+        }
         if let Some(depth) = depth {
             self.sync_texture(depth, true)?;
         }
-        self.images
-            .draw(texture, depth, pipeline, self.global_memory.as_ref()?, draw)?;
-        self.sync_texture(texture, false)?;
+        self.images.draw(
+            textures,
+            depth,
+            pipeline,
+            self.global_memory.as_ref()?,
+            draw,
+        )?;
+        for &texture in textures {
+            self.sync_texture(texture, false)?;
+        }
         if let Some(depth) = depth {
             self.sync_texture(depth, false)?;
         }
@@ -588,6 +629,7 @@ impl Context {
                 shader_int16: core.shader_int16 != vk::FALSE,
             };
             let enabled = vk::PhysicalDeviceFeatures::default()
+                .independent_blend(core.independent_blend != 0)
                 .shader_int64(true)
                 .shader_int16(shader_features.shader_int16)
                 .fill_mode_non_solid(core.fill_mode_non_solid != 0)

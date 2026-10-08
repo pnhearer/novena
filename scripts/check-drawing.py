@@ -18,6 +18,16 @@ FIELDS = {
     "VertexAttribStateSetStreamIndex": "x1",
     "VertexStreamStateSetStride": "x1",
     "VertexStreamStateSetDivisor": "x1",
+    "TexturePoolRegisterTexture": "x1",
+    "SamplerPoolRegisterSampler": "x1",
+    "CommandBufferBindSeparateTexture": "x3",
+    "CommandBufferBindSeparateSampler": "x3",
+    "SamplerBuilderSetMinMagFilter": "x1",
+    "SamplerBuilderSetWrapMode": "x1",
+    "BlendStateSetBlendFunc": "x1",
+    "BlendStateSetBlendEquation": "x1",
+    "ColorStateSetBlendEnable": "x2",
+    "ChannelMaskStateSetChannelMask": "x2",
     "CommandBufferBindVertexAttribState": "x1",
     "CommandBufferBindVertexStreamState": "x1",
 }
@@ -60,6 +70,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--observations", action="store_true",
                         help="print shape fields without inferring enums")
+    parser.add_argument("--textures", action="store_true",
+                        help="run sampled-image and blend pixel checks")
     args = parser.parse_args()
     if args.observations:
         observations()
@@ -77,11 +89,17 @@ def main():
         run(["cargo", "fmt", "--all", "--", "--check"], log)
         run(["rustfmt", "--edition", "2021", "--check",
              "crates/novena/tests/shadowbox/drawing.rs"], log)
-        run(["cargo", "test", "--workspace", "--locked", "--features", "shadowbox",
-             "--test", "shadowbox_drawing", "--", "--ignored", "--nocapture",
-             "--test-threads=1"], log)
+        checks = ["textured_checkerboard_and_blend_pixels", "translated_texture_pixels",
+                  "multiple_target_blend_pixels", "textured_uniform_banks_and_persistence"] if args.textures else [None]
+        for check in checks:
+            command = ["cargo", "test", "--workspace", "--locked", "--features", "shadowbox",
+                       "--test", "shadowbox_drawing"]
+            if check:
+                command.append(check)
+            run(command + ["--", "--ignored", "--nocapture", "--test-threads=1"], log)
+        package = checks[0] or "first_draw_executes_translated_triangle"
         run(["cargo", "clippy", "--manifest-path",
-             "target/shadowbox-global-memory/first_draw_executes_translated_triangle/Cargo.toml",
+             f"target/shadowbox-global-memory/{package}/Cargo.toml",
              "--target-dir", "target/shadowbox-global-memory/build", "--all-targets",
              "--", "-D", "warnings"], log)
     print("Full output: target/drawing.log")

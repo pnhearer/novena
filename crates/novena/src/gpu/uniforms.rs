@@ -75,7 +75,11 @@ pub(crate) struct Bank {
 /// Accept only the translator's set-zero Block { float4[4096] } bank interface.
 /// Generic descriptor reflection still checks entry points, arrays and push constants.
 pub(crate) fn banks(words: &[u32], stage: UniformStage) -> Result<Vec<Bank>, String> {
-    let bindings = stage_bindings(words, stage.model())?;
+    let bindings: Vec<_> = stage_bindings(words, stage.model())?
+        .into_iter()
+        .filter(|b| b.descriptor_type == vk::DescriptorType::UNIFORM_BUFFER)
+        .collect();
+    super::textures::bindings(words, stage)?;
     if bindings.iter().any(|b| {
         b.set != 0
             || b.binding >= 32
@@ -154,6 +158,20 @@ pub(crate) fn lower(words: &[u32], stage: UniformStage, storage: bool) -> Result
             _ => None,
         })
         .collect();
+    let textures: Vec<_> = instructions
+        .iter()
+        .filter_map(|(op, args)| match (*op, *args) {
+            (59, [_, variable, 0, ..]) => Some(*variable),
+            _ => None,
+        })
+        .collect();
+    let sets: HashMap<_, _> = instructions
+        .iter()
+        .filter_map(|(op, args)| match (*op, *args) {
+            (71, [variable, 34, set]) => Some((*variable, *set)),
+            _ => None,
+        })
+        .collect();
     let mut result = words[..5].to_vec();
     let mut decorated = false;
     for (op, args) in instructions {
@@ -165,7 +183,16 @@ pub(crate) fn lower(words: &[u32], stage: UniformStage, storage: bool) -> Result
         }
         let mut args = args.to_vec();
         match op {
-            71 if args.get(1) == Some(&34) => args[2] = stage.set(),
+            71 if args.get(1) == Some(&34) => {
+                args[2] = if textures.contains(&args[0]) {
+                    stage.set() + 2
+                } else {
+                    stage.set()
+                }
+            }
+            71 if args.get(1) == Some(&33) && textures.contains(&args[0]) => {
+                args[2] += sets[&args[0]] * 256
+            }
             32 if storage && args.get(1) == Some(&2) => args[1] = 12,
             59 if storage && args.get(2) == Some(&2) => args[2] = 12,
             _ => {}

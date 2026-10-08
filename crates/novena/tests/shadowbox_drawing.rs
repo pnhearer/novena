@@ -50,3 +50,27 @@ fn depth_stencil_and_raster_pixels() {
 fn indexed_strip_uniform_depth_pixels() {
     support::run("indexed_strip_uniform_depth_pixels");
 }
+
+#[test]
+#[ignore = "requires NOVENA_SHADOWBOX_PATH, Vulkan, glslangValidator and spirv-val"]
+fn textured_checkerboard_and_blend_pixels() {
+    support::run("textured_checkerboard_and_blend_pixels");
+}
+
+#[test]
+#[ignore = "requires NOVENA_SHADOWBOX_PATH, Vulkan and spirv-val"]
+fn translated_texture_pixels() {
+    support::run("translated_texture_pixels");
+}
+
+#[test]
+#[ignore = "requires NOVENA_SHADOWBOX_PATH, Vulkan, glslangValidator and spirv-val"]
+fn multiple_target_blend_pixels() {
+    support::run("multiple_target_blend_pixels");
+}
+
+#[test]
+#[ignore = "requires NOVENA_SHADOWBOX_PATH, Vulkan, glslangValidator and spirv-val"]
+fn textured_uniform_banks_and_persistence() {
+    support::run("textured_uniform_banks_and_persistence");
+}

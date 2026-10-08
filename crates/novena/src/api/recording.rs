@@ -60,8 +60,6 @@ pub fn handler(name: &str) -> Option<Handler> {
         // records no commands and never needs any. Accepted and ignored.
         "nvnCommandBufferSetMemoryCallback"
         | "nvnCommandBufferSetMemoryCallbackData"
-        | "nvnCommandBufferSetTexturePool"
-        | "nvnCommandBufferSetSamplerPool"
         | "nvnCommandBufferSetShaderScratchMemory" => accept,
         // Commands that the graphics processor would execute later and that
         // the program waits on. Nothing executes commands yet, so their

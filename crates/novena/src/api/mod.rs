@@ -23,6 +23,8 @@ mod state_commands;
 
 use crate::functions::FunctionId;
 use crate::instance::{Instance, Registers, Status};
+#[cfg(feature = "vulkan")]
+pub(crate) use objects::SamplerDescription;
 pub use objects::{GpuAddress, GpuAddressError, Object, Objects, ShaderRecord, ShaderTranslation};
 
 /// A function's behaviour. Arguments arrive in `registers`; results go back
@@ -93,7 +95,11 @@ mod tests {
     #[test]
     fn every_handler_name_is_in_the_function_table() {
         // A handler for a name the table does not have would never run.
-        for name in ALL_HANDLED.iter().chain(state_commands::NAMES) {
+        for name in ALL_HANDLED
+            .iter()
+            .chain(state_commands::NAMES)
+            .chain(state_commands::TEXTURE_NAMES)
+        {
             assert!(functions::lookup(name).is_some(), "{name}");
             assert!(handler(name).is_some(), "{name}");
         }

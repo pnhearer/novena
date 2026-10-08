@@ -44,6 +44,10 @@ shadowbox = {{ path = {shadowbox:?} }}
                 if matches!(
                     test,
                     "first_draw_executes_translated_triangle"
+                        | "textured_checkerboard_and_blend_pixels"
+                        | "translated_texture_pixels"
+                        | "multiple_target_blend_pixels"
+                        | "textured_uniform_banks_and_persistence"
                         | "primitive_topologies_read_back_pixels"
                         | "vertex_formats_read_back_pixels"
                         | "uniform_banks_colour_two_draws"

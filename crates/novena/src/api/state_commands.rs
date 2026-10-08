@@ -40,8 +40,14 @@ pub(super) const NAMES: &[&str] = &[
     "nvnCommandBufferRestoreZCullData",
 ];
 
+pub(super) const TEXTURE_NAMES: &[&str] = &[
+    "nvnCommandBufferBindTexture",
+    "nvnCommandBufferSetTexturePool",
+    "nvnCommandBufferSetSamplerPool",
+];
+
 pub fn handler(name: &str) -> Option<Handler> {
-    NAMES.contains(&name).then_some(record_state)
+    (NAMES.contains(&name) || TEXTURE_NAMES.contains(&name)).then_some(record_state)
 }
 
 fn record_state(instance: &Instance, function: FunctionId, r: &mut Registers) -> Status {
@@ -164,7 +170,11 @@ fn record_state(instance: &Instance, function: FunctionId, r: &mut Registers) ->
             address: r.x[2],
             size: r.x[3],
         },
-        "BindSeparateTexture" | "BindImage" => StateCommand::BindHandle {
+        "SetTexturePool" | "SetSamplerPool" => StateCommand::SetDescriptorPool {
+            sampler: name == "SetSamplerPool",
+            pool: r.x[1],
+        },
+        "BindTexture" | "BindSeparateTexture" | "BindImage" => StateCommand::BindHandle {
             kind: name.strip_prefix("Bind").expect("binding"),
             stage: r.x[1],
             index: r.x[2],

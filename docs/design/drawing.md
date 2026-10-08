@@ -27,10 +27,11 @@ The supported recording has these limits:
 | Vertex stream state | Count at most 16, recorded byte stride, divisor explicitly zero; zero stride repeats one element |
 | Vertex attribute state | Count at most 16, explicit stream and byte offset, host-selected format; each array index maps to the same shader location |
 | Program | Exactly one translated vertex `main` and one fragment `main`, paired by SPIR-V execution model |
-| Shader interface | Consecutive 32-bit float scalar or vector inputs starting at location zero, matching float varyings, one float4 color output at location zero |
-| Color target | One pool-backed 2D base level, tightly packed RGBA8, no views, zero flags and depth-stencil mode, host-selected identity swizzle |
+| Shader interface | Consecutive 32-bit float scalar or vector inputs starting at location zero, matching float varyings, one float4 color output per target at consecutive locations |
+| Color targets | One through eight matching pool-backed 2D base levels, tightly packed RGBA8, no views, zero flags and depth-stencil mode, host-selected identity swizzle |
 | Viewport and scissor | Explicit zero origin, positive sizes bounded by the target, Vulkan pixel coordinates |
-| Color state | Target zero, blend enable explicitly zero, all channels written |
+| Color state | Explicit enable per active target, optional host-selected factors, equations and channel order |
+| Sampled resources | Explicit host mapping to translated separate 2D image/sampler descriptors, registered pools and bounded RGBA8 images |
 | Depth and stencil state | Explicit enables; optional host-contract D32 plus S8 attachment, compare, operations, masks and reference |
 | Polygon state | Host-selected culling and polygon modes, host winding, optional offset hypothesis; one sample |
 | Depth range | Vulkan interval zero through one, optional recorded interval must match |
@@ -122,9 +123,9 @@ and canonical pool bytes are checked after each valid case. See
 
 All enum conversion beyond the host contract, integer shader inputs,
 packed attribute formats, nonzero viewport origins, coordinate conversion,
-specialization overrides, textures, samplers, implicit uniform bank mappings, general indexed semantics, instancing,
-guest depth and stencil formats and enums, blend, color masks, multisampling, views,
-array layers, additional levels, multiple targets and asynchronous draw
+specialization overrides, implicit texture and sampler slot mappings, implicit uniform bank mappings, general indexed semantics, instancing,
+guest depth and stencil formats and enums, guest blend and channel mappings, multisampling, views,
+array layers, additional levels and asynchronous draw
 submission remain open. The sections below list the observations
 needed to close these gaps.
 
@@ -194,6 +195,14 @@ Missing knowledge includes the coordinate origin, pixel-center rule, viewport de
 The smallest useful observation is one point or rectangle moved across each edge. Vary one origin, width, height, near value, or far value at a time. Compare the first and last affected pixels and the depth value written.
 
 ## Blend
+
+`Instance::set_blend_contract` enables bounded per-target blending and masks
+with explicit factor tables, operation tables and argument permutations.
+One through eight RGBA8 targets can use independent blend state when the device
+supports it. Alpha blending, preserved channels and a two-target experiment
+have headless pixel proofs. The state and target count are in graphics cache
+identity. See [provenance 0030](../provenance/0030-textured-blended-drawing.md).
+
 
 Blend state is set through `BindBlendState`, `BindChannelMaskState`, and `BindColorState`. The setters establish per-target selection, four blend-function integers, two blend-equation integers, channel mask flags, and a blend enable flag. See [state objects](../signatures/0003-objects.md#state-objects) and [command buffer state binding](../signatures/0002-command-buffer.md#state-binding).
 
@@ -278,6 +287,18 @@ Missing knowledge includes the attachment array and view layouts, the target for
 The smallest useful observation is one color target and one depth target whose dimensions and format each vary once. Vary the color count, view pointer, level, layer, and texture format one at a time. Dump the pointed-to view words with offsets. Compare attachment bytes, row stride, and clear or draw results.
 
 ## Texture and sampler bindings
+
+`Instance::set_texture_contract` maps recorded stage/index slots to the original
+sets and binding numbers reported by translated SPIR-V. It supplies explicit
+filter and wrap tokens and optional combined-reference pairs. Separate image
+and sampler descriptors occupy stage sets independent of constant banks.
+Cached views and samplers follow current registrations. Nearest and linear
+checkerboards, four wrap modes and sampling beside uniform or storage banks
+have pixel proofs. Views, comparison sampling, mipmaps and other formats
+remain unsupported. Run `python3 scripts/check-drawing.py --textures`.
+[Provenance 0030](../provenance/0030-textured-blended-drawing.md) records the
+accepted interface and unresolved guest interpretations.
+
 
 `BindSeparateTexture` and `BindSeparateSampler` carry a stage, an index from 0 through 3, and a handle. Texture and sampler pools register objects by IDs. Device calls return texture and sampler handles in a wide result shape. `BindSeparateSampler` is unresolved because its third value looked like an address. `BindImage` carries stage 5, an index from 0 through 2, and an image handle. See [resource binding](../signatures/0002-command-buffer.md#resource-binding), [pools and handles](../signatures/0003-objects.md#pools-and-handles), and [pointer structures](../signatures/0004-pointers.md#structures).
 
@@ -368,5 +389,5 @@ The smallest useful observation is a program with two shader records and a draw 
 4. Implemented for explicit host bank mappings and aligned arena ranges, with uniform descriptors and a storage fallback. Observed guest mappings remain open.
 5. Implemented as a bounded host experiment with confirming synthetic pixel tests for index widths, address selection, count, and base vertex. Guest mappings and semantics remain hypotheses pending observations. See provenance 0028.
 6. Add depth and stencil, then rasterizer variation, after attachment formats and state mappings are observed.
-7. Add texture and sampler bindings after handle, stage, descriptor, and format behavior are observed.
-8. Add blend and multiple render targets after factor, equation, mask, view, and format behavior are observed.
+7. Implemented as a bounded host experiment with explicit texture slot and sampler mappings. Guest handle and enum meanings remain open.
+8. Implemented as a bounded host experiment with per-target blend factors, equations and masks, plus matching RGBA8 targets. Guest argument order and enums remain open.

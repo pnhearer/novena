@@ -606,6 +606,15 @@ pub fn handler(name: &str) -> Option<Handler> {
             else {
                 return Status::BadArgument;
             };
+            #[cfg(feature = "vulkan")]
+            if let Some(backend) = instance
+                .gpu
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_mut()
+            {
+                backend.release_texture(registers.x[0]);
+            }
             instance.objects.put(
                 registers.x[0],
                 Object::Texture {
@@ -765,7 +774,7 @@ pub fn handler(name: &str) -> Option<Handler> {
                 let (id, texture) = (registers.x[1] as u32, registers.x[2]);
                 instance.objects.update(registers.x[0], |object| {
                     if let Object::TexturePool { registered, .. } = object {
-                        registered.insert(id, texture);
+                        registered.insert(id, (texture, registers.x[3]));
                     }
                 });
                 Status::Ok
