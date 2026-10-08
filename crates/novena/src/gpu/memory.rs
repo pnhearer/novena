@@ -123,6 +123,18 @@ impl GlobalMemory {
         )
     }
 
+    /// Canonical tightly packed base-level texels in a live arena pool.
+    pub(crate) fn image_region(
+        &self,
+        key: u64,
+        offset: u64,
+        size: usize,
+    ) -> Option<(vk::Buffer, u64)> {
+        let at = self.pool_offset(key, offset, size)?;
+        // Four-byte colour and depth texels require four-byte copy offsets.
+        (size > 0 && at.is_multiple_of(4)).then_some((self.buffer, at))
+    }
+
     pub fn contains_pool(&self, key: u64) -> bool {
         self.allocator.pools.contains_key(&key)
     }

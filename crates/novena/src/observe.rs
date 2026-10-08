@@ -751,6 +751,7 @@ mod tests {
             present: None,
             render_scale: 1.0,
             wait_vblank: None,
+            vulkan: std::ptr::null(),
         }
     }
 
@@ -847,6 +848,7 @@ mod tests {
             present: None,
             render_scale: 1.0,
             wait_vblank: None,
+            vulkan: std::ptr::null(),
         };
         let mut shape = FunctionShape::default();
         for call in 0..3u32 {
@@ -934,6 +936,7 @@ mod tests {
             present: None,
             render_scale: 1.0,
             wait_vblank: None,
+            vulkan: std::ptr::null(),
         };
         let mut shape = FunctionShape::default();
         let mut registers = Registers::default();
@@ -960,6 +963,7 @@ mod tests {
             present: None,
             render_scale: 1.0,
             wait_vblank: None,
+            vulkan: std::ptr::null(),
         };
         let mut shape = FunctionShape::default();
         for selector in [3u64, 9, 3] {

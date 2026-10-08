@@ -20,7 +20,8 @@ mod instance;
 pub mod observe;
 
 pub use instance::{
-    Census, Host, Instance, Registers, ShaderStage, ShaderTranslator, Status, SHADER_STAGE_UNKNOWN,
+    Census, Host, HostVulkan, Instance, Registers, ShaderStage, ShaderTranslator, Status,
+    SHADER_STAGE_UNKNOWN,
 };
 
 use functions::FunctionId;
@@ -31,7 +32,7 @@ use std::path::Path;
 
 /// Version of the host interface. It changes when a host built against an
 /// older `include/novena.h` could no longer use the library.
-pub const HOST_INTERFACE_VERSION: u32 = 4;
+pub const HOST_INTERFACE_VERSION: u32 = 5;
 
 /// Returned by lookups for a name the library does not know.
 pub const FUNCTION_NONE: u32 = u32::MAX;

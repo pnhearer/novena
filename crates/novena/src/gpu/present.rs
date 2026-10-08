@@ -1,0 +1,307 @@
+//! Window surface, swapchain and presentation. Provenance: 0026.
+
+use super::{
+    commands::Commands,
+    images::{can_blit, record_present, ImageInfo},
+    Context,
+};
+use ash::vk;
+use std::sync::Arc;
+
+struct Swapchain {
+    context: Arc<Context>,
+    loader: ash::khr::swapchain::Device,
+    handle: vk::SwapchainKHR,
+    extent: vk::Extent2D,
+    mode: vk::PresentModeKHR,
+    images: Vec<ImageInfo>,
+    ready: Vec<vk::Semaphore>,
+}
+
+impl Drop for Swapchain {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = self.context.device.device_wait_idle();
+            for &semaphore in &self.ready {
+                self.context.device.destroy_semaphore(semaphore, None);
+            }
+            self.loader.destroy_swapchain(self.handle, None);
+        }
+    }
+}
+
+pub(super) struct Window {
+    context: Arc<Context>,
+    surface_loader: ash::khr::surface::Instance,
+    surface: vk::SurfaceKHR,
+    present_family: u32,
+    present_queue: vk::Queue,
+    commands: Option<Commands>,
+    chain: Option<Swapchain>,
+    rebuild: bool,
+    failed: bool,
+}
+
+impl Window {
+    /// Takes ownership of the surface, including on failure.
+    pub fn new(context: &Arc<Context>, surface: vk::SurfaceKHR) -> Option<Self> {
+        let mut window = Self {
+            context: Arc::clone(context),
+            surface_loader: ash::khr::surface::Instance::new(&context.entry, &context.instance),
+            surface,
+            present_family: 0,
+            present_queue: vk::Queue::null(),
+            commands: None,
+            chain: None,
+            rebuild: true,
+            failed: false,
+        };
+        let family = context
+            .queue_families
+            .iter()
+            .copied()
+            .find(|&family| unsafe {
+                window
+                    .surface_loader
+                    .get_physical_device_surface_support(context.physical_device, family, surface)
+                    .unwrap_or(false)
+            })?;
+        window.present_family = family;
+        window.present_queue = unsafe { context.device.get_device_queue(family, 0) };
+        window.commands = Some(Commands::new(context)?);
+        Some(window)
+    }
+
+    fn configure(&mut self, desired: vk::Extent2D, interval: u32) -> Option<bool> {
+        let context = &self.context;
+        let caps = unsafe {
+            self.surface_loader
+                .get_physical_device_surface_capabilities(context.physical_device, self.surface)
+                .ok()?
+        };
+        if desired.width == 0
+            || desired.height == 0
+            || caps.max_image_extent.width == 0
+            || caps.max_image_extent.height == 0
+        {
+            return Some(false);
+        }
+        let extent = if caps.current_extent.width != u32::MAX {
+            caps.current_extent
+        } else {
+            vk::Extent2D {
+                width: desired
+                    .width
+                    .clamp(caps.min_image_extent.width, caps.max_image_extent.width),
+                height: desired
+                    .height
+                    .clamp(caps.min_image_extent.height, caps.max_image_extent.height),
+            }
+        };
+        if extent.width == 0 || extent.height == 0 {
+            return Some(false);
+        }
+        let modes = unsafe {
+            self.surface_loader
+                .get_physical_device_surface_present_modes(context.physical_device, self.surface)
+                .ok()?
+        };
+        let mode = if interval == 0 && modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
+            vk::PresentModeKHR::IMMEDIATE
+        } else {
+            vk::PresentModeKHR::FIFO
+        };
+        if !self.rebuild
+            && self
+                .chain
+                .as_ref()
+                .is_some_and(|c| c.extent == extent && c.mode == mode)
+        {
+            return Some(true);
+        }
+        if !caps
+            .supported_usage_flags
+            .contains(vk::ImageUsageFlags::TRANSFER_DST)
+        {
+            return None;
+        }
+        let formats = unsafe {
+            self.surface_loader
+                .get_physical_device_surface_formats(context.physical_device, self.surface)
+                .ok()?
+        };
+        let format = choose_format(context, &formats)?;
+        let alpha = [
+            vk::CompositeAlphaFlagsKHR::OPAQUE,
+            vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED,
+            vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED,
+            vk::CompositeAlphaFlagsKHR::INHERIT,
+        ]
+        .into_iter()
+        .find(|alpha| caps.supported_composite_alpha.contains(*alpha))?;
+        let mut count = caps.min_image_count.saturating_add(1);
+        if caps.max_image_count != 0 {
+            count = count.min(caps.max_image_count);
+        }
+        let families = [context.queue_family, self.present_family];
+        let mut info = vk::SwapchainCreateInfoKHR::default()
+            .surface(self.surface)
+            .min_image_count(count)
+            .image_format(format.format)
+            .image_color_space(format.color_space)
+            .image_extent(extent)
+            .image_array_layers(1)
+            .image_usage(vk::ImageUsageFlags::TRANSFER_DST)
+            .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .pre_transform(caps.current_transform)
+            .composite_alpha(alpha)
+            .present_mode(mode)
+            .clipped(true);
+        if families[0] != families[1] {
+            info = info
+                .image_sharing_mode(vk::SharingMode::CONCURRENT)
+                .queue_family_indices(&families);
+        }
+        // Drain before replacing resources. Ordinary frames use only slot fences.
+        unsafe {
+            context.device.device_wait_idle().ok()?;
+        }
+        self.chain.take();
+        let loader = ash::khr::swapchain::Device::new(&context.instance, &context.device);
+        let handle = unsafe { loader.create_swapchain(&info, None).ok()? };
+        let mut chain = Swapchain {
+            context: Arc::clone(context),
+            loader,
+            handle,
+            extent,
+            mode,
+            images: Vec::new(),
+            ready: Vec::new(),
+        };
+        chain.images = unsafe { chain.loader.get_swapchain_images(handle).ok()? }
+            .into_iter()
+            .map(|image| ImageInfo {
+                image,
+                extent: vk::Extent3D {
+                    width: extent.width,
+                    height: extent.height,
+                    depth: 1,
+                },
+                format: format.format,
+                layout: vk::ImageLayout::UNDEFINED,
+            })
+            .collect();
+        for _ in &chain.images {
+            chain.ready.push(unsafe {
+                context
+                    .device
+                    .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+                    .ok()?
+            });
+        }
+        self.chain = Some(chain);
+        self.rebuild = false;
+        Some(true)
+    }
+
+    pub fn present(
+        &mut self,
+        source: ImageInfo,
+        desired: vk::Extent2D,
+        interval: u32,
+    ) -> Option<()> {
+        if self.failed {
+            return None;
+        }
+        for _ in 0..2 {
+            if !self.configure(desired, interval)? {
+                return Some(());
+            }
+            let chain = self.chain.as_mut()?;
+            let commands = self.commands.as_mut()?;
+            let (cmd, acquire) = commands.begin()?;
+            let acquired = unsafe {
+                chain
+                    .loader
+                    .acquire_next_image(chain.handle, u64::MAX, acquire, vk::Fence::null())
+            };
+            let (index, suboptimal) = match acquired {
+                Ok(result) => result,
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                    self.rebuild = true;
+                    continue;
+                }
+                Err(_) => return None,
+            };
+            // After successful acquisition, any failure makes this window unusable:
+            // its acquire semaphore may remain signalled.
+            let result = (|| {
+                let target = chain.images[index as usize];
+                record_present(
+                    &self.context.device,
+                    cmd,
+                    source,
+                    target,
+                    vk::ImageLayout::PRESENT_SRC_KHR,
+                );
+                let ready = chain.ready[index as usize];
+                commands.submit(true, Some(ready))?;
+                chain.images[index as usize].layout = vk::ImageLayout::PRESENT_SRC_KHR;
+                let waits = [ready];
+                let chains = [chain.handle];
+                let indices = [index];
+                let present = vk::PresentInfoKHR::default()
+                    .wait_semaphores(&waits)
+                    .swapchains(&chains)
+                    .image_indices(&indices);
+                match unsafe { chain.loader.queue_present(self.present_queue, &present) } {
+                    Ok(outdated) => self.rebuild = suboptimal || outdated,
+                    Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => self.rebuild = true,
+                    Err(_) => return None,
+                }
+                Some(())
+            })();
+            if result.is_none() {
+                self.failed = true;
+            }
+            return result;
+        }
+        None
+    }
+}
+
+fn choose_format(
+    context: &Context,
+    formats: &[vk::SurfaceFormatKHR],
+) -> Option<vk::SurfaceFormatKHR> {
+    for format in [
+        vk::Format::B8G8R8A8_UNORM,
+        vk::Format::R8G8B8A8_UNORM,
+        vk::Format::B8G8R8A8_SRGB,
+        vk::Format::R8G8B8A8_SRGB,
+    ] {
+        if !can_blit(context, vk::Format::R8G8B8A8_UNORM, format) {
+            continue;
+        }
+        if let Some(surface_format) = formats.iter().find(|f| {
+            (f.format == format || f.format == vk::Format::UNDEFINED)
+                && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
+        }) {
+            return Some(vk::SurfaceFormatKHR {
+                format,
+                color_space: surface_format.color_space,
+            });
+        }
+    }
+    None
+}
+
+impl Drop for Window {
+    fn drop(&mut self) {
+        self.chain.take();
+        self.commands.take();
+        unsafe {
+            self.surface_loader.destroy_surface(self.surface, None);
+        }
+    }
+}
