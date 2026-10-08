@@ -215,7 +215,8 @@ pub fn handler(name: &str) -> Option<Handler> {
                     index_type: r.x[2] as u32,
                     count: r.x[3] as u32,
                     indices: r.x[4],
-                    base_vertex: r.x[5] as u32,
+                    // Signed low word is the host experiment's interpretation. Provenance: 0028.
+                    base_vertex: r.x[5] as i32,
                 },
             )
         },

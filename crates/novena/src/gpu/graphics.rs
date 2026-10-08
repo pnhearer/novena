@@ -21,6 +21,9 @@ pub struct FirstDrawContract {
     /// Host-selected object spacing for counted bindings. None supports count one only.
     pub attribute_state_stride: Option<u64>,
     pub stream_state_stride: Option<u64>,
+    /// Distinct host-selected tokens for tightly packed unsigned index elements.
+    pub index_u16: u32,
+    pub index_u32: u32,
     pub cull_none: u64,
     pub rgba8: u64,
     pub target_2d: u64,
@@ -269,9 +272,21 @@ pub(crate) struct Draw {
     pub buffers: Vec<(u32, vk::Buffer, u64)>,
     pub viewport: vk::Viewport,
     pub scissor: vk::Rect2D,
-    pub first: u32,
+    pub vertices: DrawVertices,
     pub count: u32,
     pub descriptors: DrawDescriptors,
+}
+
+pub(crate) enum DrawVertices {
+    Arrays {
+        first: u32,
+    },
+    Elements {
+        buffer: vk::Buffer,
+        offset: u64,
+        index_type: vk::IndexType,
+        base_vertex: i32,
+    },
 }
 
 pub(super) fn instructions(words: &[u32]) -> Result<Vec<(u32, &[u32])>, String> {
@@ -718,7 +733,18 @@ impl GraphicsPipeline {
             self.layout,
             vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
         );
-        device.cmd_draw(command, draw.count, 1, draw.first, 0);
+        match draw.vertices {
+            DrawVertices::Arrays { first } => device.cmd_draw(command, draw.count, 1, first, 0),
+            DrawVertices::Elements {
+                buffer,
+                offset,
+                index_type,
+                base_vertex,
+            } => {
+                device.cmd_bind_index_buffer(command, buffer, offset, index_type);
+                device.cmd_draw_indexed(command, draw.count, 1, 0, base_vertex, 0);
+            }
+        }
     }
 }
 

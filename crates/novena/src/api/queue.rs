@@ -354,7 +354,7 @@ pub fn handler(name: &str) -> Option<Handler> {
                                             depth: depth_target,
                                             views: target_views,
                                             primitive,
-                                            first,
+                                            vertices: super::drawing::Vertices::Arrays { first },
                                             count,
                                         },
                                     ) {
@@ -365,8 +365,46 @@ pub fn handler(name: &str) -> Option<Handler> {
                                 let _ = (primitive, first, count, target_views);
                                 return Status::Unimplemented;
                             }
-                            RecordedCommand::DrawArraysInstanced { .. }
-                            | RecordedCommand::DrawElementsBaseVertex { .. } => {
+                            RecordedCommand::DrawElementsBaseVertex {
+                                primitive,
+                                index_type,
+                                count,
+                                indices,
+                                base_vertex,
+                            } => {
+                                #[cfg(feature = "vulkan")]
+                                if let Some(backend) = gpu.as_mut() {
+                                    if let Err(status) = draw_state.execute(
+                                        instance,
+                                        backend,
+                                        super::drawing::Request {
+                                            targets: &targets,
+                                            depth: depth_target,
+                                            views: target_views,
+                                            primitive,
+                                            count,
+                                            vertices: super::drawing::Vertices::Elements {
+                                                index_type,
+                                                indices,
+                                                base_vertex,
+                                            },
+                                        },
+                                    ) {
+                                        return status;
+                                    }
+                                    continue;
+                                }
+                                let _ = (
+                                    primitive,
+                                    index_type,
+                                    count,
+                                    indices,
+                                    base_vertex,
+                                    target_views,
+                                );
+                                return Status::Unimplemented;
+                            }
+                            RecordedCommand::DrawArraysInstanced { .. } => {
                                 return Status::Unimplemented
                             }
                             command @ (RecordedCommand::SetViewport(_)

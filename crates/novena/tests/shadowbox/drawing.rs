@@ -260,6 +260,186 @@ fn triangle_state(instance: &Instance, state: &State, address: u64, size: u64) {
     call(instance, "nvnCommandBufferSetScissor", &[7, 0, 0, 64, 64]);
 }
 
+fn indexed(
+    instance: &Instance,
+    state: &State,
+    vertex_buffer: (u64, u64),
+    index_type: u64,
+    indices: u64,
+    count: u64,
+    base_vertex: i32,
+) {
+    triangle_state(instance, state, vertex_buffer.0, vertex_buffer.1);
+    call(instance, "nvnCommandBufferClearColor", &[7, 0, 0x200, 15]);
+    call(
+        instance,
+        "nvnCommandBufferDrawElementsBaseVertex",
+        &[
+            7,
+            0xf001,
+            index_type,
+            count,
+            indices,
+            base_vertex as u32 as u64,
+        ],
+    );
+}
+
+fn indexed_proof(instance: &Instance, state: &State, base: u64, translator: &Translator) {
+    for (i, vertex) in [
+        [-0.75_f32, 0.75, 0.0, 1.0],
+        [0.75, 0.75, 0.0, 1.0],
+        [-0.75, -0.75, 0.0, 1.0],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        put(
+            state,
+            0x1080 + (i + 4) * 32 + 8,
+            &vertex
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+                .collect::<Vec<_>>(),
+        );
+    }
+    for (token, width) in [(0xf006, 2), (0xf007, 4)] {
+        let mut cases = vec![(0, [3_u32, 1, 2]), (1, [2, 0, 1]), (-1, [4, 2, 3])];
+        cases.push(if width == 2 {
+            (-65532, [65535, 65533, 65534])
+        } else {
+            (-65535, [65538, 65536, 65537])
+        });
+        for (base_vertex, indices) in cases {
+            let mut elements = vec![u32::MAX];
+            elements.extend(indices);
+            elements.push(u32::MAX);
+            let bytes: Vec<_> = elements
+                .into_iter()
+                .flat_map(|i| i.to_le_bytes().into_iter().take(width))
+                .collect();
+            put(state, 0x1700, &bytes);
+            // The address points after a poison prefix. No separate first-index argument exists.
+            indexed(
+                instance,
+                state,
+                (base + 0x80, 128),
+                token,
+                base + 0x700 + width as u64,
+                3,
+                base_vertex,
+            );
+            submit(instance, state, Status::Ok);
+            call(instance, "nvnQueuePresentTexture", &[0, 9, 0]);
+            check_pixels(&state.frames.lock().unwrap().last().unwrap().2, 64);
+            check_pixels(&state.memory.lock().unwrap()[0x2000..0x6000], 64);
+            println!("MATCH indexed width {width}, base vertex {base_vertex}, advanced address, count 3, presentation and arena pixels");
+        }
+        // Six elements consume two triangles. Trailing poison is outside the count.
+        let bytes: Vec<_> = [3_u32, 1, 2, 4, 5, 6, u32::MAX]
+            .into_iter()
+            .flat_map(|i| i.to_le_bytes().into_iter().take(width))
+            .collect();
+        put(state, 0x1700, &bytes);
+        indexed(
+            instance,
+            state,
+            (base + 0x80, 224),
+            token,
+            base + 0x700,
+            6,
+            0,
+        );
+        submit(instance, state, Status::Ok);
+        call(instance, "nvnQueuePresentTexture", &[0, 9, 0]);
+        for pixels in [
+            &state.frames.lock().unwrap().last().unwrap().2[..],
+            &state.memory.lock().unwrap()[0x2000..0x6000],
+        ] {
+            let pixel = |x: usize, y: usize| &pixels[(y * 64 + x) * 4..(y * 64 + x + 1) * 4];
+            assert_eq!(pixel(32, 24), [255, 64, 128, 255]);
+            assert_eq!(
+                pixel(16, 48),
+                [255, 64, 128, 255],
+                "second triangle consumes indices four through six"
+            );
+            assert_eq!(pixel(0, 0), [0, 0, 255, 255]);
+        }
+        // The last element must fit its pool, and each selected attribute must fit its binding.
+        indexed(
+            instance,
+            state,
+            (base + 0x80, 128),
+            token,
+            base + 0x30000 - width as u64,
+            2,
+            0,
+        );
+        submit(instance, state, Status::BadArgument);
+        indexed(
+            instance,
+            state,
+            (base + 0x80, 128),
+            token,
+            base + 0x701,
+            3,
+            0,
+        );
+        submit(instance, state, Status::BadArgument);
+        indexed(
+            instance,
+            state,
+            (base + 0x80, 119),
+            token,
+            base + 0x700,
+            3,
+            0,
+        );
+        submit(instance, state, Status::BadArgument);
+        indexed(
+            instance,
+            state,
+            (base + 0x80, 128),
+            token,
+            base + 0x700,
+            3,
+            -4,
+        );
+        submit(instance, state, Status::BadArgument);
+        indexed(
+            instance,
+            state,
+            (base + 0x80, 128),
+            token,
+            base + 0x700,
+            3,
+            i32::MAX,
+        );
+        submit(instance, state, Status::BadArgument);
+        indexed(instance, state, (base + 0x80, 128), token, 0, 0, -1);
+        submit(instance, state, Status::Ok);
+        assert!(state.memory.lock().unwrap()[0x2000..0x6000]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [0, 0, 255, 255]));
+    }
+    indexed(instance, state, (base + 0x80, 128), 1, base + 0x700, 3, 0);
+    submit(instance, state, Status::Unimplemented);
+    indexed(instance, state, (base + 0x80, 128), 0xf006, base - 1, 3, 0);
+    submit(instance, state, Status::BadArgument);
+    assert_eq!(
+        translator.0.load(Ordering::Relaxed),
+        2,
+        "indexed draws reuse retained stages"
+    );
+    assert_eq!(
+        instance.graphics_cache_stats().unwrap().misses,
+        1,
+        "index type and base vertex are dynamic"
+    );
+}
+
 fn check_pixels(pixels: &[u8], green: u8) {
     assert_eq!(pixels.len(), 64 * 64 * 4);
     let covered = [255, green, 128, 255];
@@ -302,6 +482,16 @@ fn check_pixels(pixels: &[u8], green: u8) {
 #[test]
 #[ignore = "requires Vulkan, the flat arena, spirv-val and Shadowbox; never skips"]
 fn first_draw_executes_translated_triangle() {
+    draw_proof(false);
+}
+
+#[test]
+#[ignore = "requires Vulkan, the flat arena, spirv-val and Shadowbox; never skips"]
+fn indexed_draw_executes_translated_triangle() {
+    draw_proof(true);
+}
+
+fn draw_proof(indexed_draw: bool) {
     let Fixture {
         state,
         instance,
@@ -383,6 +573,10 @@ fn first_draw_executes_translated_triangle() {
     submit(&instance, &state, Status::Ok);
     wait_for_graphics(&instance);
     assert!(driver_file(&cache_root).is_file());
+    if indexed_draw {
+        indexed_proof(&instance, &state, base, &translator);
+        return;
+    }
     for frame in 0..3 {
         triangle(&instance, &state, base + 0x80, 128, 0xf001);
         // Later edits must not change the state captured by an earlier binding.
@@ -619,6 +813,8 @@ fn contract() -> FirstDrawContract {
         rgba8: 0xf004,
         target_2d: 0xf005,
         identity_swizzle: [0; 4],
+        index_u16: 0xf006,
+        index_u32: 0xf007,
     }
 }
 

@@ -2,7 +2,10 @@
 use super::objects::{Object, RecordedCommand, ShaderTranslation, StateCommand, StateSettings};
 use crate::{
     gpu::{
-        graphics::{execution_model, mapped, Draw, VertexAttribute, VertexBinding, VertexInput},
+        graphics::{
+            execution_model, mapped, Draw, DrawVertices, VertexAttribute, VertexBinding,
+            VertexInput,
+        },
         uniforms::{self, UniformStage, BANK_SIZE},
         Backend,
     },
@@ -18,8 +21,41 @@ pub(super) struct Request<'a> {
     pub depth: u64,
     pub views: [u64; 2],
     pub primitive: u32,
-    pub first: u32,
+    pub vertices: Vertices,
     pub count: u32,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum Vertices {
+    Arrays {
+        first: u32,
+    },
+    Elements {
+        index_type: u32,
+        indices: u64,
+        base_vertex: i32,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum IndexFormat {
+    U16,
+    U32,
+}
+
+impl IndexFormat {
+    fn width(self) -> usize {
+        match self {
+            Self::U16 => 2,
+            Self::U32 => 4,
+        }
+    }
+    fn vulkan(self) -> vk::IndexType {
+        match self {
+            Self::U16 => vk::IndexType::UINT16,
+            Self::U32 => vk::IndexType::UINT32,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -97,7 +133,7 @@ impl State {
             depth,
             views,
             primitive,
-            first,
+            vertices,
             count,
         } = request;
         let contract = backend.first_draw.as_ref().ok_or(Status::Unimplemented)?;
@@ -138,12 +174,14 @@ impl State {
         if value(polygon, "CullFace")?[0] != contract.cull_none {
             return Err(Status::Unimplemented);
         }
-        let memory = backend.global_memory.as_ref().ok_or(Status::BadArgument)?;
+        let context = backend.context().clone();
+        let memory = backend.global_memory.as_mut().ok_or(Status::BadArgument)?;
         let mut input = VertexInput {
             bindings: Vec::new(),
             attributes: Vec::new(),
         };
         let mut buffers = Vec::new();
+        let mut fetches = Vec::new();
         for attribute in attributes {
             let format = value(attribute, "Format")?;
             let format_kind =
@@ -178,11 +216,17 @@ impl State {
                 || size > resolution.remaining
                 || !stride.is_multiple_of(alignment)
                 || !(at + u64::from(offset)).is_multiple_of(u64::from(alignment))
-                || vertex_end(first, count, stride, offset, bytes).ok_or(Status::BadArgument)?
-                    > size
             {
                 return Err(Status::BadArgument);
             }
+            if let Vertices::Arrays { first } = vertices {
+                if vertex_end(first, count, stride, offset, bytes).ok_or(Status::BadArgument)?
+                    > size
+                {
+                    return Err(Status::BadArgument);
+                }
+            }
+            fetches.push((stride, offset, bytes, size));
             input.attributes.push(VertexAttribute {
                 binding,
                 format: format_kind,
@@ -195,6 +239,82 @@ impl State {
         }
         input.bindings.sort_unstable_by_key(|b| b.binding);
         buffers.sort_unstable_by_key(|b| b.0);
+        let vertices = match vertices {
+            Vertices::Arrays { first } => DrawVertices::Arrays { first },
+            Vertices::Elements {
+                index_type,
+                indices,
+                base_vertex,
+            } => {
+                if contract.index_u16 == contract.index_u32 {
+                    return Err(Status::Unimplemented);
+                }
+                let format = if index_type == contract.index_u16 {
+                    IndexFormat::U16
+                } else if index_type == contract.index_u32 {
+                    IndexFormat::U32
+                } else {
+                    return Err(Status::Unimplemented);
+                };
+                // An empty indexed draw fetches neither indices nor vertices.
+                if count == 0 {
+                    return Ok(());
+                }
+                let index_resolution = instance
+                    .objects
+                    .resolve_gpu_address(indices)
+                    .map_err(|_| Status::BadArgument)?;
+                let length = u64::from(count) * format.width() as u64;
+                if length > index_resolution.remaining {
+                    return Err(Status::BadArgument);
+                }
+                let (index_buffer, index_offset) = memory
+                    .buffer_region(
+                        index_resolution.pool,
+                        index_resolution.offset,
+                        usize::try_from(length).map_err(|_| Status::BadArgument)?,
+                    )
+                    .ok_or(Status::BadArgument)?;
+                if !index_offset.is_multiple_of(format.width() as u64) {
+                    return Err(Status::BadArgument);
+                }
+                // Read canonical bytes, including earlier completed GPU writes in this submission.
+                // Bounded chunks avoid allocating a count-sized host copy.
+                let mut bytes = vec![0; 64 * 1024];
+                let mut read = 0;
+                while read < length {
+                    let chunk = (length - read).min(bytes.len() as u64) as usize;
+                    memory
+                        .read_pool(
+                            index_resolution.pool,
+                            index_resolution.offset + read,
+                            &mut bytes[..chunk],
+                        )
+                        .ok_or(Status::InternalError)?;
+                    for &(stride, offset, attribute_bytes, size) in &fetches {
+                        let end = indexed_vertex_end(
+                            &bytes[..chunk],
+                            format,
+                            base_vertex,
+                            stride,
+                            offset,
+                            attribute_bytes,
+                        )
+                        .ok_or(Status::BadArgument)?;
+                        if end > size {
+                            return Err(Status::BadArgument);
+                        }
+                    }
+                    read += chunk as u64;
+                }
+                DrawVertices::Elements {
+                    buffer: index_buffer,
+                    offset: index_offset,
+                    index_type: format.vulkan(),
+                    base_vertex,
+                }
+            }
+        };
         let viewport = rectangle(self.viewport, description.width, description.height)?;
         let scissor = rectangle(self.scissor, description.width, description.height)?;
         let stages = match instance
@@ -213,7 +333,6 @@ impl State {
                 .collect::<Result<Vec<_>, _>>()?,
             _ => return Err(Status::BadArgument),
         };
-        let context = backend.context().clone();
         let limits = unsafe {
             context
                 .instance
@@ -298,7 +417,7 @@ impl State {
         let draw = Draw {
             descriptors,
             buffers,
-            first,
+            vertices,
             count,
             viewport: vk::Viewport {
                 x: 0.0,
@@ -369,6 +488,26 @@ fn vertex_end(first: u32, count: u32, stride: u32, offset: u32, bytes: u32) -> O
         .checked_add(u64::from(bytes))
 }
 
+fn indexed_vertex_end(
+    bytes: &[u8],
+    format: IndexFormat,
+    base: i32,
+    stride: u32,
+    offset: u32,
+    attribute_bytes: u32,
+) -> Option<u64> {
+    let mut end = 0;
+    for bytes in bytes.chunks_exact(format.width()) {
+        let index = match format {
+            IndexFormat::U16 => u32::from(u16::from_le_bytes(bytes.try_into().ok()?)),
+            IndexFormat::U32 => u32::from_le_bytes(bytes.try_into().ok()?),
+        };
+        let vertex = u32::try_from(i64::from(index) + i64::from(base)).ok()?;
+        end = end.max(vertex_end(vertex, 1, stride, offset, attribute_bytes)?);
+    }
+    Some(end)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,5 +518,37 @@ mod tests {
         assert_eq!(vertex_end(u32::MAX, 2, 16, 0, 16), None);
         assert_eq!(vertex_end(u32::MAX, 0, 16, 0, 16), Some(0));
         assert_eq!(vertex_end(10, 3, 0, 2, 4), Some(6));
+    }
+
+    #[test]
+    fn indexed_bounds_decode_width_and_signed_base_without_wrapping() {
+        assert_eq!(
+            indexed_vertex_end(&[3, 0, 1, 0, 2, 0], IndexFormat::U16, 1, 32, 8, 16),
+            Some(152)
+        );
+        let bytes: Vec<_> = [4_u32, 2, 3]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        assert_eq!(
+            indexed_vertex_end(&bytes, IndexFormat::U32, -1, 32, 8, 16),
+            Some(120)
+        );
+        assert_eq!(
+            indexed_vertex_end(&bytes, IndexFormat::U32, -3, 32, 8, 16),
+            None
+        );
+        assert_eq!(
+            indexed_vertex_end(&u32::MAX.to_le_bytes(), IndexFormat::U32, 1, 32, 8, 16),
+            None
+        );
+        assert_eq!(
+            indexed_vertex_end(&65536_u32.to_le_bytes(), IndexFormat::U32, 0, 16, 0, 16),
+            Some(1048592)
+        );
+        assert_eq!(
+            indexed_vertex_end(&u16::MAX.to_le_bytes(), IndexFormat::U16, -65535, 16, 0, 16),
+            Some(16)
+        );
     }
 }

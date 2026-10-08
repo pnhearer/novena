@@ -65,7 +65,7 @@ pub enum RecordedCommand {
         index_type: u32,
         count: u32,
         indices: u64,
-        base_vertex: u32,
+        base_vertex: i32,
     },
     /// State retained without execution. Provenance: note 0026.
     State(StateCommand),

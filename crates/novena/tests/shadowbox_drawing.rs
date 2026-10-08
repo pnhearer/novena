@@ -32,3 +32,9 @@ fn uniform_banks_colour_two_draws() {
 fn uniform_banks_with_strip_and_normalized_attribute() {
     support::run("uniform_banks_with_strip_and_normalized_attribute");
 }
+
+#[test]
+#[ignore = "requires NOVENA_SHADOWBOX_PATH, Vulkan, the flat arena and spirv-val"]
+fn indexed_draw_executes_translated_triangle() {
+    support::run("indexed_draw_executes_translated_triangle");
+}

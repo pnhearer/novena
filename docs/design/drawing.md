@@ -1,7 +1,7 @@
 # Drawing support and open questions
 
-Novena executes controlled non-indexed lists, strips, and fans through its
-Vulkan queue path. It decodes multiple attributes from shared or separate
+Novena executes controlled non-indexed and indexed lists, strips, and fans
+through its Vulkan queue path. It decodes multiple attributes from shared or separate
 streams. Guest enum mappings remain open. The experiment uses an explicit
 host contract and original synthetic shaders. This document distinguishes
 that implementation from facts in `docs/signatures` and `docs/provenance`.
@@ -11,8 +11,9 @@ that implementation from facts in `docs/signatures` and `docs/provenance`.
 With `vulkan`, a Rust host enables the experiment through
 `Instance::set_first_draw_contract`. `FirstDrawContract` supplies host-selected
 raw token tables for topology and attribute formats, plus no culling, RGBA8,
-a 2D target, and identity swizzle. It also supplies optional object spacing
-for counted attribute and stream bindings. These choices do not establish
+a 2D target, identity swizzle, and distinct unsigned 16-bit and 32-bit index
+types. It also supplies optional object spacing for counted attribute and
+stream bindings. These choices do not establish
 guest enums or layouts. Unknown or duplicate tokens are unsupported.
 No contract means a submitted draw returns `Unimplemented`.
 
@@ -21,6 +22,7 @@ The supported recording has these limits:
 | Input | Executed behavior |
 | --- | --- |
 | `DrawArrays` | One instance, recorded first vertex and count, host-selected triangle list, strip, or fan; restart disabled |
+| `DrawElementsBaseVertex` | One instance, host-selected unsigned 16-bit or 32-bit indices, recorded address and index count, signed base vertex, host-selected topology |
 | Vertex buffer | Each active stream has a pool-resolved address and bounded size in the flat arena |
 | Vertex stream state | Count at most 16, recorded byte stride, divisor explicitly zero; zero stride repeats one element |
 | Vertex attribute state | Count at most 16, explicit stream and byte offset, host-selected format; each array index maps to the same shader location |
@@ -48,7 +50,8 @@ Unsupported fields, missing explicit state, unknown recorded commands,
 unsupported resources, or unsupported shader interfaces return `Unimplemented`.
 Bad addresses, short vertex ranges, invalid sizes, and missing objects return
 `BadArgument`. Vulkan draw submission failures return `InternalError`.
-Pipeline creation failures return `Unimplemented`. Feature negotiation remains open. Indexed and instanced draws are open.
+Pipeline creation failures return `Unimplemented`. Feature negotiation and
+instanced draws remain open. Indexed guest semantics remain hypotheses.
 The experiment rejects bound blend, channel-mask, and multisample objects whose
 fields it cannot interpret. Only the listed state fields are supported.
 The Rust experiment has no C configuration interface yet.
@@ -110,9 +113,16 @@ All cases compare canonical target bytes with presentation readback.
 [Provenance 0028](../provenance/0028-vertex-decoding.md) distinguishes these host
 proofs from guest hypotheses and lists the real-program confirmation tests.
 
+The indexed proof uses the same original translated shaders and checks both
+index widths with zero, positive, and negative base vertex. A nonzero index
+address skips a poison prefix, and a trailing poison element sits outside the
+count. Six indices draw two triangles with distinct pixel coverage. Presentation
+and canonical pool bytes are checked after each valid case. See
+[provenance 0028](../provenance/0028-indexed-drawing.md).
+
 All enum conversion beyond the host contract, integer shader inputs,
 packed attribute formats, nonzero viewport origins, coordinate conversion,
-specialization overrides, textures, samplers, implicit uniform bank mappings, index data, instancing,
+specialization overrides, textures, samplers, implicit uniform bank mappings, general indexed semantics, instancing,
 depth, stencil, blend, masks, culling, polygon variation, multisampling, views,
 array layers, additional levels, multiple targets and asynchronous draw
 submission remain open. The sections below list the observations
@@ -136,7 +146,28 @@ The smallest useful observation is one draw with one vertex buffer and one attri
 
 `DrawElementsBaseVertex` establishes a primitive value, an index-type value of 1 or 2, a count, a GPU-shaped index address, and base vertex 0. See [drawing and clearing](../signatures/0002-command-buffer.md#drawing-and-clearing) and [draw state](../signatures/0009-draw-state.md).
 
-Missing knowledge includes the index element widths represented by 1 and 2, the address mapping and byte layout, the meaning of `baseVertex`, and whether the count is an index count. No index buffer binding call is established. The draw carries the index address directly.
+The bounded host experiment resolves the supplied index address through a
+registered pool into the flat arena. It binds that exact byte offset and passes
+zero as Vulkan `firstIndex`. The signature has no separate first-index argument.
+Advancing the supplied address selects a later index element. Index count is
+the number of tightly packed little-endian elements. The signed low 32 bits of
+`baseVertex` are added to each unsigned element before vertex fetching.
+Primitive restart is disabled. These are implementation hypotheses tested with
+synthetic inputs, not new observations of guest behavior.
+
+The executor checks alignment for the selected width, the complete index range,
+and every selected vertex attribute after base-vertex addition. It reads
+canonical arena bytes in bounded chunks so earlier completed GPU writes are
+visible to validation. Negative vertex results, arithmetic overflow, short
+index ranges and short vertex bindings return `BadArgument`. Unknown index
+tokens or identical width tokens return `Unimplemented`. Count zero fetches
+neither indices nor vertices, after the common bound-state checks.
+
+Missing knowledge still includes the widths represented by observed values 1
+and 2, guest byte layout, base-vertex signedness and addition behavior, count
+meaning and primitive restart. No index buffer binding call is established.
+The draw carries the index address directly. The host contract deliberately
+uses synthetic width tokens instead of assigning meanings to 1 and 2.
 
 The smallest useful observation is two indexed draws over the same three indices, with the index type changed once and `baseVertex` changed once. Vary the index address and count separately. Compare the resolved bytes, the vertex selected, and the resulting primitive.
 
@@ -283,7 +314,7 @@ The smallest useful observation is a program with two shader records and a draw 
 2. Implemented through an explicit host contract: repeat the first draw with primitive values 4 and 5 and a synthetic fan token over the same controlled vertices. Guest topology hypotheses still require real-program confirmation.
 3. Implemented through an explicit host contract: add a second attribute and vary its format, offset, stride, and stream. Twelve `VkFormat` choices pass readback. Guest tokens, array spacing, and location mapping still require real-program confirmation.
 4. Implemented for explicit host bank mappings and aligned arena ranges, with uniform descriptors and a storage fallback. Observed guest mappings remain open.
-5. Add indexed drawing after index type, address, and count semantics are observed.
+5. Implemented as a bounded host experiment with confirming synthetic pixel tests for index widths, address selection, count, and base vertex. Guest mappings and semantics remain hypotheses pending observations. See provenance 0028.
 6. Add depth and stencil, then rasterizer variation, after attachment formats and state mappings are observed.
 7. Add texture and sampler bindings after handle, stage, descriptor, and format behavior are observed.
 8. Add blend and multiple render targets after factor, equation, mask, view, and format behavior are observed.

@@ -33,6 +33,7 @@ impl GlobalMemory {
                     | vk::BufferUsageFlags::STORAGE_BUFFER
                     | vk::BufferUsageFlags::UNIFORM_BUFFER
                     | vk::BufferUsageFlags::VERTEX_BUFFER
+                    | vk::BufferUsageFlags::INDEX_BUFFER
                     | vk::BufferUsageFlags::TRANSFER_SRC
                     | vk::BufferUsageFlags::TRANSFER_DST,
             )
@@ -159,9 +160,20 @@ impl GlobalMemory {
         offset: u64,
         size: usize,
     ) -> Option<(vk::Buffer, u64)> {
-        let at = self.pool_offset(key, offset, size)?;
+        let (buffer, at) = self.buffer_region(key, offset, size)?;
         // Four-byte colour and depth texels require four-byte copy offsets.
-        (size > 0 && at.is_multiple_of(4)).then_some((self.buffer, at))
+        at.is_multiple_of(4).then_some((buffer, at))
+    }
+
+    /// A bounded nonempty slice of the canonical arena. Callers check use-specific alignment.
+    pub(crate) fn buffer_region(
+        &self,
+        key: u64,
+        offset: u64,
+        size: usize,
+    ) -> Option<(vk::Buffer, u64)> {
+        let at = self.pool_offset(key, offset, size)?;
+        (size > 0).then_some((self.buffer, at))
     }
 
     pub fn contains_pool(&self, key: u64) -> bool {
