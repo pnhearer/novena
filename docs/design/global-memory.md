@@ -24,7 +24,7 @@ Using unconstrained Vulkan addresses directly could provide delta zero, but
 does not guarantee that guest pointers fit in 32 bits. The arena keeps that
 guarantee without relying on a driver-specific opaque address encoding.
 
-On the tested RADV implementation, capture/replay is advertised but a 64 KiB
+On the tested Vulkan implementation, capture/replay is advertised but a 64 KiB
 allocation requesting opaque memory address `0x10000` returns
 `VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS`. That driver experiment supports the
 arena fallback on this host. It does not establish an opaque address encoding
@@ -72,7 +72,7 @@ Novena does not infer those semantics from the observed flag values.
 The arena buffer has `SHADER_DEVICE_ADDRESS`, `STORAGE_BUFFER`, `TRANSFER_SRC`,
 and `TRANSFER_DST` usage. Its allocation includes the `DEVICE_ADDRESS` flag.
 Novena binds the complete allocation before querying its buffer address. See the
-[Khronos buffer device address guide](https://docs.vulkan.org/guide/latest/buffer_device_address.html).
+[Buffer device address guide](https://docs.vulkan.org/guide/latest/buffer_device_address.html).
 
 The Vulkan context requires Vulkan 1.2, `bufferDeviceAddress`, `shaderInt64`,
 and a graphics queue that also supports compute. Device selection prefers a
@@ -102,7 +102,7 @@ combine its bytes into one range, as Vulkan permits each stage in only one
 pipeline-layout push-constant range. See
 [pipeline layout valid usage](https://docs.vulkan.org/refpages/latest/refpages/source/VkPipelineLayoutCreateInfo.html).
 The GLSL integration fixture adds its root guest pointer at byte 8.
-The Shadowbox integration test embeds known guest addresses in synthetic Maxwell
+The Shadowbox integration test embeds known guest addresses in synthetic
 MOV32I instructions and reserves only the published 8-byte delta range.
 
 The translator uses its default nonzero-delta lowering. The arena does not
@@ -153,8 +153,16 @@ narrow stores. Unlike the earlier optional clear tests, these tests fail when
 Vulkan or their shader tools are unavailable.
 
 The [Shadowbox integration proof](../provenance/0023-shadowbox-global-memory-proof.md)
-executes 156 synthetic Maxwell programs from the sibling `gmem-flat` checkout in
+executes 156 synthetic programs from the sibling `gmem-flat` checkout in
 the full 1 GiB arena. It checks B32, B64, B128, signed and unsigned narrow accesses,
 pointer chasing across pools, and global atomics against exact whole-buffer
 results. Run it explicitly with
 `cargo test --features vulkan --test shadowbox_global_memory -- --ignored --nocapture`.
+
+Shadowbox is a dev-dependency of an isolated test package generated under
+`target`, so Novena builds without that checkout. The test reports `SKIP` if
+the default sibling path is absent. Set `NOVENA_SHADOWBOX_PATH` to the directory
+containing Shadowbox's `Cargo.toml` to use another checkout. With a checkout
+present, translation, validation, and GPU failures fail the test. See
+[merge note 0024](../provenance/0024-gmem-flat-merge.md) for the dependency and
+missing-checkout verification.

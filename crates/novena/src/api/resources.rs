@@ -162,7 +162,6 @@ mod tests {
     use crate::{Host, Registers, ShaderStage, ShaderTranslator, SHADER_STAGE_UNKNOWN};
     use std::ffi::c_void;
     use std::fs;
-    use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
     struct Memory {
@@ -256,10 +255,8 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         instance.set_shader_translator(Some(Arc::new(FakeTranslator(seen.clone()))));
         instance.set_shader_translation_enabled(true);
-        let dump_directory = PathBuf::from(format!(
-            "/tmp/novena-spirv-dump-test-{}",
-            std::process::id()
-        ));
+        let dump_directory =
+            std::env::temp_dir().join(format!("novena-spirv-dump-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dump_directory);
         instance.set_shader_dump_directory(Some(&dump_directory));
         let mut init = Registers {

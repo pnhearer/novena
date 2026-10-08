@@ -2,7 +2,7 @@
 
 - Date: 2026-10-07
 - Author: Khargoosh
-- Covers: `tests/shadowbox_global_memory.rs`, the Shadowbox dev dependency, and
+- Covers: `tests/shadowbox/global_memory.rs`, the Shadowbox dev dependency, and
   the flat memory contract shared by Shadowbox and Novena
 
 ## What was learned
@@ -69,7 +69,11 @@ translation API rather than reproducing its emitter or decoder.
 The dependency points to the requested sibling checkout at
 the directory named by `NOVENA_SHADOWBOX_PATH`. Verification uses its
 `gmem-flat` revision `57bb5cf7b87cc5e73f0a87c6c9f441bf9f0eae14`.
-A checkout at that path is required even for Cargo dependency resolution.
+2026-10-07: [Merge note 0024](0024-gmem-flat-merge.md) supersedes the original
+workspace dependency arrangement. Shadowbox is now a dev-dependency only in
+an isolated test package. Novena builds without that checkout, and the wrapper
+reports `SKIP` when it is absent. `NOVENA_SHADOWBOX_PATH` can select another
+crate directory. The synthetic programs and GPU assertions are unchanged.
 
 ## Repeat the proof
 
@@ -89,7 +93,8 @@ cargo test --features vulkan --test global_memory -- --ignored --nocapture
 
 The GPU test is explicitly ignored in routine tests because it requires a Vulkan
 GPU, narrow integer and storage features, 1 GiB of coherent device-address memory,
-and `spirv-val`. Running it explicitly fails if any requirement is unavailable.
+and `spirv-val`. With the Shadowbox checkout present, running it explicitly
+fails if any GPU or shader-tool requirement is unavailable.
 It never treats an unavailable GPU as a successful case.
 
 ## Confidence and open questions
