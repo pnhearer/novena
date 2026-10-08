@@ -101,8 +101,9 @@ must start after byte 8. If a stage also needs another push-constant range,
 combine its bytes into one range, as Vulkan permits each stage in only one
 pipeline-layout push-constant range. See
 [pipeline layout valid usage](https://docs.vulkan.org/refpages/latest/refpages/source/VkPipelineLayoutCreateInfo.html).
-The integration fixture adds its root
-guest pointer at byte 8.
+The GLSL integration fixture adds its root guest pointer at byte 8.
+The Shadowbox integration test embeds known guest addresses in synthetic Maxwell
+MOV32I instructions and reserves only the published 8-byte delta range.
 
 The translator uses its default nonzero-delta lowering. The arena does not
 guarantee delta zero, so `global_delta_zero: true` is invalid for this backend.
@@ -150,3 +151,10 @@ narrow features. Required Vulkan tests cover API address returns, cross-pool
 pointers loaded from memory, upload and download, and independent adjacent
 narrow stores. Unlike the earlier optional clear tests, these tests fail when
 Vulkan or their shader tools are unavailable.
+
+The [Shadowbox integration proof](../provenance/0023-shadowbox-global-memory-proof.md)
+executes 156 synthetic Maxwell programs from the sibling `gmem-flat` checkout in
+the full 1 GiB arena. It checks B32, B64, B128, signed and unsigned narrow accesses,
+pointer chasing across pools, and global atomics against exact whole-buffer
+results. Run it explicitly with
+`cargo test --features vulkan --test shadowbox_global_memory -- --ignored --nocapture`.

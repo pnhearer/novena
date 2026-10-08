@@ -15,3 +15,6 @@ vulkan = ["dep:ash"]
 
 [dependencies]
 ash = { version = "0.38", optional = true, default-features = false, features = ["loaded"] }
+
+[dev-dependencies]
+shadowbox = { path = "<local path>" }
