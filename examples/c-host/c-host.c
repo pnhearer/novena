@@ -88,7 +88,7 @@ int main(int argc, char **argv)
     state.memory[clear_values + 8] = 0;
     state.memory[clear_values + 12] = 0;
 
-    novena_host host = {&state, read_memory, write_memory, present, 1.0f, NULL};
+    novena_host host = {&state, read_memory, write_memory, present, 1.0f, NULL, NULL};
     if (novena_host_interface_version() != NOVENA_HOST_INTERFACE_VERSION) {
         return 1;
     }

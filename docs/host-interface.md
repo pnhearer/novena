@@ -1,12 +1,54 @@
 # Host interface
 
-The host is whatever runs the program: an emulator, or the runtime of a recompiled program. novena does not load or run programs. The host tells it what the program asked for and forwards the program's calls. The C declarations are in [include/novena.h](../include/novena.h). This page describes interface version 4.
+The host is whatever runs the program: an emulator, or the runtime of a recompiled program. novena does not load or run programs. The host tells it what the program asked for and forwards the program's calls. The C declarations are in [include/novena.h](../include/novena.h). This page describes interface version 5.
 
 ## Presentation
 
-Version 4 adds `render_scale` and optional `wait_vblank` to the host struct.
-The present callback receives scaled RGBA8 rows and `wait_vblank` runs just
-before it. Values below 1.0 for the scale are treated as 1.0.
+Version 5 appends `vulkan`, an optional pointer to `novena_host_vulkan`.
+A null pointer keeps the existing RGBA callback path. Native presentation
+requires a library built with the `vulkan` feature.
+
+The native contract has these fields:
+
+| Field | Contract |
+|---|---|
+| `extension_count`, `extensions` | Count and array of NUL-terminated instance extension names. Include `VK_KHR_surface` and the platform surface extension. Names remain valid until instance creation returns. |
+| `create_surface` | Receives the Vulkan instance, window object address, and native token passed to the window builder. Returns a new `VkSurfaceKHR` as a `uint64_t`, or zero on failure. Novena owns the surface and destroys it on window finalization or instance destruction. |
+| `drawable_size` | Writes the window's current pixel width and height. Either dimension may be zero while the window is hidden or minimized. |
+
+The struct and both callbacks remain valid until instance destruction.
+The native window remains valid until its window object is finalized or the
+instance is destroyed. Callbacks run on the calling program thread, under the
+backend lock, and must not reenter novena. The host maps guest tokens to host
+windows. Novena never dereferences a guest native token.
+
+Novena enables the requested instance extensions and the device swapchain
+extension. Window initialization creates the surface and finds a presentation
+queue on the selected device. Presentation creates the swapchain, blits the
+selected texture into an acquired image, and presents that image. Blits handle
+RGBA and BGRA channel order, sRGB encoding where required, and scaling to the
+drawable extent. Resize and out-of-date results rebuild the swapchain.
+A zero drawable extent skips the frame.
+
+Two frame slots each have a command buffer, acquire semaphore, and fence.
+Novena waits for a slot's fence before reusing that slot. Each swapchain image
+has a separate presentation wait semaphore. Positive present intervals use
+FIFO pacing. Zero requests immediate presentation, with FIFO as fallback.
+Intervals above one currently use the same FIFO pacing as interval one.
+
+The optional `wait_vblank` callback runs before either presentation path.
+The RGBA callback receives the Vulkan offscreen blit's scaled rows.
+`render_scale` values below 1.0 are treated as 1.0. Native presentation
+uses the drawable extent. CPU fallback keeps the texture's base dimensions.
+
+Native initialization failures return `NOVENA_INTERNAL_ERROR` and a zero
+result register. A build without Vulkan returns `NOVENA_UNIMPLEMENTED` for
+native window initialization. Presentation and texture transfer failures
+return an error status. A host that requires native presentation must check
+these statuses.
+
+See the [cycling clear example](../examples/present.md) and
+[provenance note 0026](provenance/0026-presentation.md).
 
 ## The two moments a host hooks
 
@@ -29,8 +71,11 @@ The callbacks can be called from any thread on which the program calls the graph
 
 ## What happens today
 
-The set-up path has behaviour. CPU clears and supported copies run for supported
-images. Draw commands and shader records are retained. Draws are not executed.
+The set-up path has behaviour. Vulkan clears and copies update supported
+base-level images in the flat arena. Vulkan presents through a native swapchain
+or the offscreen RGBA callback. CPU fallback clears supported window textures
+and performs supported copies. Draw commands and shader records are retained.
+Draws are not executed.
 Shader translation is an opt-in Rust hook, not a built-in translator. Calls
 outside the implemented set are counted and return NOVENA_UNIMPLEMENTED.
 

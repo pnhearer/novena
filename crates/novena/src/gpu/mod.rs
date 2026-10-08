@@ -8,7 +8,12 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::Arc;
 
+mod commands;
+mod images;
 mod memory;
+mod present;
+use images::{Image, Images};
+use present::Window;
 pub mod pipelines;
 pub use memory::GlobalMemory;
 
@@ -66,25 +71,71 @@ pub struct Context {
     pub queue: vk::Queue,
     pub queue_family: u32,
     pub shader_features: ShaderFeatures,
+    pub queue_families: Vec<u32>,
+    swapchain: bool,
 }
 
 pub struct Backend {
-    // Fields drop in declaration order. The images belong to the device in
-    // `context`, so they must go first.
-    pub images: Images,
+    windows: HashMap<u64, Window>,
+    offscreen: Option<Image>,
+    images: Images,
+    bindings: HashMap<u64, (u64, u64, usize)>,
     pub global_memory: Option<GlobalMemory>,
     context: Arc<Context>,
+    scale: f32,
 }
 
 impl Backend {
     pub fn new(scale: f32) -> Option<Self> {
-        let context = Arc::new(Context::new()?);
-        let images = Images::new(&context, scale)?;
+        Self::from_context(Arc::new(Context::new()?), scale)
+    }
+
+    fn from_context(context: Arc<Context>, scale: f32) -> Option<Self> {
+        let images = Images::new(&context)?;
         Some(Self {
-            context,
+            windows: HashMap::new(),
+            offscreen: None,
             images,
+            bindings: HashMap::new(),
+            context,
+            scale: scale.max(1.0),
             global_memory: None,
         })
+    }
+
+    /// The caller has accepted Host's pointer and callback lifetime contract.
+    pub(crate) fn with_host(host: &crate::Host) -> Option<Self> {
+        if host.vulkan.is_null() {
+            return Self::new(host.render_scale);
+        }
+        let surface_host = unsafe { &*host.vulkan };
+        if surface_host.extension_count == 0
+            || surface_host.extension_count > 64
+            || surface_host.extensions.is_null()
+        {
+            return None;
+        }
+        let pointers = unsafe {
+            std::slice::from_raw_parts(
+                surface_host.extensions,
+                surface_host.extension_count as usize,
+            )
+        };
+        let mut extensions = Vec::new();
+        for &pointer in pointers {
+            if pointer.is_null() {
+                return None;
+            }
+            extensions.push(unsafe { std::ffi::CStr::from_ptr(pointer) }.to_owned());
+        }
+        if !extensions
+            .iter()
+            .any(|name| name.as_c_str() == ash::khr::surface::NAME)
+        {
+            return None;
+        }
+        let context = Arc::new(Context::with_extensions(&extensions, true)?);
+        Self::from_context(context, host.render_scale)
     }
 
     pub fn allocate_pool(&mut self, key: u64, storage: u64, size: u64) -> Option<u64> {
@@ -100,6 +151,14 @@ impl Backend {
     }
 
     pub fn release_pool(&mut self, key: u64) -> bool {
+        let textures: Vec<_> = self
+            .bindings
+            .iter()
+            .filter_map(|(&texture, &(pool, _, _))| (pool == key).then_some(texture))
+            .collect();
+        for texture in textures {
+            self.release_texture(texture);
+        }
         self.global_memory
             .as_mut()
             .is_some_and(|memory| memory.release_pool(key))
@@ -108,28 +167,240 @@ impl Backend {
     pub fn context(&self) -> &Arc<Context> {
         &self.context
     }
+
     pub fn ensure(&mut self, key: u64, width: u64, height: u64, depth: bool) -> bool {
-        self.images.ensure(&self.context, key, width, height, depth)
+        self.images.ensure(key, width, height, depth)
     }
+
+    /// The base level uses novena's existing four-byte, tightly packed storage
+    /// choice. Guest format integers remain uninterpreted.
+    pub(crate) fn ensure_texture(
+        &mut self,
+        key: u64,
+        description: &crate::api::TextureDescription,
+        depth: bool,
+    ) -> bool {
+        let width = description.width.max(1);
+        let height = description.height.max(1);
+        if description.depth > 1
+            || (description.stride != 0 && description.stride != width.saturating_mul(4))
+        {
+            return false;
+        }
+        let Some(bytes) = width
+            .checked_mul(height)
+            .and_then(|n| n.checked_mul(4))
+            .and_then(|n| usize::try_from(n).ok())
+        else {
+            return false;
+        };
+        if description.pool != 0 {
+            let Some(memory) = self.global_memory.as_ref() else {
+                return false;
+            };
+            if memory
+                .image_region(description.pool, description.pool_offset, bytes)
+                .is_none()
+            {
+                return false;
+            }
+        }
+        if !self.ensure(key, width, height, depth) {
+            return false;
+        }
+        if description.pool != 0 {
+            self.bindings
+                .insert(key, (description.pool, description.pool_offset, bytes));
+        } else {
+            self.bindings.remove(&key);
+        }
+        true
+    }
+
+    fn sync_texture(&mut self, key: u64, load: bool) -> Option<()> {
+        if let Some(&(pool, offset, bytes)) = self.bindings.get(&key) {
+            let (buffer, offset) = self
+                .global_memory
+                .as_ref()?
+                .image_region(pool, offset, bytes)?;
+            self.images.arena_transfer(key, buffer, offset, load)?;
+        }
+        Some(())
+    }
+
+    pub fn release_texture(&mut self, key: u64) {
+        self.images.remove(key);
+        self.bindings.remove(&key);
+    }
+
     pub fn clear_color(&mut self, key: u64, color: [f32; 4], mask: u32) -> bool {
-        self.images.clear_color(&self.context, key, color, mask)
+        (|| {
+            self.sync_texture(key, true)?;
+            self.images.clear_color(key, color, mask)?;
+            self.sync_texture(key, false)
+        })()
+        .is_some()
     }
+
     pub fn clear_depth(&mut self, key: u64, depth: f32, stencil: u32) -> bool {
-        self.images.clear_depth(&self.context, key, depth, stencil)
+        if stencil != 0 {
+            return false;
+        }
+        (|| {
+            self.sync_texture(key, true)?;
+            self.images.clear_depth(key, depth)?;
+            self.sync_texture(key, false)
+        })()
+        .is_some()
     }
+
     pub fn readback(&mut self, key: u64) -> Option<(u32, u32, Vec<u8>)> {
-        self.images.readback(&self.context, key)
+        self.sync_texture(key, true)?;
+        self.images.readback(key)
     }
 
-    /// Copy entry points are kept behind the backend boundary. The current
-    /// Vulkan image allocator has no host-visible staging allocation yet, so
-    /// unresolved copy descriptors are deliberately reported as unsupported.
-    pub fn upload(&mut self, _key: u64, _data: &[u8], _width: u64, _height: u64) -> bool {
-        false
+    pub fn upload(&mut self, key: u64, data: &[u8], width: u64, height: u64) -> bool {
+        (|| {
+            if !self.ensure(key, width, height, false) {
+                return None;
+            }
+            self.images.upload(key, data)?;
+            self.sync_texture(key, false)
+        })()
+        .is_some()
     }
 
-    pub fn copy(&mut self, _destination: u64, _source: u64) -> bool {
-        false
+    pub(crate) fn copy_from_arena(
+        &mut self,
+        key: u64,
+        pool: u64,
+        offset: u64,
+        size: usize,
+    ) -> bool {
+        (|| {
+            let (buffer, offset) = self
+                .global_memory
+                .as_ref()?
+                .image_region(pool, offset, size)?;
+            self.images.arena_transfer(key, buffer, offset, true)?;
+            self.sync_texture(key, false)
+        })()
+        .is_some()
+    }
+
+    pub fn copy(&mut self, destination: u64, source: u64) -> bool {
+        (|| {
+            self.sync_texture(source, true)?;
+            self.images.copy(destination, source)?;
+            self.sync_texture(destination, false)
+        })()
+        .is_some()
+    }
+
+    pub(crate) fn open_window(
+        &mut self,
+        host: &crate::Host,
+        key: u64,
+        native_window: u64,
+    ) -> Option<()> {
+        use ash::vk::Handle;
+        if host.vulkan.is_null() {
+            return Some(());
+        }
+        if !self.context.swapchain || self.windows.contains_key(&key) {
+            return None;
+        }
+        let surface_host = unsafe { &*host.vulkan };
+        let raw = unsafe {
+            (surface_host.create_surface)(
+                host.user,
+                self.context.instance.handle().as_raw(),
+                key,
+                native_window,
+            )
+        };
+        if raw == 0 {
+            return None;
+        }
+        let window = Window::new(&self.context, vk::SurfaceKHR::from_raw(raw))?;
+        self.windows.insert(key, window);
+        Some(())
+    }
+
+    pub(crate) fn close_window(&mut self, key: u64) {
+        self.windows.remove(&key);
+    }
+
+    pub(crate) fn present_window(
+        &mut self,
+        host: &crate::Host,
+        window: u64,
+        texture: u64,
+        interval: u32,
+    ) -> Option<()> {
+        let mut extent = vk::Extent2D::default();
+        let surface_host = unsafe { &*host.vulkan };
+        unsafe {
+            (surface_host.drawable_size)(host.user, window, &mut extent.width, &mut extent.height);
+        }
+        self.sync_texture(texture, true)?;
+        let source = self.images.source(texture)?;
+        if source.format != vk::Format::R8G8B8A8_UNORM {
+            return None;
+        }
+        self.windows
+            .get_mut(&window)?
+            .present(source, extent, interval)
+    }
+
+    /// Offscreen presentation uses the same blit and barriers as a swapchain.
+    /// Returned bytes use the destination format, including BGRA order and sRGB encoding.
+    pub fn present_offscreen(
+        &mut self,
+        texture: u64,
+        format: vk::Format,
+        width: u32,
+        height: u32,
+    ) -> Option<(u32, u32, Vec<u8>)> {
+        if !matches!(
+            format,
+            vk::Format::R8G8B8A8_UNORM
+                | vk::Format::B8G8R8A8_UNORM
+                | vk::Format::R8G8B8A8_SRGB
+                | vk::Format::B8G8R8A8_SRGB
+        ) {
+            return None;
+        }
+        self.sync_texture(texture, true)?;
+        let source = self.images.source(texture)?;
+        if source.format != vk::Format::R8G8B8A8_UNORM {
+            return None;
+        }
+        if !self.offscreen.as_ref().is_some_and(|image| {
+            image.info.format == format
+                && image.info.extent.width == width
+                && image.info.extent.height == height
+        }) {
+            self.offscreen = Some(Image::new(&self.context, width, height, format)?);
+        }
+        let target = self.offscreen.as_mut()?;
+        self.images.blit_offscreen(source, target)?;
+        Some((width, height, self.images.read_image(target)?))
+    }
+
+    pub(crate) fn present_callback(
+        &mut self,
+        texture: u64,
+        width: u64,
+        height: u64,
+    ) -> Option<(u32, u32, Vec<u8>)> {
+        let width = (width.max(1) as f32 * self.scale).round() as u32;
+        let height = (height.max(1) as f32 * self.scale).round() as u32;
+        self.present_offscreen(texture, vk::Format::R8G8B8A8_UNORM, width, height)
+    }
+
+    pub(crate) fn finish(&self) -> bool {
+        unsafe { self.context.device.device_wait_idle().is_ok() }
     }
 }
 
@@ -149,6 +420,10 @@ impl Context {
     }
     /// Create a context, preferring a discrete GPU and then any usable GPU.
     pub fn new() -> Option<Self> {
+        Self::with_extensions(&[], false)
+    }
+
+    fn with_extensions(extensions: &[CString], swapchain: bool) -> Option<Self> {
         // SAFETY: loading the system Vulkan loader is the boundary of this
         // optional backend; ash validates the returned function table.
         let entry = unsafe { Entry::load().ok()? };
@@ -157,11 +432,14 @@ impl Context {
             .application_name(&app)
             .engine_name(&app)
             .api_version(vk::API_VERSION_1_2);
-        let create = vk::InstanceCreateInfo::default().application_info(&info);
+        let pointers: Vec<_> = extensions.iter().map(|name| name.as_ptr()).collect();
+        let create = vk::InstanceCreateInfo::default()
+            .application_info(&info)
+            .enabled_extension_names(&pointers);
         // SAFETY: `create` points only to local, immutable Vulkan structs.
         let instance = unsafe { entry.create_instance(&create, None).ok()? };
         // SAFETY: the instance is live and owns this enumeration.
-        let result = Self::create_device(&instance);
+        let result = Self::create_device(&instance, swapchain);
         let Some((pick, device, family, shader_features)) = result else {
             // SAFETY: no device was created and the instance is owned here.
             unsafe { instance.destroy_instance(None) };
@@ -169,6 +447,11 @@ impl Context {
         };
         // SAFETY: queue zero was requested by create_device.
         let queue = unsafe { device.get_device_queue(family, 0) };
+        let queue_families = unsafe { instance.get_physical_device_queue_family_properties(pick) }
+            .iter()
+            .enumerate()
+            .filter_map(|(i, family)| (family.queue_count > 0).then_some(i as u32))
+            .collect();
         Some(Self {
             entry,
             instance,
@@ -177,11 +460,14 @@ impl Context {
             queue,
             queue_family: family,
             shader_features,
+            queue_families,
+            swapchain,
         })
     }
 
     fn create_device(
         instance: &Instance,
+        swapchain: bool,
     ) -> Option<(vk::PhysicalDevice, Device, u32, ShaderFeatures)> {
         // SAFETY: instance is live for all enumeration and feature queries below.
         let mut devices = unsafe { instance.enumerate_physical_devices().ok()? };
@@ -190,6 +476,16 @@ impl Context {
                 != vk::PhysicalDeviceType::DISCRETE_GPU
         });
         for pick in devices {
+            if swapchain {
+                let supported =
+                    unsafe { instance.enumerate_device_extension_properties(pick) }.ok()?;
+                if !supported.iter().any(|extension| {
+                    (unsafe { std::ffi::CStr::from_ptr(extension.extension_name.as_ptr()) })
+                        == ash::khr::swapchain::NAME
+                }) {
+                    continue;
+                }
+            }
             if unsafe { instance.get_physical_device_properties(pick).api_version }
                 < vk::API_VERSION_1_2
             {
@@ -230,11 +526,24 @@ impl Context {
                 .storage_buffer8_bit_access(shader_features.storage_buffer8_bit_access)
                 .shader_int8(shader_features.shader_int8);
             let priority = [1.0_f32];
-            let queue_info = [vk::DeviceQueueCreateInfo::default()
-                .queue_family_index(family)
-                .queue_priorities(&priority)];
+            let queue_info: Vec<_> = families
+                .iter()
+                .enumerate()
+                .filter(|(_, properties)| properties.queue_count > 0)
+                .map(|(i, _)| {
+                    vk::DeviceQueueCreateInfo::default()
+                        .queue_family_index(i as u32)
+                        .queue_priorities(&priority)
+                })
+                .collect();
+            let extensions: Vec<_> = if swapchain {
+                vec![ash::khr::swapchain::NAME.as_ptr()]
+            } else {
+                Vec::new()
+            };
             let device_info = vk::DeviceCreateInfo::default()
                 .queue_create_infos(&queue_info)
+                .enabled_extension_names(&extensions)
                 .enabled_features(&enabled)
                 .push_next(&mut enabled11)
                 .push_next(&mut enabled12);
@@ -259,346 +568,6 @@ impl Drop for Context {
     }
 }
 
-/// Vulkan images owned by textures novena renders to.
-pub struct Images {
-    images: HashMap<u64, Image>,
-    scale: f32,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
-    device: Device,
-}
-
-struct Image {
-    image: vk::Image,
-    memory: vk::DeviceMemory,
-    width: u32,
-    height: u32,
-}
-
-impl Images {
-    pub fn new(context: &Context, scale: f32) -> Option<Self> {
-        let info = vk::CommandPoolCreateInfo::default()
-            .queue_family_index(context.queue_family)
-            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
-        // SAFETY: the queue family belongs to the live device.
-        let command_pool = unsafe { context.device.create_command_pool(&info, None).ok()? };
-        Some(Self {
-            images: HashMap::new(),
-            scale,
-            command_pool,
-            queue: context.queue,
-            device: context.device.clone(),
-        })
-    }
-
-    fn dimensions(&self, width: u64, height: u64) -> (u32, u32) {
-        let scale = self.scale.max(1.0);
-        (
-            ((width.max(1) as f32 * scale).round() as u32).max(1),
-            ((height.max(1) as f32 * scale).round() as u32).max(1),
-        )
-    }
-
-    pub fn ensure(
-        &mut self,
-        context: &Context,
-        key: u64,
-        width: u64,
-        height: u64,
-        depth: bool,
-    ) -> bool {
-        if self.images.contains_key(&key) {
-            return true;
-        }
-        let (width, height) = self.dimensions(width, height);
-        let image_info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
-            // RGBA8 and D32 are novena's own choices until texture formats are observed.
-            .format(if depth {
-                vk::Format::D32_SFLOAT
-            } else {
-                vk::Format::R8G8B8A8_UNORM
-            })
-            .extent(vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            })
-            .mip_levels(1)
-            .array_layers(1)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(if depth {
-                vk::ImageUsageFlags::TRANSFER_DST
-            } else {
-                vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST
-            })
-            .initial_layout(vk::ImageLayout::UNDEFINED);
-        // SAFETY: image parameters are valid for the selected device.
-        let Some(image) = (unsafe { self.device.create_image(&image_info, None).ok() }) else {
-            return false;
-        };
-        // SAFETY: image is live and owned by this device.
-        let requirements = unsafe { self.device.get_image_memory_requirements(image) };
-        let Some(memory_type) = find_memory_type(
-            context,
-            requirements.memory_type_bits,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        ) else {
-            return false;
-        };
-        let alloc = vk::MemoryAllocateInfo::default()
-            .allocation_size(requirements.size)
-            .memory_type_index(memory_type);
-        // SAFETY: allocation follows the image's requirements.
-        let Some(memory) = (unsafe { self.device.allocate_memory(&alloc, None).ok() }) else {
-            return false;
-        };
-        // SAFETY: image and memory are compatible and offsets are zero.
-        if unsafe { self.device.bind_image_memory(image, memory, 0).is_err() } {
-            return false;
-        }
-        self.images.insert(
-            key,
-            Image {
-                image,
-                memory,
-                width,
-                height,
-            },
-        );
-        true
-    }
-
-    pub fn clear_color(&mut self, context: &Context, key: u64, color: [f32; 4], mask: u32) -> bool {
-        let Some(target) = self.images.get(&key) else {
-            return false;
-        };
-        let clear = vk::ClearColorValue { float32: color };
-        self.one_shot(
-            context,
-            target.image,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            |device, cmd, image| unsafe {
-                let barrier = image_barrier(
-                    device,
-                    image,
-                    vk::ImageLayout::UNDEFINED,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    false,
-                );
-                device.cmd_pipeline_barrier(
-                    cmd,
-                    vk::PipelineStageFlags::TOP_OF_PIPE,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &[barrier],
-                );
-                device.cmd_clear_color_image(
-                    cmd,
-                    image,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    &clear,
-                    &[vk::ImageSubresourceRange {
-                        aspect_mask: vk::ImageAspectFlags::COLOR,
-                        base_mip_level: 0,
-                        level_count: 1,
-                        base_array_layer: 0,
-                        layer_count: 1,
-                    }],
-                );
-            },
-        ) && mask != 0
-    }
-
-    pub fn clear_depth(&mut self, context: &Context, key: u64, depth: f32, stencil: u32) -> bool {
-        let Some(target) = self.images.get(&key) else {
-            return false;
-        };
-        let clear = vk::ClearDepthStencilValue { depth, stencil };
-        self.one_shot(
-            context,
-            target.image,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            |device, cmd, image| unsafe {
-                let barrier = image_barrier(
-                    device,
-                    image,
-                    vk::ImageLayout::UNDEFINED,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    true,
-                );
-                device.cmd_pipeline_barrier(
-                    cmd,
-                    vk::PipelineStageFlags::TOP_OF_PIPE,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &[barrier],
-                );
-                device.cmd_clear_depth_stencil_image(
-                    cmd,
-                    image,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    &clear,
-                    &[vk::ImageSubresourceRange {
-                        aspect_mask: vk::ImageAspectFlags::DEPTH,
-                        base_mip_level: 0,
-                        level_count: 1,
-                        base_array_layer: 0,
-                        layer_count: 1,
-                    }],
-                );
-            },
-        ) && context.queue != vk::Queue::null()
-    }
-
-    pub fn readback(&mut self, context: &Context, key: u64) -> Option<(u32, u32, Vec<u8>)> {
-        let target = self.images.get(&key)?;
-        let size = u64::from(target.width) * u64::from(target.height) * 4;
-        let buffer_info = vk::BufferCreateInfo::default()
-            .size(size)
-            .usage(vk::BufferUsageFlags::TRANSFER_DST)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        // SAFETY: buffer parameters are valid.
-        let buffer = unsafe { self.device.create_buffer(&buffer_info, None).ok()? };
-        // SAFETY: buffer is live.
-        let req = unsafe { self.device.get_buffer_memory_requirements(buffer) };
-        let ty = find_memory_type(
-            context,
-            req.memory_type_bits,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
-        let alloc = vk::MemoryAllocateInfo::default()
-            .allocation_size(req.size)
-            .memory_type_index(ty);
-        // SAFETY: allocation follows the buffer's requirements.
-        let memory = unsafe { self.device.allocate_memory(&alloc, None).ok()? };
-        // SAFETY: compatible buffer memory.
-        unsafe { self.device.bind_buffer_memory(buffer, memory, 0).ok()? };
-        let ok = self.one_shot(
-            context,
-            target.image,
-            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            |device, cmd, image| unsafe {
-                let barrier = image_barrier(
-                    device,
-                    image,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    false,
-                );
-                device.cmd_pipeline_barrier(
-                    cmd,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &[barrier],
-                );
-                device.cmd_copy_image_to_buffer(
-                    cmd,
-                    image,
-                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    buffer,
-                    &[vk::BufferImageCopy {
-                        buffer_offset: 0,
-                        buffer_row_length: 0,
-                        buffer_image_height: 0,
-                        image_subresource: vk::ImageSubresourceLayers {
-                            aspect_mask: vk::ImageAspectFlags::COLOR,
-                            mip_level: 0,
-                            base_array_layer: 0,
-                            layer_count: 1,
-                        },
-                        image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
-                        image_extent: vk::Extent3D {
-                            width: target.width,
-                            height: target.height,
-                            depth: 1,
-                        },
-                    }],
-                );
-            },
-        );
-        let result = if ok {
-            unsafe {
-                let ptr = self
-                    .device
-                    .map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
-                    .ok()?;
-                let data = std::slice::from_raw_parts(ptr.cast::<u8>(), size as usize).to_vec();
-                self.device.unmap_memory(memory);
-                Some((target.width, target.height, data))
-            }
-        } else {
-            None
-        };
-        // SAFETY: no command uses these objects after one_shot waits.
-        unsafe {
-            self.device.destroy_buffer(buffer, None);
-            self.device.free_memory(memory, None);
-        }
-        result
-    }
-
-    fn one_shot(
-        &self,
-        _context: &Context,
-        image: vk::Image,
-        _layout: vk::ImageLayout,
-        record: impl FnOnce(&Device, vk::CommandBuffer, vk::Image),
-    ) -> bool {
-        let alloc = vk::CommandBufferAllocateInfo::default()
-            .command_pool(self.command_pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1);
-        // SAFETY: command pool is live.
-        let Ok(commands) = (unsafe { self.device.allocate_command_buffers(&alloc) }) else {
-            return false;
-        };
-        let cmd = commands[0];
-        // SAFETY: command buffer is newly allocated.
-        if unsafe {
-            self.device
-                .begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::default())
-        }
-        .is_err()
-        {
-            return false;
-        }
-        record(&self.device, cmd, image);
-        // SAFETY: recording was begun above.
-        if unsafe { self.device.end_command_buffer(cmd) }.is_err() {
-            return false;
-        }
-        let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
-        // SAFETY: queue and command buffer are live.
-        let ok = unsafe {
-            self.device
-                .queue_submit(self.queue, std::slice::from_ref(&submit), vk::Fence::null())
-                .is_ok()
-                && self.device.queue_wait_idle(self.queue).is_ok()
-        };
-        // SAFETY: command has completed.
-        unsafe {
-            self.device
-                .free_command_buffers(self.command_pool, &commands);
-        }
-        ok
-    }
-}
-
-impl Default for Images {
-    fn default() -> Self {
-        panic!("Vulkan Images require a context")
-    }
-}
-
 fn find_memory_type(context: &Context, bits: u32, flags: vk::MemoryPropertyFlags) -> Option<u32> {
     let memory = unsafe {
         context
@@ -611,43 +580,6 @@ fn find_memory_type(context: &Context, bits: u32, flags: vk::MemoryPropertyFlags
                 .property_flags
                 .contains(flags)
     })
-}
-
-fn image_barrier(
-    _device: &Device,
-    image: vk::Image,
-    old: vk::ImageLayout,
-    new: vk::ImageLayout,
-    depth: bool,
-) -> vk::ImageMemoryBarrier<'static> {
-    vk::ImageMemoryBarrier::default()
-        .old_layout(old)
-        .new_layout(new)
-        .image(image)
-        .subresource_range(vk::ImageSubresourceRange {
-            aspect_mask: if depth {
-                vk::ImageAspectFlags::DEPTH
-            } else {
-                vk::ImageAspectFlags::COLOR
-            },
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
-        })
-}
-
-impl Drop for Images {
-    fn drop(&mut self) {
-        // SAFETY: all one-shot work has completed before the backend is dropped.
-        unsafe {
-            for (_, image) in self.images.drain() {
-                self.device.destroy_image(image.image, None);
-                self.device.free_memory(image.memory, None);
-            }
-            self.device.destroy_command_pool(self.command_pool, None);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -697,7 +629,9 @@ mod tests {
         };
         assert!(backend.ensure(1, 2, 1, false));
         assert!(backend.clear_color(1, [0.0, 0.0, 1.0, 1.0], 0xf));
-        let (width, height, pixels) = backend.readback(1).expect("Vulkan readback");
+        let (width, height, pixels) = backend
+            .present_callback(1, 2, 1)
+            .expect("Vulkan presentation");
         assert_eq!((width, height), (4, 2));
         assert_eq!(&pixels[..4], &[0, 0, 255, 255]);
     }

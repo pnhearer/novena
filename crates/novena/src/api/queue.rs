@@ -47,7 +47,6 @@ fn copy_size(description: &TextureDescription) -> Option<usize> {
     (texels <= CPU_IMAGE_TEXELS).then(|| (texels * 4) as usize)
 }
 
-#[cfg(not(feature = "vulkan"))]
 fn copy_cpu(instance: &Instance, source: u64, destination: u64, data: Vec<u8>) {
     let Some(Object::Texture { image, description }) = instance.objects.get(destination) else {
         return;
@@ -165,41 +164,40 @@ pub fn handler(name: &str) -> Option<Handler> {
             }
             for i in 0..r.x[1].min(1024) {
                 let Some(handle) = read_u64(instance, r.x[2] + i * 8) else {
-                    break;
+                    return Status::BadArgument;
                 };
                 let commands = instance.objects.recording(handle);
                 let Some(commands) = commands else {
                     continue;
                 };
                 let mut targets = Vec::new();
+                let mut depth_target = 0;
                 for command in commands {
                     match command {
-                        RecordedCommand::SetRenderTargets { colors, .. } => targets = colors,
+                        RecordedCommand::SetRenderTargets { colors, depth } => {
+                            targets = colors;
+                            depth_target = depth;
+                        }
                         RecordedCommand::ClearColor { index, color, mask } => {
                             let Some(texture) = targets.get(index as usize).copied() else {
                                 continue;
                             };
-                            if !presented.contains(&texture) {
-                                #[cfg(feature = "vulkan")]
-                                if let Some(backend) = gpu.as_mut() {
-                                    let _ = backend.clear_color(texture, color, mask);
-                                }
-                                continue;
-                            }
                             let Some(Object::Texture { description, image }) =
                                 instance.objects.get(texture)
                             else {
-                                continue;
+                                return Status::BadArgument;
                             };
                             #[cfg(feature = "vulkan")]
                             if let Some(backend) = gpu.as_mut() {
-                                let _ = backend.ensure(
-                                    texture,
-                                    description.width,
-                                    description.height,
-                                    false,
-                                );
-                                let _ = backend.clear_color(texture, color, mask);
+                                if !backend.ensure_texture(texture, &description, false) {
+                                    return Status::BadArgument;
+                                }
+                                if !backend.clear_color(texture, color, mask) {
+                                    return Status::InternalError;
+                                }
+                                continue;
+                            }
+                            if !presented.contains(&texture) {
                                 continue;
                             }
                             // Only the first layer of the base level is kept on the
@@ -229,27 +227,33 @@ pub fn handler(name: &str) -> Option<Handler> {
                                 }
                             }
                         }
-                        RecordedCommand::ClearDepthStencil { depth, stencil, .. } => {
+                        RecordedCommand::ClearDepthStencil {
+                            depth,
+                            depth_write,
+                            stencil,
+                            stencil_mask,
+                        } => {
                             #[cfg(not(feature = "vulkan"))]
-                            let _ = (depth, stencil);
-                            let Some(texture) = targets.last().copied() else {
-                                continue;
-                            };
-                            if presented.contains(&texture) {
-                                #[cfg(feature = "vulkan")]
-                                if let Some(backend) = gpu.as_mut() {
-                                    let Some(Object::Texture { description, .. }) =
-                                        instance.objects.get(texture)
-                                    else {
-                                        continue;
-                                    };
-                                    let _ = backend.ensure(
-                                        texture,
-                                        description.width,
-                                        description.height,
-                                        true,
-                                    );
-                                    let _ = backend.clear_depth(texture, depth, stencil);
+                            let _ = (depth, depth_write, stencil, stencil_mask, depth_target);
+                            let _ = stencil;
+                            #[cfg(feature = "vulkan")]
+                            if let Some(backend) = gpu.as_mut() {
+                                if stencil_mask != 0 {
+                                    return Status::Unimplemented;
+                                }
+                                if depth_write == 0 || depth_target == 0 {
+                                    continue;
+                                }
+                                let Some(Object::Texture { description, .. }) =
+                                    instance.objects.get(depth_target)
+                                else {
+                                    return Status::BadArgument;
+                                };
+                                if !backend.ensure_texture(depth_target, &description, true) {
+                                    return Status::BadArgument;
+                                }
+                                if !backend.clear_depth(depth_target, depth, 0) {
+                                    return Status::InternalError;
                                 }
                             }
                         }
@@ -257,48 +261,72 @@ pub fn handler(name: &str) -> Option<Handler> {
                             let Some(Object::Texture { description, .. }) =
                                 instance.objects.get(texture)
                             else {
-                                continue;
+                                return Status::BadArgument;
                             };
                             let Some(size) = copy_size(&description) else {
-                                continue;
-                            };
-                            let Some(data) = read_pool_bytes(instance, buffer, size) else {
-                                continue;
+                                return Status::BadArgument;
                             };
                             #[cfg(feature = "vulkan")]
                             if let Some(backend) = gpu.as_mut() {
-                                let _ = backend.upload(
+                                if !backend.ensure_texture(texture, &description, false) {
+                                    return Status::BadArgument;
+                                }
+                                let Ok(source) = instance.objects.resolve_gpu_address(buffer)
+                                else {
+                                    return Status::BadArgument;
+                                };
+                                if size as u64 > source.remaining {
+                                    return Status::BadArgument;
+                                }
+                                if !backend.copy_from_arena(
                                     texture,
-                                    &data,
-                                    description.width,
-                                    description.height,
-                                );
+                                    source.pool,
+                                    source.offset,
+                                    size,
+                                ) {
+                                    return Status::InternalError;
+                                }
+                                continue;
                             }
-                            #[cfg(not(feature = "vulkan"))]
+                            let Some(data) = read_pool_bytes(instance, buffer, size) else {
+                                return Status::BadArgument;
+                            };
                             copy_cpu(instance, buffer, texture, data);
                         }
                         RecordedCommand::CopyTextureToTexture {
                             source,
                             destination,
                         } => {
+                            #[cfg(feature = "vulkan")]
+                            if let Some(backend) = gpu.as_mut() {
+                                for texture in [source, destination] {
+                                    let Some(Object::Texture { description, .. }) =
+                                        instance.objects.get(texture)
+                                    else {
+                                        return Status::BadArgument;
+                                    };
+                                    if !backend.ensure_texture(texture, &description, false) {
+                                        return Status::BadArgument;
+                                    }
+                                }
+                                if !backend.copy(destination, source) {
+                                    return Status::InternalError;
+                                }
+                                continue;
+                            }
                             let Some(Object::Texture { image, .. }) = instance.objects.get(source)
                             else {
-                                continue;
+                                return Status::BadArgument;
                             };
-                            let Some(_data) = image
+                            let Some(data) = image
                                 .lock()
                                 .unwrap_or_else(|p| p.into_inner())
                                 .as_ref()
                                 .map(|i| i.pixels.clone())
                             else {
-                                continue;
+                                return Status::BadArgument;
                             };
-                            #[cfg(feature = "vulkan")]
-                            if let Some(backend) = gpu.as_mut() {
-                                let _ = backend.copy(destination, source);
-                            }
-                            #[cfg(not(feature = "vulkan"))]
-                            copy_cpu(instance, source, destination, _data);
+                            copy_cpu(instance, source, destination, data);
                         }
                         RecordedCommand::SetViewport(_)
                         | RecordedCommand::SetScissor(_)
@@ -310,10 +338,17 @@ pub fn handler(name: &str) -> Option<Handler> {
                     }
                 }
             }
+            #[cfg(feature = "vulkan")]
+            if let Some(memory) = gpu
+                .as_mut()
+                .and_then(|backend| backend.global_memory.as_mut())
             {
-                r.x[0] = 0;
-                Status::Ok
+                if !memory.download(|address, bytes| instance.write_memory(address, bytes)) {
+                    return Status::BadArgument;
+                }
             }
+            r.x[0] = 0;
+            Status::Ok
         },
         "nvnQueueFlush" => |instance, _, registers| {
             for program in instance.pending_programs() {
@@ -326,6 +361,16 @@ pub fn handler(name: &str) -> Option<Handler> {
             )
         },
         "nvnQueueFinish" => |instance, _, registers| {
+            #[cfg(feature = "vulkan")]
+            if instance
+                .gpu
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_ref()
+                .is_some_and(|backend| !backend.finish())
+            {
+                return Status::InternalError;
+            }
             for program in instance.pending_programs() {
                 crate::api::resources::retry_pending(instance, program, "finish");
             }
@@ -336,24 +381,32 @@ pub fn handler(name: &str) -> Option<Handler> {
             )
         },
         "nvnQueuePresentTexture" => |instance, _, r| {
-            let Some(Object::Window { textures, .. }) = instance.objects.get(r.x[1]) else {
-                return {
-                    r.x[0] = 0;
-                    Status::Ok
-                };
+            let window = r.x[1];
+            let Some(Object::Window {
+                textures,
+                present_interval,
+                ..
+            }) = instance.objects.get(window)
+            else {
+                return Status::BadArgument;
             };
             let Some(texture) = textures.get(r.x[2] as usize).copied() else {
-                return {
-                    r.x[0] = 0;
-                    Status::Ok
-                };
+                return Status::BadArgument;
             };
             let Some(Object::Texture { description, image }) = instance.objects.get(texture) else {
-                return {
-                    r.x[0] = 0;
-                    Status::Ok
-                };
+                return Status::BadArgument;
             };
+            #[cfg(not(feature = "vulkan"))]
+            let _ = &description;
+            let Some(host) = instance.host() else {
+                r.x[0] = 0;
+                return Status::Ok;
+            };
+            if let Some(wait) = host.wait_vblank {
+                unsafe {
+                    wait(host.user);
+                }
+            }
             #[cfg(feature = "vulkan")]
             if let Some(backend) = instance
                 .gpu
@@ -361,56 +414,65 @@ pub fn handler(name: &str) -> Option<Handler> {
                 .unwrap_or_else(|p| p.into_inner())
                 .as_mut()
             {
-                if let Some((width, height, pixels)) = backend.readback(texture) {
-                    if let Some(wait) = instance.host().and_then(|h| h.wait_vblank) {
-                        unsafe { wait(instance.host().unwrap().user) };
-                    }
-                    if let Some(host) = instance.host().and_then(|h| h.present) {
-                        unsafe {
-                            host(
-                                instance.host().unwrap().user,
-                                r.x[1],
-                                width,
-                                height,
-                                pixels.as_ptr(),
-                                u64::from(width) * 4,
-                            )
-                        };
+                if !backend.ensure_texture(texture, &description, false) {
+                    return Status::BadArgument;
+                }
+                if !host.vulkan.is_null() {
+                    if backend
+                        .present_window(host, window, texture, present_interval)
+                        .is_none()
+                    {
+                        return Status::InternalError;
                     }
                     r.x[0] = 0;
                     return Status::Ok;
                 }
-            }
-            let Some(image) = image
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .as_ref()
-                .cloned()
-            else {
-                return {
-                    r.x[0] = 0;
-                    Status::Ok
-                };
-            };
-            if let Some(host) = instance.host().and_then(|h| h.present) {
-                if let Some(wait) = instance.host().and_then(|h| h.wait_vblank) {
-                    unsafe { wait(instance.host().unwrap().user) };
+                if let Some(present) = host.present {
+                    let Some((width, height, pixels)) =
+                        backend.present_callback(texture, description.width, description.height)
+                    else {
+                        return Status::InternalError;
+                    };
+                    unsafe {
+                        present(
+                            host.user,
+                            window,
+                            width,
+                            height,
+                            pixels.as_ptr(),
+                            u64::from(width) * 4,
+                        );
+                    }
                 }
+                r.x[0] = 0;
+                return Status::Ok;
+            }
+            let _ = present_interval;
+            if !host.vulkan.is_null() {
+                return Status::InternalError;
+            }
+            if let Some(present) = host.present {
+                let image = image
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .as_ref()
+                    .cloned();
+                let Some(image) = image else {
+                    return Status::BadArgument;
+                };
                 unsafe {
-                    host(
-                        instance.host().unwrap().user,
-                        r.x[1],
-                        description.width as u32,
-                        description.height as u32,
+                    present(
+                        host.user,
+                        window,
+                        image.width,
+                        image.height,
                         image.pixels.as_ptr(),
-                        description.width * 4,
+                        u64::from(image.width) * 4,
                     );
                 }
             }
-            {
-                r.x[0] = 0;
-                Status::Ok
-            }
+            r.x[0] = 0;
+            Status::Ok
         },
         // Observed to return 1. Waiting on a sync that nothing signals would
         // block the program forever, so the wait is reported as satisfied.
@@ -513,12 +575,37 @@ pub fn handler(name: &str) -> Option<Handler> {
             })
         },
         "nvnWindowInitialize" => |instance, _, registers| {
-            let (device, textures) = match instance.objects.get(registers.x[1]) {
-                Some(Object::WindowBuilder {
-                    device, textures, ..
-                }) => (device, textures),
-                _ => (0, Vec::new()),
+            let Some(Object::WindowBuilder {
+                device,
+                textures,
+                native_window,
+            }) = instance.objects.get(registers.x[1])
+            else {
+                return Status::BadArgument;
             };
+            #[cfg(feature = "vulkan")]
+            if let Some(host) = instance.host() {
+                if !host.vulkan.is_null() {
+                    let mut gpu = instance.gpu.lock().unwrap_or_else(|p| p.into_inner());
+                    let Some(backend) = gpu.as_mut() else {
+                        registers.x[0] = 0;
+                        return Status::InternalError;
+                    };
+                    if backend
+                        .open_window(host, registers.x[0], native_window)
+                        .is_none()
+                    {
+                        registers.x[0] = 0;
+                        return Status::InternalError;
+                    }
+                }
+            }
+            #[cfg(not(feature = "vulkan"))]
+            if instance.host().is_some_and(|host| !host.vulkan.is_null()) {
+                registers.x[0] = 0;
+                return Status::Unimplemented;
+            }
+            let _ = native_window;
             instance.objects.put(
                 registers.x[0],
                 Object::Window {
@@ -531,6 +618,15 @@ pub fn handler(name: &str) -> Option<Handler> {
             succeed(registers)
         },
         "nvnWindowFinalize" => |instance, _, registers| {
+            #[cfg(feature = "vulkan")]
+            if let Some(backend) = instance
+                .gpu
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_mut()
+            {
+                backend.close_window(registers.x[0]);
+            }
             instance.objects.remove(registers.x[0]);
             Status::Ok
         },
@@ -614,6 +710,7 @@ mod tests {
                 present: None,
                 render_scale: 1.0,
                 wait_vblank: None,
+                vulkan: std::ptr::null(),
             })
         };
         instance.objects.put(

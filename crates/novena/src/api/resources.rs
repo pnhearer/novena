@@ -239,6 +239,7 @@ mod tests {
             present: None,
             render_scale: 1.0,
             wait_vblank: None,
+            vulkan: std::ptr::null(),
         };
         let instance = unsafe { Instance::with_host(host) };
         instance.objects.put(
@@ -616,6 +617,15 @@ pub fn handler(name: &str) -> Option<Handler> {
             succeed(registers)
         },
         "nvnTextureFinalize" => |instance, _, registers| {
+            #[cfg(feature = "vulkan")]
+            if let Some(backend) = instance
+                .gpu
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_mut()
+            {
+                backend.release_texture(registers.x[0]);
+            }
             instance.objects.remove(registers.x[0]);
             Status::Ok
         },

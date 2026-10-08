@@ -8,7 +8,7 @@ use crate::gpu::Backend;
 use crate::observe::{CallSnapshot, FunctionShape};
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -39,9 +39,10 @@ pub trait ShaderTranslator: Send + Sync {
 /// The host's side of the contract, which `Instance::with_host` takes on
 /// trust: `user` and both callbacks stay usable for the life of the
 /// instance, and may be used from several threads at once, because a program
-/// can call the graphics API from any of its threads.
+/// can call the graphics API from any of its threads. A non-null `vulkan`
+/// pointer follows the lifetime and callback contract in docs/host-interface.md.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct Host {
     /// Passed back as the first argument of every callback.
     pub user: *mut c_void,
@@ -65,11 +66,34 @@ pub struct Host {
     pub render_scale: f32,
     /// Called immediately before a texture is presented.
     pub wait_vblank: Option<unsafe extern "C" fn(user: *mut c_void)>,
+    /// Optional version-5 Vulkan presentation contract. See docs/host-interface.md.
+    pub vulkan: *const HostVulkan,
+}
+
+/// Host-owned platform integration. Vulkan handles cross this C boundary as u64.
+/// Provenance: 0026-presentation.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct HostVulkan {
+    pub extension_count: u32,
+    pub extensions: *const *const c_char,
+    pub create_surface: unsafe extern "C" fn(
+        user: *mut c_void,
+        instance: u64,
+        window_object: u64,
+        native_window: u64,
+    ) -> u64,
+    pub drawable_size: unsafe extern "C" fn(
+        user: *mut c_void,
+        window_object: u64,
+        width: *mut u32,
+        height: *mut u32,
+    ),
 }
 
 // SAFETY: a `Host` only reaches an instance through `Instance::with_host`,
 // whose caller guarantees that `user` and the callbacks may be shared between
-// threads. The library itself only hands `user` back to the callbacks.
+// threads. Native integration pointers follow the same documented contract.
 unsafe impl Send for Host {}
 unsafe impl Sync for Host {}
 
@@ -152,6 +176,9 @@ impl Instance {
     /// # Safety
     /// `host.user` and the callbacks must stay usable for the life of the
     /// instance and must tolerate being used from several threads at once.
+    /// A non-null `host.vulkan` points to a valid HostVulkan for that lifetime.
+    /// Its extension array and strings are valid during this call. Native windows
+    /// stay live until finalization, and its callbacks must not reenter novena.
     pub unsafe fn with_host(host: Host) -> Self {
         Self::build(Some(host))
     }
@@ -182,7 +209,7 @@ impl Instance {
             shader_zero_header: AtomicU64::new(0),
             shader_header_without_code: AtomicU64::new(0),
             #[cfg(feature = "vulkan")]
-            gpu: Mutex::new(host.and_then(|h| Backend::new(h.render_scale))),
+            gpu: Mutex::new(host.and_then(|h| Backend::with_host(&h))),
         }
     }
 

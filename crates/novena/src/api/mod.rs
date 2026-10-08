@@ -78,6 +78,9 @@ fn succeed(registers: &mut Registers) -> Status {
     Status::Ok
 }
 
+#[cfg(feature = "vulkan")]
+pub(crate) use objects::TextureDescription;
+
 #[cfg(test)]
 mod tests {
     use super::*;

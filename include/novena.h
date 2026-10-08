@@ -1,4 +1,4 @@
-/* novena host interface, version 4. See docs/host-interface.md. */
+/* novena host interface, version 5. See docs/host-interface.md. */
 #ifndef NOVENA_H
 #define NOVENA_H
 
@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define NOVENA_HOST_INTERFACE_VERSION 4u
+#define NOVENA_HOST_INTERFACE_VERSION 5u
 
 /* Returned by lookups for a name the library does not know. */
 #define NOVENA_FUNCTION_NONE UINT32_MAX
@@ -26,6 +26,22 @@ typedef enum novena_status {
     NOVENA_INTERNAL_ERROR = 4
 } novena_status;
 
+/* Optional native presentation contract, introduced in version 5.
+ * The extension names remain valid until instance creation returns.
+ * create_surface returns a VkSurfaceKHR as uint64_t, or 0 on failure.
+ * novena owns and destroys that surface. The native window stays live until
+ * WindowFinalize or instance destruction. The struct and callbacks stay live
+ * until instance destruction. Both callbacks must be non-null and must not
+ * reenter novena. drawable_size writes pixel dimensions, or zeros if hidden. */
+typedef struct novena_host_vulkan {
+    uint32_t extension_count;
+    const char *const *extensions;
+    uint64_t (*create_surface)(void *user, uint64_t instance,
+                               uint64_t window_object, uint64_t native_window);
+    void (*drawable_size)(void *user, uint64_t window_object,
+                          uint32_t *width, uint32_t *height);
+} novena_host_vulkan;
+
 /* What the host provides. Both callbacks return 0 on success and any other
  * value when the range is not accessible.
  *
@@ -40,6 +56,7 @@ typedef struct novena_host {
                     const uint8_t *rgba, uint64_t stride_bytes);
     float render_scale;
     void (*wait_vblank)(void *user);
+    const novena_host_vulkan *vulkan;
 } novena_host;
 
 /* Argument and result registers of one call under the program's standard

@@ -5,5 +5,5 @@ style = "both"
 usize_is_size_t = true
 
 [export]
-include = ["Host", "Registers", "Status"]
+include = ["Host", "HostVulkan", "Registers", "Status"]
 
