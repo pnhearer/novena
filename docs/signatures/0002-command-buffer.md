@@ -38,7 +38,7 @@ Two value kinds come up here that the set-up path did not have:
 | SetStencilMask | commands: object, faces: int, mask: int | none seen | likely | x1 = 3, x2 = 0xff. |
 | SetStencilValueMask | commands: object, faces: int, mask: int | none seen | likely | x1 = 3, x2 = 0xff. |
 | SetStencilRef | commands: object, faces: int, value: int | none seen | likely | x1 = 3, x2 = 0. |
-| SetPolygonOffsetClamp | commands: object, three floats | none seen | open | No integer register changes; the float registers were zero. From the name only. |
+| SetPolygonOffsetClamp | commands: object, three floats | none seen | open | No integer register changes; d0 and d1 were zero, but d2 was 0x7f7fffff. Float count and order remain open; see signatures 0010. |
 | SetViewport | commands: object, x: int, y: int, width: int, height: int | none seen | likely | See signatures 0001. |
 | SetScissor | commands: object, x: int, y: int, width: int, height: int | none seen | likely | Same shape as SetViewport: x1 = x2 = 0, x3 and x4 are sizes. |
 | SetDepthRange | commands: object, near: float, far: float | none seen | likely | See signatures 0001. |
@@ -78,3 +78,7 @@ Two value kinds come up here that the set-up path did not have:
 | RestoreZCullData | commands: object, buffer: gpu address, size: int | none seen | likely | x1 wide, x2 one of two sizes also seen in SaveZCullData. |
 | SignalEvent | commands: object, event: object, two or three ints | none seen | open | x1 one of two addresses; x2 = 0, x3 = 2, x4 = 1 could be arguments or leftovers. |
 | CopyBufferToTexture | commands: object, buffer: gpu address, texture: object, further pointers | none seen | open | x1 wide; x2, x3 and x4 readable. Not enough to order them. |
+
+2026-10-08: [signatures 0010](0010-remaining-command-state.md) refines the
+remaining recording fields and corrects the SetPolygonOffsetClamp d2 value.
+Execution meanings and the float signature remain unresolved.

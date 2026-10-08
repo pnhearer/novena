@@ -1,0 +1,573 @@
+//! State-only command recording. Signatures 0010, provenance note 0026.
+//! Only firm recording fields are decoded. No command here executes, writes
+//! program memory, signals synchronization, or allocates rendering resources.
+
+use super::{
+    commands::record,
+    objects::{Object, RecordedCommand, StateCommand},
+    Handler,
+};
+use crate::{
+    functions::{self, FunctionId},
+    instance::{Instance, Registers, Status},
+};
+
+pub(super) const NAMES: &[&str] = &[
+    "nvnCommandBufferBindBlendState",
+    "nvnCommandBufferBindChannelMaskState",
+    "nvnCommandBufferBindColorState",
+    "nvnCommandBufferBindDepthStencilState",
+    "nvnCommandBufferBindMultisampleState",
+    "nvnCommandBufferBindPolygonState",
+    "nvnCommandBufferBarrier",
+    "nvnCommandBufferSetStencilMask",
+    "nvnCommandBufferSetStencilRef",
+    "nvnCommandBufferSetStencilValueMask",
+    "nvnCommandBufferSetTiledCacheAction",
+    "nvnCommandBufferBindUniformBuffer",
+    "nvnCommandBufferBindVertexBuffer",
+    "nvnCommandBufferBindSeparateTexture",
+    "nvnCommandBufferBindImage",
+    "nvnCommandBufferClearBuffer",
+    "nvnCommandBufferDispatchCompute",
+];
+
+pub fn handler(name: &str) -> Option<Handler> {
+    NAMES.contains(&name).then_some(record_state)
+}
+
+fn record_state(instance: &Instance, function: FunctionId, r: &mut Registers) -> Status {
+    let Some(name) = functions::name(function).and_then(|n| n.strip_prefix("nvnCommandBuffer"))
+    else {
+        return Status::BadFunction;
+    };
+    let command = match name {
+        "BindBlendState"
+        | "BindChannelMaskState"
+        | "BindColorState"
+        | "BindDepthStencilState"
+        | "BindMultisampleState"
+        | "BindPolygonState" => {
+            let kind = name.strip_prefix("Bind").expect("binding");
+            let settings = match instance.objects.get(r.x[1]) {
+                Some(Object::State {
+                    kind: actual,
+                    settings,
+                }) if actual == kind => Some(settings),
+                _ => None,
+            };
+            StateCommand::BindState {
+                kind,
+                address: r.x[1],
+                settings,
+            }
+        }
+        "SetStencilMask" | "SetStencilRef" | "SetStencilValueMask" => StateCommand::Stencil {
+            setting: name.strip_prefix("Set").expect("setting"),
+            faces: r.x[1],
+            value: r.x[2],
+        },
+        "Barrier" => StateCommand::Barrier(r.x[1]),
+        "SetTiledCacheAction" => StateCommand::TiledCacheAction(r.x[1]),
+        "BindUniformBuffer" => StateCommand::BindUniformBuffer {
+            stage: r.x[1],
+            index: r.x[2],
+            address: r.x[3],
+            size: r.x[4],
+        },
+        "BindVertexBuffer" => StateCommand::BindVertexBuffer {
+            index: r.x[1],
+            address: r.x[2],
+            size: r.x[3],
+        },
+        "BindSeparateTexture" | "BindImage" => StateCommand::BindHandle {
+            kind: name.strip_prefix("Bind").expect("binding"),
+            stage: r.x[1],
+            index: r.x[2],
+            handle: r.x[3],
+        },
+        "ClearBuffer" => StateCommand::ClearBuffer {
+            address: r.x[1],
+            size: r.x[2],
+            value: r.x[3],
+        },
+        "DispatchCompute" => StateCommand::DispatchCompute([r.x[1], r.x[2], r.x[3]]),
+        _ => return Status::BadFunction,
+    };
+    record(instance, function.0, r, RecordedCommand::State(command))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn call(instance: &Instance, suffix: &str, r: &mut Registers) -> Status {
+        let id = functions::lookup(&format!("nvn{suffix}")).unwrap();
+        instance.call(id, r)
+    }
+
+    fn start(instance: &Instance, address: u64) {
+        let mut r = Registers::default();
+        r.x[0] = address;
+        r.x[1] = 0x100;
+        assert_eq!(
+            call(instance, "CommandBufferInitialize", &mut r),
+            Status::Ok
+        );
+        r.x[0] = address;
+        assert_eq!(
+            call(instance, "CommandBufferBeginRecording", &mut r),
+            Status::Ok
+        );
+    }
+
+    fn end(instance: &Instance, address: u64) -> Vec<RecordedCommand> {
+        let mut r = Registers::default();
+        r.x[0] = address;
+        assert_eq!(
+            call(instance, "CommandBufferEndRecording", &mut r),
+            Status::Ok
+        );
+        instance.objects.recording(r.x[0]).unwrap()
+    }
+
+    #[test]
+    fn scalar_commands_keep_order_and_full_values_without_executing() {
+        use StateCommand::*;
+        let instance = Instance::new();
+        start(&instance, 0x200);
+        // Deliberately wider than the samples. Widths have not been observed.
+        let a = 0x1234_5678_0000_0001;
+        let b = 0x2345_6789_0000_0002;
+        let c = 0x3456_789a_0000_0003;
+        let d = 0x4567_89ab_0000_0004;
+        let cases = [
+            ("CommandBufferBarrier", Barrier(a)),
+            ("CommandBufferSetTiledCacheAction", TiledCacheAction(a)),
+            (
+                "CommandBufferSetStencilMask",
+                Stencil {
+                    setting: "StencilMask",
+                    faces: a,
+                    value: b,
+                },
+            ),
+            (
+                "CommandBufferSetStencilRef",
+                Stencil {
+                    setting: "StencilRef",
+                    faces: a,
+                    value: b,
+                },
+            ),
+            (
+                "CommandBufferSetStencilValueMask",
+                Stencil {
+                    setting: "StencilValueMask",
+                    faces: a,
+                    value: b,
+                },
+            ),
+            (
+                "CommandBufferBindUniformBuffer",
+                BindUniformBuffer {
+                    stage: a,
+                    index: b,
+                    address: c,
+                    size: d,
+                },
+            ),
+            (
+                "CommandBufferBindVertexBuffer",
+                BindVertexBuffer {
+                    index: a,
+                    address: b,
+                    size: c,
+                },
+            ),
+            (
+                "CommandBufferBindSeparateTexture",
+                BindHandle {
+                    kind: "SeparateTexture",
+                    stage: a,
+                    index: b,
+                    handle: c,
+                },
+            ),
+            (
+                "CommandBufferBindImage",
+                BindHandle {
+                    kind: "Image",
+                    stage: a,
+                    index: b,
+                    handle: c,
+                },
+            ),
+            (
+                "CommandBufferClearBuffer",
+                ClearBuffer {
+                    address: a,
+                    size: b,
+                    value: c,
+                },
+            ),
+            ("CommandBufferDispatchCompute", DispatchCompute([a, b, c])),
+        ];
+        for (suffix, _) in &cases {
+            let mut r = Registers {
+                x: [0x200, a, b, c, d, 0xdead, 0xbeef, 0xbad],
+                d: [0xf00d; 8],
+                ..Registers::default()
+            };
+            assert_eq!(call(&instance, suffix, &mut r), Status::Ok, "{suffix}");
+            // Same result convention as the existing command recorder.
+            assert_eq!((r.x[0], r.x[1], r.d[0]), (0, 0, 0));
+            assert_eq!((r.x[2], r.x[7], r.d[7]), (b, 0xbad, 0xf00d));
+        }
+        assert_eq!(
+            end(&instance, 0x200),
+            cases
+                .into_iter()
+                .map(|(_, command)| RecordedCommand::State(command))
+                .collect::<Vec<_>>()
+        );
+        // No host is needed to record even an unreadable address or handle.
+        assert_eq!(instance.objects.get(a), None);
+    }
+
+    #[test]
+    fn bindings_snapshot_known_settings_and_leave_unknown_layouts_alone() {
+        let instance = Instance::new();
+        start(&instance, 0x200);
+        let kinds = [
+            "BlendState",
+            "ChannelMaskState",
+            "ColorState",
+            "DepthStencilState",
+            "MultisampleState",
+            "PolygonState",
+        ];
+        let mut expected = Vec::new();
+        for kind in kinds {
+            instance.objects.put(
+                0x300,
+                Object::State {
+                    kind,
+                    settings: vec![("Observed", [7; 6])],
+                },
+            );
+            let mut r = Registers::default();
+            r.x[0] = 0x200;
+            r.x[1] = 0x300;
+            assert_eq!(
+                call(&instance, &format!("CommandBufferBind{kind}"), &mut r),
+                Status::Ok
+            );
+            expected.push(RecordedCommand::State(StateCommand::BindState {
+                kind,
+                address: 0x300,
+                settings: Some(vec![("Observed", [7; 6])]),
+            }));
+            // Mutation after binding must not change the earlier record.
+            instance.objects.put(
+                0x300,
+                Object::State {
+                    kind,
+                    settings: vec![("Observed", [9; 6])],
+                },
+            );
+            r.x[0] = 0x200;
+            r.x[1] = 0x300;
+            assert_eq!(
+                call(&instance, &format!("CommandBufferBind{kind}"), &mut r),
+                Status::Ok
+            );
+            expected.push(RecordedCommand::State(StateCommand::BindState {
+                kind,
+                address: 0x300,
+                settings: Some(vec![("Observed", [9; 6])]),
+            }));
+        }
+        for address in [0x300, 0x999] {
+            let mut r = Registers::default();
+            r.x[0] = 0x200;
+            r.x[1] = address;
+            // The last object above is a polygon state, not a blend state.
+            assert_eq!(
+                call(&instance, "CommandBufferBindBlendState", &mut r),
+                Status::Ok
+            );
+            expected.push(RecordedCommand::State(StateCommand::BindState {
+                kind: "BlendState",
+                address,
+                settings: None,
+            }));
+        }
+        assert_eq!(end(&instance, 0x200), expected);
+        assert_eq!(instance.objects.get(0x999), None);
+    }
+
+    #[test]
+    fn recording_lifetimes_keep_buffers_independent() {
+        let instance = Instance::new();
+        start(&instance, 0x200);
+        start(&instance, 0x300);
+        let mut r = Registers::default();
+        r.x[0] = 0x200;
+        r.x[1] = 0x12;
+        assert_eq!(call(&instance, "CommandBufferBarrier", &mut r), Status::Ok);
+        r.x[0] = 0x300;
+        r.x[1] = 0x40;
+        assert_eq!(call(&instance, "CommandBufferBarrier", &mut r), Status::Ok);
+        assert_eq!(
+            end(&instance, 0x200),
+            vec![RecordedCommand::State(StateCommand::Barrier(0x12))]
+        );
+        // Recording outside Begin/End follows the existing recorder: ignored.
+        r.x[0] = 0x200;
+        assert_eq!(call(&instance, "CommandBufferBarrier", &mut r), Status::Ok);
+        r.x[0] = 0x200;
+        assert_eq!(
+            call(&instance, "CommandBufferBeginRecording", &mut r),
+            Status::Ok
+        );
+        assert!(end(&instance, 0x200).is_empty());
+        assert_eq!(
+            end(&instance, 0x300),
+            vec![RecordedCommand::State(StateCommand::Barrier(0x40))]
+        );
+    }
+
+    #[test]
+    fn setter_changes_do_not_rewrite_bound_state() {
+        let instance = Instance::new();
+        start(&instance, 0x200);
+        let mut r = Registers::default();
+        r.x[0] = 0x300;
+        assert_eq!(
+            call(&instance, "PolygonStateSetDefaults", &mut r),
+            Status::Ok
+        );
+        for value in [1, 2] {
+            r = Registers::default();
+            r.x[0] = 0x300;
+            r.x[1] = value;
+            assert_eq!(
+                call(&instance, "PolygonStateSetCullFace", &mut r),
+                Status::Ok
+            );
+            r.x[0] = 0x200;
+            r.x[1] = 0x300;
+            assert_eq!(
+                call(&instance, "CommandBufferBindPolygonState", &mut r),
+                Status::Ok
+            );
+        }
+        assert_eq!(
+            end(&instance, 0x200),
+            vec![
+                RecordedCommand::State(StateCommand::BindState {
+                    kind: "PolygonState",
+                    address: 0x300,
+                    settings: Some(vec![("CullFace", [1, 0, 0, 0, 0, 0])]),
+                }),
+                RecordedCommand::State(StateCommand::BindState {
+                    kind: "PolygonState",
+                    address: 0x300,
+                    settings: Some(vec![
+                        ("CullFace", [1, 0, 0, 0, 0, 0]),
+                        ("CullFace", [2, 0, 0, 0, 0, 0]),
+                    ]),
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn submission_consumes_state_without_writing_or_rendering() {
+        use super::super::objects::{TextureDescription, TextureImage};
+        use crate::instance::Host;
+        use std::{
+            ffi::c_void,
+            sync::{
+                atomic::{AtomicU64, Ordering},
+                Arc, Mutex,
+            },
+        };
+
+        struct Memory {
+            handle: AtomicU64,
+            writes: AtomicU64,
+            buffer: [u8; 16],
+        }
+        unsafe extern "C" fn read(user: *mut c_void, address: u64, out: *mut u8, size: u64) -> i32 {
+            // SAFETY: the boxed Memory outlives the instance; out is provided
+            // by the memory callback contract and is valid for size bytes.
+            let memory = unsafe { &*user.cast::<Memory>() };
+            let handle = memory.handle.load(Ordering::Relaxed).to_le_bytes();
+            let bytes: &[u8] = match address {
+                0x1000 if size <= 8 => &handle,
+                0x8000 if size <= 16 => &memory.buffer,
+                _ => return 1,
+            };
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, size as usize);
+            }
+            0
+        }
+        unsafe extern "C" fn write(user: *mut c_void, _: u64, _: *const u8, _: u64) -> i32 {
+            // SAFETY: same live boxed Memory as the read callback.
+            unsafe { &*user.cast::<Memory>() }
+                .writes
+                .fetch_add(1, Ordering::Relaxed);
+            1
+        }
+        let mut memory = Box::new(Memory {
+            handle: AtomicU64::new(0),
+            writes: AtomicU64::new(0),
+            buffer: [0xa5; 16],
+        });
+        // SAFETY: memory and callbacks remain valid for the instance lifetime.
+        let instance = unsafe {
+            Instance::with_host(Host {
+                user: (&mut *memory as *mut Memory).cast(),
+                read_memory: Some(read),
+                write_memory: Some(write),
+                present: None,
+                render_scale: 1.0,
+                wait_vblank: None,
+            })
+        };
+        let pixels = Arc::new(Mutex::new(Some(TextureImage {
+            width: 1,
+            height: 1,
+            depth: 1,
+            pixels: vec![11, 22, 33, 44],
+        })));
+        instance.objects.put(
+            0x500,
+            Object::Texture {
+                description: TextureDescription::default(),
+                image: pixels.clone(),
+            },
+        );
+        let pool = Object::MemoryPool {
+            device: 0x100,
+            flags: 0,
+            storage: 0x8000,
+            size: 16,
+            gpu_address: None,
+            observed_gpu_address: None,
+        };
+        instance.objects.put(0x600, pool.clone());
+        start(&instance, 0x200);
+        for name in NAMES {
+            let mut r = Registers::default();
+            r.x[..5].copy_from_slice(&[0x200, 0x8000, 16, 0, 8]);
+            assert_eq!(
+                instance.call(functions::lookup(name).unwrap(), &mut r),
+                Status::Ok
+            );
+        }
+        let mut r = Registers::default();
+        r.x[0] = 0x200;
+        assert_eq!(
+            call(&instance, "CommandBufferEndRecording", &mut r),
+            Status::Ok
+        );
+        let handle = r.x[0];
+        memory.handle.store(handle, Ordering::Relaxed);
+        // Assert that the submission actually consumed a nonempty recording.
+        instance.objects.update(0x200, |object| {
+            if let Object::CommandBuffer {
+                recording_handles, ..
+            } = object
+            {
+                assert_eq!(recording_handles[&handle].len(), NAMES.len());
+            } else {
+                panic!("command buffer");
+            }
+        });
+        r.x[..3].copy_from_slice(&[0x700, 1, 0x1000]);
+        assert_eq!(call(&instance, "QueueSubmitCommands", &mut r), Status::Ok);
+        assert!(instance.objects.recording(handle).is_none());
+        assert_eq!(memory.writes.load(Ordering::Relaxed), 0);
+        assert_eq!(memory.buffer, [0xa5; 16]);
+        assert_eq!(instance.objects.get(0x600), Some(pool));
+        assert_eq!(
+            pixels.lock().unwrap().as_ref().unwrap().pixels,
+            [11, 22, 33, 44]
+        );
+    }
+
+    #[test]
+    fn census_gaps_are_explicit_and_uncertain_calls_stay_unimplemented() {
+        let instance = Instance::new();
+        start(&instance, 0x200);
+        let mut missing = Vec::new();
+        let mut called = 0;
+        for line in include_str!("../../../../docs/census/0001-program-a-startup.txt").lines() {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            if fields.len() != 3 || fields[0].parse::<u64>().unwrap_or(0) == 0 {
+                continue;
+            }
+            called += 1;
+            let name = fields[2];
+            let id = functions::lookup(name).unwrap();
+            // Command handlers with absent pointers can report BadArgument.
+            // The generic fallback is identified by its Unimplemented status.
+            let mut r = Registers::default();
+            r.x[0] = 0x200;
+            if super::super::handler(name).is_none()
+                || (name.starts_with("nvnCommandBuffer")
+                    && instance.call(id, &mut r) == Status::Unimplemented)
+            {
+                missing.push(name);
+            }
+        }
+        assert_eq!(called, 168);
+        assert_eq!(
+            missing,
+            [
+                "nvnCommandBufferBindSeparateSampler",
+                "nvnCommandBufferBindVertexAttribState",
+                "nvnCommandBufferBindVertexStreamState",
+                "nvnCommandBufferClearTexture",
+                "nvnCommandBufferFenceSync",
+                "nvnCommandBufferRestoreZCullData",
+                "nvnCommandBufferSaveZCullData",
+                "nvnCommandBufferSetPolygonOffsetClamp",
+                "nvnDeviceGetProcAddress",
+            ]
+        );
+        assert_eq!(missing.len() + NAMES.len(), 26);
+
+        let baseline: std::collections::BTreeSet<_> = missing
+            .iter()
+            .copied()
+            .chain(NAMES.iter().copied())
+            .collect();
+        let census = include_str!("../../../../docs/census/0001-program-a-startup.txt");
+        let counts: std::collections::BTreeMap<_, _> = census
+            .lines()
+            .filter_map(|line| {
+                let fields: Vec<_> = line.split_whitespace().collect();
+                (fields.len() == 3).then(|| (fields[2], fields[0]))
+            })
+            .collect();
+        let note = include_str!("../../../../docs/signatures/0010-remaining-command-state.md");
+        let mut documented = std::collections::BTreeSet::new();
+        for line in note.lines().filter(|line| {
+            line.starts_with("| CommandBuffer") || line.starts_with("| DeviceGetProcAddress")
+        }) {
+            let cells: Vec<_> = line.split('|').map(str::trim).collect();
+            let name = format!("nvn{}", cells[1]);
+            assert_eq!(counts[name.as_str()], cells[2], "census count for {name}");
+            assert!(documented.insert(name), "duplicate gap entry");
+        }
+        assert_eq!(
+            documented,
+            baseline.into_iter().map(str::to_string).collect()
+        );
+    }
+}

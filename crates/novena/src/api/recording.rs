@@ -1,10 +1,8 @@
 //! Command buffers: set-up and recording bookkeeping.
 //! Signatures: docs/signatures/0002-command-buffer.md.
 //!
-//! The commands themselves (binding state, drawing, clearing) have no
-//! handlers yet: there is nothing to draw into. Only the calls that manage
-//! the command buffer object are handled, so the program can get through
-//! its set-up.
+//! Recorded commands are handled in commands.rs and state_commands.rs.
+//! This module manages the command buffer and its recording handles.
 
 use super::{accept, objects::Object, queue::signal_event, succeed, Handler};
 use crate::instance::Status;

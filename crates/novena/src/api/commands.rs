@@ -4,7 +4,7 @@ use super::{
 };
 use crate::instance::{Instance, Registers, Status};
 
-fn record(
+pub(super) fn record(
     instance: &Instance,
     function: u32,
     registers: &mut Registers,

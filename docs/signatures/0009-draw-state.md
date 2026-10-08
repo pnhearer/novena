@@ -18,6 +18,7 @@ It does not assign meanings to enumerations or describe unobserved layouts.
 | SetRenderTargets | commands, count, colors, colorViews, depth, depthView; count 0, 1, 2, or 6; pointers readable or zero; depth always zero in this run | Render targets use a count, color arrays, and optional depth arguments | Array layout, views, formats, attachment semantics |
 | SetDepthRange | commands, near, far; near always 0 and far 0 or 1 | A depth range has two floating point arguments | Exact ABI and viewport mapping |
 
-Only the three draw shapes and the already decoded viewport, scissor, depth
-range, and render-target fields are decoded in the recording list. Other state
-calls and unresolved fields remain raw registers.
+The three draw shapes and the already decoded viewport, scissor, depth
+range, and render-target fields are decoded in the recording list.
+[Signatures 0010](0010-remaining-command-state.md) adds explicit records for
+firm state fields. Unresolved calls still retain raw registers.
