@@ -43,7 +43,21 @@ impl Image {
             height,
             depth: 1,
         };
-        let usage = vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST;
+        let mut usage = vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST;
+        if format == vk::Format::R8G8B8A8_UNORM {
+            let properties = unsafe {
+                context
+                    .instance
+                    .get_physical_device_format_properties(context.physical_device, format)
+            };
+            if !properties
+                .optimal_tiling_features
+                .contains(vk::FormatFeatureFlags::COLOR_ATTACHMENT)
+            {
+                return None;
+            }
+            usage |= vk::ImageUsageFlags::COLOR_ATTACHMENT;
+        }
         let image = unsafe {
             context
                 .device
@@ -288,6 +302,78 @@ impl Images {
         self.commands.submit(false, None)
     }
 
+    pub fn draw(
+        &mut self,
+        key: u64,
+        pipeline: &super::graphics::GraphicsPipeline,
+        memory: &super::GlobalMemory,
+        draw: &super::graphics::Draw,
+    ) -> Option<()> {
+        let image = self.images.get(&key)?;
+        let device = &self.context.device;
+        // Temporary attachment objects remain live through the submission fence.
+        let view = unsafe {
+            device
+                .create_image_view(
+                    &vk::ImageViewCreateInfo::default()
+                        .image(image.info.image)
+                        .view_type(vk::ImageViewType::TYPE_2D)
+                        .format(image.info.format)
+                        .subresource_range(range(image.info.format)),
+                    None,
+                )
+                .ok()?
+        };
+        let framebuffer = unsafe {
+            device.create_framebuffer(
+                &vk::FramebufferCreateInfo::default()
+                    .render_pass(pipeline.render_pass)
+                    .attachments(&[view])
+                    .width(image.info.extent.width)
+                    .height(image.info.extent.height)
+                    .layers(1),
+                None,
+            )
+        };
+        let Ok(framebuffer) = framebuffer else {
+            unsafe {
+                device.destroy_image_view(view, None);
+            }
+            return None;
+        };
+        let result = (|| {
+            let (cmd, _) = self.commands.begin()?;
+            let image = self.images.get_mut(&key)?;
+            buffer_barrier(device, cmd);
+            image.transition(cmd, vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+            unsafe {
+                device.cmd_begin_render_pass(
+                    cmd,
+                    &vk::RenderPassBeginInfo::default()
+                        .render_pass(pipeline.render_pass)
+                        .framebuffer(framebuffer)
+                        .render_area(vk::Rect2D::default().extent(vk::Extent2D {
+                            width: image.info.extent.width,
+                            height: image.info.extent.height,
+                        })),
+                    vk::SubpassContents::INLINE,
+                );
+                pipeline.record(cmd, memory, draw);
+                device.cmd_end_render_pass(cmd);
+            }
+            self.commands.submit(false, None)?;
+            self.commands.wait()
+        })();
+        unsafe {
+            if result.is_none() {
+                let _ = device.device_wait_idle();
+            }
+            device.destroy_framebuffer(framebuffer, None);
+            device.destroy_image_view(view, None);
+        }
+        result
+    }
+
     pub fn clear_depth(&mut self, key: u64, depth: f32) -> Option<()> {
         if self.images.get(&key)?.info.format != vk::Format::D32_SFLOAT {
             return None;
@@ -486,6 +572,11 @@ pub(super) fn transition(
         (
             vk::PipelineStageFlags::BOTTOM_OF_PIPE,
             vk::AccessFlags::empty(),
+        )
+    } else if layout == vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL {
+        (
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            vk::AccessFlags::COLOR_ATTACHMENT_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
         )
     } else {
         (

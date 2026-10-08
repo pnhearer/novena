@@ -29,14 +29,31 @@ pub(super) struct DiskCache {
 }
 
 impl DiskCache {
-    pub(super) fn new(
+    #[cfg(test)]
+    fn new(
         directory: &Path,
         identity: &TranslationIdentity,
         properties: &vk::PhysicalDeviceProperties,
         ids: &vk::PhysicalDeviceIDProperties<'_>,
     ) -> Self {
+        Self::for_interface(
+            directory,
+            identity,
+            properties,
+            ids,
+            b"novena compute main interface 1 disk 1",
+        )
+    }
+
+    pub(super) fn for_interface(
+        directory: &Path,
+        identity: &TranslationIdentity,
+        properties: &vk::PhysicalDeviceProperties,
+        ids: &vk::PhysicalDeviceIDProperties<'_>,
+        interface: &[u8],
+    ) -> Self {
         let mut hash = blake3::Hasher::new();
-        hash.update(b"novena compute main interface 1 disk 1");
+        hash.update(interface);
         for field in [
             identity.version.as_bytes(),
             identity.configuration.as_bytes(),
@@ -254,6 +271,29 @@ mod tests {
             assert_ne!(first.directory, other.directory);
             assert!(other.load_translation(b"program").unwrap().is_none());
         }
+        let properties = vk::PhysicalDeviceProperties {
+            vendor_id: 123,
+            device_id: 456,
+            pipeline_cache_uuid: [7; 16],
+            ..Default::default()
+        };
+        let ids = vk::PhysicalDeviceIDProperties::default()
+            .device_uuid([1; 16])
+            .driver_uuid([2; 16]);
+        let graphics = DiskCache::for_interface(
+            &root,
+            &TranslationIdentity {
+                version: "v1".into(),
+                configuration: "options-a".into(),
+            },
+            &properties,
+            &ids,
+            b"novena graphics main interface 1 disk 1",
+        );
+        first.save_driver(&driver_bytes()).unwrap();
+        assert_ne!(first.directory, graphics.directory);
+        assert!(graphics.load_translation(b"program").unwrap().is_none());
+        assert!(graphics.load_driver().unwrap().is_none());
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -37,16 +37,32 @@ pub fn handler(name: &str) -> Option<Handler> {
     Some(match name {
         "nvnCommandBufferBindProgram" => |instance, _, r| {
             crate::api::resources::retry_pending(instance, r.x[1], "bind");
-            record(
-                instance,
-                0,
-                r,
-                RecordedCommand::Raw {
-                    function: 0,
-                    registers: r.x,
-                },
-            )
+            record(instance, 0, r, RecordedCommand::BindProgram(r.x[1]))
         },
+        "nvnCommandBufferBindVertexStreamState" | "nvnCommandBufferBindVertexAttribState" => {
+            |i, f, r| {
+                let kind = match crate::functions::name(f).unwrap() {
+                    "nvnCommandBufferBindVertexStreamState" => "VertexStreamState",
+                    "nvnCommandBufferBindVertexAttribState" => "VertexAttribState",
+                    _ => unreachable!("vertex state handler"),
+                };
+                // Signatures 0004 supports a direct stream-state object at count one.
+                // Direct attribute-state identity is the experiment choice in 0027.
+                // No object stride is inferred.
+                let settings = if r.x[1] == 1 {
+                    match i.objects.get(r.x[2]) {
+                        Some(Object::State {
+                            kind: actual,
+                            settings,
+                        }) if actual == kind => Some(settings),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                record(i, 0, r, RecordedCommand::BindState { kind, settings })
+            }
+        }
         "nvnCommandBufferSetRenderTargets" => |instance, _, r| {
             let count = r.x[1].min(16);
             let mut colors = Vec::with_capacity(count as usize);
@@ -63,6 +79,7 @@ pub fn handler(name: &str) -> Option<Handler> {
                 RecordedCommand::SetRenderTargets {
                     colors,
                     depth: r.x[4],
+                    views: [r.x[3], r.x[5]],
                 },
             )
         },

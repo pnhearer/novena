@@ -1,12 +1,109 @@
-# What a real draw still needs
+# Drawing support and open questions
 
-This document inventories the knowledge still missing before novena can execute a recorded draw. It uses only the facts in `docs/signatures` and `docs/provenance`. A statement marked as an implementation choice is not evidence about the target.
+Novena executes the first controlled non-indexed draw through its Vulkan queue
+path. Guest enum mappings remain open. The experiment uses an explicit host
+contract and original synthetic shaders. This document distinguishes that
+implementation from facts in `docs/signatures` and `docs/provenance`.
+
+## First draw
+
+With `vulkan`, a Rust host enables the experiment through
+`Instance::set_first_draw_contract`. `FirstDrawContract` supplies host-selected
+raw tokens for triangle-list topology, float4 attributes, no culling, RGBA8,
+a 2D target, and identity swizzle. These tokens do not establish guest enums.
+The test deliberately uses tokens outside the observed sets.
+No contract means a submitted draw returns `Unimplemented`.
+
+The supported recording has these limits:
+
+| Input | Executed behavior |
+| --- | --- |
+| `DrawArrays` | One instance, recorded first vertex and count, triangle list |
+| Vertex buffer | Stream zero, pool-resolved address, bounded size in the flat arena |
+| Vertex stream state | Count one, recorded positive stride, divisor explicitly zero |
+| Vertex attribute state | Count one, recorded stream zero and offset, host-selected float4 token |
+| Program | Exactly one translated vertex `main` and one fragment `main`, paired by SPIR-V execution model |
+| Shader interface | One 32-bit float4 vertex input, its reflected location, no user varyings, one float4 color output at location zero |
+| Color target | One pool-backed 2D base level, tightly packed RGBA8, no views, zero flags and depth-stencil mode, host-selected identity swizzle |
+| Viewport and scissor | Explicit zero origin, positive sizes bounded by the target, Vulkan pixel coordinates |
+| Color state | Target zero, blend enable explicitly zero, all channels written |
+| Depth and stencil state | Test, write, and stencil enable explicitly zero, no depth attachment |
+| Polygon state | Explicit host-selected no-cull token, fill mode and one sample |
+| Depth range | Vulkan interval zero through one, optional recorded interval must match |
+
+Bindings capture the recorded side-table settings, so later setters do not
+change an earlier binding. Count-one stream-state bindings identify the state
+object itself, as signatures 0004 describes. Direct attribute-state identity
+is an experiment choice. Its array layout remains open. No object stride is
+inferred.
+Each recording starts with empty draw state. State inheritance across recordings
+is open. Program translation is retained by program and read at submission.
+Program replacement, finalization, and late-read generation handling remain open.
+The existing shader reader's 0x40 record stride for count two remains an
+implementation assumption. The proof does not establish that stride for guests.
+
+Unsupported fields, missing explicit state, unknown recorded commands,
+resources, or unsupported shader interfaces return `Unimplemented`.
+Bad addresses, short vertex ranges, invalid sizes, and missing objects return
+`BadArgument`. Vulkan draw submission failures return `InternalError`.
+Pipeline creation failures return `Unimplemented`. Feature negotiation remains open. Indexed and instanced draws are open.
+The experiment rejects bound blend, channel-mask, and multisample objects whose
+fields it cannot interpret. Only the listed state fields are supported.
+The Rust experiment has no C configuration interface yet.
+
+Graphics compilation runs on bounded background workers. On first use, the
+executor queues the retained stage words and polls once. A queued, compiling
+or queue-full result skips only that draw and allows other commands to continue.
+Skipped draws are not replayed. Failures remain visible until explicit retry.
+This is a host scheduling choice, not observed guest behavior.
+
+A host enables private disk persistence outside submission with
+`Instance::set_graphics_pipeline_cache`, supplying a directory, translation
+identity and worker limits. Workers save checked driver-cache snapshots.
+Reopening loads compatible data or falls back to an empty cache. The graphics
+and compute caches share the persistence and worker implementation, with
+distinct interface namespaces. Graphics uses retained translations and does
+not translate again. Cache diagnostics and persistence statistics are available
+through the Rust instance. See [shader pipelines](pipelines.md).
+
+The backend creates a color-attachment image, loads its canonical arena bytes,
+uses a load/store render pass, and stores the rendered bytes back to the arena.
+The vertex binding references the arena buffer directly. Attachment transfers,
+vertex reads, and color writes have Vulkan memory dependencies. A fence keeps
+the pipeline, image view, framebuffer, and pool alive through completion.
+Presentation uses the existing offscreen blit and readback path.
+These are Novena implementation choices, not observations of target behavior.
+
+The optional proof runs with a selected translator checkout:
+
+```sh
+cargo test --features shadowbox --test shadowbox_drawing -- --ignored --nocapture
+```
+
+`NOVENA_SHADOWBOX_PATH` selects the separate translator crate. With that variable
+set, translation, SPIR-V validation, Vulkan availability, and pixel mismatches
+fail the test. Without it, the optional wrapper reports a skip.
+The proof records a padded vertex buffer with nonzero pool offset, first vertex,
+and attribute offset. It checks covered and uncovered pixels in presentation
+readback and canonical pool storage. Repeated draws reuse the pipeline.
+Changed fragment content creates a new pipeline and changes the pixels.
+The proof also checks driver-cache reopening, damaged-cache recovery and reuse
+from a fresh process.
+[Provenance 0027](../provenance/0027-drawing.md) records the sources and checks.
+
+All enum conversion beyond the host contract, additional attributes or streams,
+user varyings, formats, nonzero viewport origins, coordinate conversion,
+specialization overrides, textures, samplers, uniforms, index data, instancing,
+depth, stencil, blend, masks, culling, polygon variation, multisampling, views,
+array layers, additional levels, multiple targets and asynchronous draw
+submission remain open. The sections below list the observations
+needed to close these gaps.
 
 ## Vertex buffers and attribute formats
 
 The signatures establish one `BindVertexBuffer` shape with stream index 0, a GPU address, and a size. They establish counted arrays for `BindVertexStreamState` and `BindVertexAttribState`. `VertexStreamStateSetStride` takes a stride, `VertexStreamStateSetDivisor` takes 0 or 1, `VertexAttribStateSetFormat` takes a format-like value and an offset, and `VertexAttribStateSetStreamIndex` takes a stream index from 0 through 3. The first word behind a vertex stream state matches a stride value. See [command buffer state binding](../signatures/0002-command-buffer.md#state-binding), [vertex state objects](../signatures/0003-objects.md#state-objects), and [pointer arrays](../signatures/0004-pointers.md#arrays-of-objects).
 
-Missing knowledge includes the GPU address to host storage mapping for vertex data, the byte size and element interpretation of every attribute format, the location represented by each attribute state, the complete stream-state layout, and whether a divisor of 1 has instancing semantics. The recorded buffer address is a GPU address, so its usable host address needs pool resolution or another established mapping.
+Registered pools now resolve vertex addresses into the flat arena. The first draw proof checks that mapping with a nonzero offset. Missing knowledge includes the byte size and element interpretation of guest attribute formats, the location represented by each attribute state, the complete stream-state layout, and whether a divisor of 1 has instancing semantics. The recorded buffer address is a GPU address, so its usable host address needs pool resolution or another established mapping.
 
 The smallest useful observation is one draw with one vertex buffer and one attribute. Vary the attribute format, offset, stream index, and stride one at a time. Dump the state object at offset `+0x00` and later words with labels. Vary the vertex buffer pool offset and compare the draw's address with the pool base. Read the vertex bytes at the resolved offset and compare a known color or position change in the result.
 
@@ -86,7 +183,7 @@ The smallest useful observation is one draw whose color depends on one known con
 
 `ProgramSetShaders` takes a program, a count that was always 1 in the observations, and a pointer to shader records. Each record has wide values at `+0x00` and `+0x30`, addresses at `+0x08` and `+0x38`, and other observed words. The first wide value is now chosen by novena as the code location. Pool ranges resolve that GPU-shaped value, and a bounded read plus a zero scan can feed a registered `ShaderTranslator`. The translator receives an explicitly unknown stage. Successful SPIR-V and errors are retained per program. See [program shaders](../signatures/0007-program-shaders.md), [retained shader state](../signatures/0008-program-shader-state.md), [GPU address resolution](../provenance/0016-gpu-address-resolution.md), and [optional shader translation](../provenance/0017-shader-translation.md).
 
-Missing knowledge includes the record stride for counts other than 1, which wide value is code, code size, record stage, the meaning of the other fields, the mapping of `BindProgram` stage bits, and the pairing of translated stages with program inputs and outputs. The current first-value and unknown-stage choices are explicit implementation assumptions.
+Translated SPIR-V now pairs one vertex and one fragment stage within a program. Missing guest knowledge includes the record stride for counts other than 1, which wide value is code, code size, record stage, the meaning of the other fields, the mapping of `BindProgram` stage bits, and the pairing of translated stages with program inputs and outputs. The current first-value and unknown-stage choices are explicit implementation assumptions.
 
 The late-read behavior is a hypothesis, not an established observation: the
 maintainer measured shader records that resolve at `ProgramSetShaders` while
@@ -98,7 +195,7 @@ The smallest useful observation is a program with two shader records and a draw 
 
 ## Ordered first attempts
 
-1. Attempt a non-indexed draw with one vertex buffer, one attribute, one color target, no texture, no uniform buffer, depth and stencil disabled, blending disabled, culling disabled, and the simplest observed viewport and scissor. This still needs topology, attribute format, vertex address mapping, and shader stage pairing, but it avoids index, texture, sampler, uniform, depth, stencil, and blend knowledge.
+1. Implemented as the first draw experiment above: a non-indexed draw with one vertex buffer, one attribute, one color target, no texture or uniform buffer, and depth, stencil, blending, and culling disabled. Host tokens select topology and formats. Guest mappings and coordinate semantics remain open.
 2. Repeat the first draw with a second primitive value and a controlled vertex arrangement to establish topology.
 3. Add a second attribute and vary its format, offset, and stream state to establish vertex decoding.
 4. Add uniform data after its bank mapping is observed.

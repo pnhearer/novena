@@ -218,6 +218,99 @@ impl Instance {
         self.host.as_ref()
     }
 
+    /// Enable the bounded first draw experiment with explicit host enum choices.
+    /// Returns false when this instance has no Vulkan backend.
+    #[cfg(feature = "vulkan")]
+    pub fn set_first_draw_contract(
+        &self,
+        contract: Option<crate::gpu::graphics::FirstDrawContract>,
+    ) -> bool {
+        let mut gpu = self.gpu.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(backend) = gpu.as_mut() else {
+            return false;
+        };
+        backend.first_draw = contract;
+        true
+    }
+
+    #[cfg(feature = "vulkan")]
+    pub fn graphics_cache_stats(&self) -> Option<crate::gpu::pipelines::CacheStats> {
+        self.gpu
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map(|backend| backend.graphics.stats())
+    }
+
+    /// Configure private persistent graphics cache files and a bounded worker pool.
+    /// Call outside queue submission. Reconfiguration drains the previous workers.
+    #[cfg(feature = "vulkan")]
+    pub fn set_graphics_pipeline_cache(
+        &self,
+        directory: &std::path::Path,
+        identity: &crate::gpu::pipelines::TranslationIdentity,
+        worker_count: usize,
+        queue_capacity: usize,
+    ) -> Result<(), String> {
+        let mut gpu = self.gpu.lock().unwrap_or_else(|p| p.into_inner());
+        let backend = gpu.as_mut().ok_or("Vulkan backend is unavailable")?;
+        backend.graphics = crate::gpu::graphics::GraphicsPipelines::persistent(
+            backend.context(),
+            directory,
+            identity,
+            worker_count,
+            queue_capacity,
+        )?;
+        Ok(())
+    }
+
+    /// Queued and compiling graphics requests. Polling performs no disk I/O.
+    #[cfg(feature = "vulkan")]
+    pub fn graphics_pending_count(&self) -> Option<usize> {
+        self.gpu
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map(|backend| backend.graphics.pending())
+    }
+
+    #[cfg(feature = "vulkan")]
+    pub fn graphics_persistence_stats(&self) -> Option<crate::gpu::pipelines::PersistenceStats> {
+        self.gpu
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map(|backend| backend.graphics.persistence_stats())
+    }
+
+    /// Collect cache diagnostics away from queue submission.
+    #[cfg(feature = "vulkan")]
+    pub fn take_graphics_cache_diagnostics(&self) -> Vec<String> {
+        self.gpu
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map(|backend| backend.graphics.take_diagnostics())
+            .unwrap_or_default()
+    }
+
+    /// Explicitly forget a failed compilation, retaining all successful requests.
+    #[cfg(feature = "vulkan")]
+    pub fn retry_graphics_pipeline(
+        &self,
+        stages: &[Vec<u32>],
+        stride: u32,
+        offset: u32,
+    ) -> Result<bool, String> {
+        self.gpu
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_mut()
+            .ok_or("Vulkan backend is unavailable")?
+            .graphics
+            .retry_failed(stages, stride, offset)
+    }
+
     pub fn set_shader_translator(&self, translator: Option<Arc<dyn ShaderTranslator>>) {
         *self
             .shader_translator

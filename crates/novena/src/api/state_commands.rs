@@ -531,8 +531,6 @@ mod tests {
             missing,
             [
                 "nvnCommandBufferBindSeparateSampler",
-                "nvnCommandBufferBindVertexAttribState",
-                "nvnCommandBufferBindVertexStreamState",
                 "nvnCommandBufferClearTexture",
                 "nvnCommandBufferFenceSync",
                 "nvnCommandBufferRestoreZCullData",
@@ -541,12 +539,17 @@ mod tests {
                 "nvnDeviceGetProcAddress",
             ]
         );
-        assert_eq!(missing.len() + NAMES.len(), 26);
+        let vertex_bindings = [
+            "nvnCommandBufferBindVertexAttribState",
+            "nvnCommandBufferBindVertexStreamState",
+        ];
+        assert_eq!(missing.len() + NAMES.len() + vertex_bindings.len(), 26);
 
         let baseline: std::collections::BTreeSet<_> = missing
             .iter()
             .copied()
             .chain(NAMES.iter().copied())
+            .chain(vertex_bindings)
             .collect();
         let census = include_str!("../../../../docs/census/0001-program-a-startup.txt");
         let counts: std::collections::BTreeMap<_, _> = census

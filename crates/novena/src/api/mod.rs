@@ -11,6 +11,8 @@
 
 mod commands;
 mod device;
+#[cfg(feature = "vulkan")]
+mod drawing;
 mod memory;
 mod objects;
 mod queue;

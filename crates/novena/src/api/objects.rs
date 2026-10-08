@@ -15,6 +15,12 @@ pub enum RecordedCommand {
     SetRenderTargets {
         colors: Vec<u64>,
         depth: u64,
+        views: [u64; 2],
+    },
+    BindProgram(u64),
+    BindState {
+        kind: &'static str,
+        settings: Option<Vec<(&'static str, [u64; 6])>>,
     },
     ClearColor {
         index: u32,

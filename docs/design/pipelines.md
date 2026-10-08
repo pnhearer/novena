@@ -7,9 +7,9 @@ identify state, while program contents identify reusable compiled code.
 The compute service provides content caching, optional disk persistence, a
 bounded background compiler pool and a command recording helper in
 `gpu::pipelines`, behind `vulkan`. An optional `shadowbox` feature enables its
-translated GPU proof. Graphics pipelines and execution of guest command-buffer
-dispatch records are later stages.
-The existing guest queue path still executes clears and copies as before.
+translated GPU proof. The bounded graphics experiment in [drawing](drawing.md)
+uses the same disk-cache and worker machinery. Guest command-buffer dispatch
+execution remains open. The queue executes clears, copies and ready draws in order.
 
 ## Program capture and translation boundary
 
@@ -47,7 +47,7 @@ with a configured checkout fail the proof.
 ## Descriptor layouts
 
 Each reflected resource contributes its set, binding, descriptor type and count.
-Compute declarations use `VK_SHADER_STAGE_COMPUTE_BIT`. A graphics layout will
+Compute declarations use `VK_SHADER_STAGE_COMPUTE_BIT`. Later graphics descriptor support will
 merge stage declarations by set and binding, require matching types and counts,
 and union stage visibility. Conflicts fail layout derivation.
 
@@ -80,8 +80,9 @@ descriptor array. Empty intervening sets retain empty layouts so set numbers
 stay unchanged.
 
 Layout creation checks supported set layouts and device limits for set count,
-each descriptor type, and per-stage resources. The inspector accepts one compute
-entry point named `main`. It checks instruction lengths and supported interface
+each descriptor type, and per-stage resources. The compute inspector accepts one compute
+entry point named `main`. Graphics shares its resource inspector and accepts
+exactly one vertex and one fragment `main`, with no descriptors in this stage. It checks instruction lengths and supported interface
 shapes. It does not replace SPIR-V validation or general capability negotiation.
 The optional GPU proof runs `spirv-val --target-env vulkan1.2` before Vulkan.
 
@@ -150,14 +151,71 @@ record after successful creation. Failed fresh translations are never persisted.
 A translation hit avoids the translator; it does not reuse a Vulkan handle
 across processes.
 
-This service does not yet replace eager translation during ProgramSetShaders
-or its late-read retry path. Guest dispatch and graphics execution still need
+The compute service does not yet replace eager translation during
+ProgramSetShaders or its late-read retry path. Guest dispatch still needs
 established binding and state contracts. A future integration must capture
 once, request compilation through this service, and retain the request handle
-instead of translating twice. A graphics key will also need all stage contents,
-specialization values, descriptor compatibility, attachment formats, sample
-count and established static render state. Dynamic viewport and scissor values
-stay outside that key.
+instead of translating twice. The bounded graphics key below includes its
+supported state. Expanding it requires specialization values, descriptor
+compatibility, attachment formats, sample count and every additional static
+render state. Dynamic viewport and scissor values stay outside that key.
+
+## Graphics cache
+
+The backend owns `GraphicsPipelines` beside its image and arena state.
+It uses retained translated words from the bound program, so queue execution
+does not translate again. SPIR-V execution models pair stages independently of
+record order and the unresolved `BindProgram` mask.
+
+The content key contains the complete vertex and fragment words, stride, and
+attribute offset. Full equality prevents hash collisions from aliasing code.
+Input location comes from the vertex module. The supported output is location
+zero in RGBA8 with one sample. Triangle list, float4 format, no culling, no
+blend, and no depth or stencil are fixed for this cache. Their constancy makes
+them implicit key fields. Changing that scope requires extending the key.
+Guest addresses, vertex buffer contents, viewport, and scissor stay outside it.
+Specialization uses emitted defaults. Overrides remain open.
+
+The graphics service shares the bounded worker and guarded driver-cache
+implementation with compute. The compute and graphics interface domains have
+separate disk namespaces. Graphics keys use retained translated words, so
+graphics workers never invoke the translator or persist translation records.
+
+A content hit shares an owned request before reflection and Vulkan creation.
+A miss queues the owned stage words and vertex input. The worker checks both
+stages, rejects descriptors, creates a push layout and load/store render pass,
+and creates the pipeline through the guarded driver cache. Temporary modules
+are destroyed on success and failure. Successful work snapshots the driver
+cache on the worker. Failed requests stay visible until explicit retry.
+`Arc` keeps pipelines and render passes alive until draw completion.
+
+The default graphics service has two workers and room for 64 waiting jobs.
+A Rust host calls `Instance::set_graphics_pipeline_cache` with a private
+directory, translation identity, worker count and queue capacity to enable
+disk persistence. Configure outside submission. Reconfiguration drains old
+workers before releasing their driver cache. Loading uses the same checked
+envelope, device identity and empty-cache fallback as compute.
+`graphics_pending_count` reports outstanding jobs; persistence statistics and
+`take_graphics_cache_diagnostics` expose disk loading and bounded diagnostics.
+`retry_graphics_pipeline` explicitly forgets a failed content request.
+
+Draw execution requests a pipeline and polls once. Queued, compiling or
+queue-full work skips only that draw, with no wait or cache I/O on submission.
+Other commands continue and the skipped draw is not replayed. A failed request
+returns `Unimplemented`. This is the host policy in provenance 0026, not an
+established guest semantic or equivalent output guarantee.
+
+The first queue executor requires explicit recorded disable flags and a host
+`FirstDrawContract` for unresolved tokens. It resolves the vertex slice through
+registered pools and checks the last fetched attribute, including first vertex,
+stride, and offset. Attachment bytes load from and store to the flat arena.
+Draws finish on a fence before temporary views and framebuffers are destroyed.
+Completed earlier operations download their bytes even if a later command in
+the submission fails. Later draws cannot silently consume unsupported state.
+
+The translated triangle proof covers recording, queue submission, arena storage,
+presentation, readback, state snapshots, content hits, and changed-content misses.
+[Provenance 0027](../provenance/0027-drawing.md) records this stage.
 
 ## Driver cache persistence
 
@@ -222,8 +280,8 @@ and compilation latency later before choosing a final rendering policy.
 A program replacement retains its new request handle. An old completion only
 updates its own handle, so it cannot replace the current program. Future guest
 integration should prewarm at ProgramSetShaders and retry capture when code
-becomes readable. Graphics execution and that guest integration remain later
-stages; the current guest path still skips draws.
+becomes readable. Compute guest integration remains open. The bounded graphics
+path uses retained translations and this same request policy.
 
 Queue submission stays on the executor. A submission owner retains pipelines,
 descriptor pools, resource allocations and command pools until its fence
@@ -236,7 +294,7 @@ completion tracking before destruction.
 
 The following limits come from signatures 0002 and
 [draw state 0009](../signatures/0009-draw-state.md). They define the input facts
-for a future graphics builder, not executable enum conversions.
+for graphics. The first draw host contract supplies the still-open conversions.
 
 | Recorded input | Vulkan destination after validation | Evidence still needed |
 | --- | --- | --- |
@@ -252,8 +310,9 @@ for a future graphics builder, not executable enum conversions.
 Derive shader stage from translation output, not the guest BindProgram mask.
 The mask has observed one-bit values but no established Vulkan-stage mapping.
 Keep unknown state raw and return an unsupported result when execution depends
-on it. No primitive, index width, attribute format, blend factor, comparison,
-culling mode or origin convention is guessed in this stage.
+on it. No guest primitive, index width, attribute format, blend factor, comparison,
+culling mode, or origin convention is inferred. The first draw experiment
+executes only its explicit host choices.
 
 DispatchCompute has a likely three-integer argument shape in signatures 0002.
 The host-side helper takes explicit Vulkan workgroup counts. Guest dispatch
@@ -288,9 +347,9 @@ worker pool, verifies reuse and executes it after the pool has been dropped. Ref
 sparse bindings, runtime buffer members and unsupported interfaces.
 
 [Provenance 0025](../provenance/0025-compute-pipelines.md) records the sources and
-verification. GPU texture and storage-image descriptor use and graphics
-execution still require later proofs. Persistent cache recovery and
-worker scheduling have separate original host tests:
+verification. GPU texture and storage-image descriptor use and graphics beyond
+the bounded draw contract still require later proofs. Persistent cache recovery
+and worker scheduling have separate original host tests:
 
 ```sh
 cargo test --features vulkan --test pipeline_cache -- --include-ignored --nocapture

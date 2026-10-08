@@ -9,9 +9,11 @@ use std::ffi::CString;
 use std::sync::Arc;
 
 mod commands;
+pub mod graphics;
 mod images;
 mod memory;
 mod pipeline_disk;
+mod pipeline_workers;
 mod present;
 use images::{Image, Images};
 use present::Window;
@@ -77,6 +79,8 @@ pub struct Context {
 }
 
 pub struct Backend {
+    pub(crate) first_draw: Option<graphics::FirstDrawContract>,
+    pub(crate) graphics: graphics::GraphicsPipelines,
     windows: HashMap<u64, Window>,
     offscreen: Option<Image>,
     images: Images,
@@ -94,6 +98,8 @@ impl Backend {
     fn from_context(context: Arc<Context>, scale: f32) -> Option<Self> {
         let images = Images::new(&context)?;
         Some(Self {
+            first_draw: None,
+            graphics: graphics::GraphicsPipelines::new(&context)?,
             windows: HashMap::new(),
             offscreen: None,
             images,
@@ -253,6 +259,18 @@ impl Backend {
             self.sync_texture(key, false)
         })()
         .is_some()
+    }
+
+    pub(crate) fn draw(
+        &mut self,
+        texture: u64,
+        pipeline: &graphics::GraphicsPipeline,
+        draw: &graphics::Draw,
+    ) -> Option<()> {
+        self.sync_texture(texture, true)?;
+        self.images
+            .draw(texture, pipeline, self.global_memory.as_ref()?, draw)?;
+        self.sync_texture(texture, false)
     }
 
     pub fn readback(&mut self, key: u64) -> Option<(u32, u32, Vec<u8>)> {
