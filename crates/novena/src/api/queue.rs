@@ -334,6 +334,7 @@ pub fn handler(name: &str) -> Option<Handler> {
                         | RecordedCommand::DrawArrays { .. }
                         | RecordedCommand::DrawArraysInstanced { .. }
                         | RecordedCommand::DrawElementsBaseVertex { .. }
+                        | RecordedCommand::State(_)
                         | RecordedCommand::Raw { .. } => {}
                     }
                 }

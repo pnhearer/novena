@@ -57,10 +57,55 @@ pub enum RecordedCommand {
         indices: u64,
         base_vertex: u32,
     },
+    /// State retained without execution. Provenance: note 0026.
+    State(StateCommand),
     Raw {
         function: u32,
         registers: [u64; 8],
     },
+}
+
+/// Firm recording fields from signatures 0010. Values stay opaque and wide;
+/// this representation does not assign enumeration meanings or integer widths.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StateCommand {
+    BindState {
+        kind: &'static str,
+        address: u64,
+        /// Snapshot of settings known through earlier setter calls. An unknown
+        /// object stays unknown; its program-memory layout is never guessed.
+        settings: Option<Vec<(&'static str, [u64; 6])>>,
+    },
+    Stencil {
+        setting: &'static str,
+        faces: u64,
+        value: u64,
+    },
+    Barrier(u64),
+    TiledCacheAction(u64),
+    BindUniformBuffer {
+        stage: u64,
+        index: u64,
+        address: u64,
+        size: u64,
+    },
+    BindVertexBuffer {
+        index: u64,
+        address: u64,
+        size: u64,
+    },
+    BindHandle {
+        kind: &'static str,
+        stage: u64,
+        index: u64,
+        handle: u64,
+    },
+    ClearBuffer {
+        address: u64,
+        size: u64,
+        value: u64,
+    },
+    DispatchCompute([u64; 3]),
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

@@ -17,6 +17,7 @@ mod queue;
 mod recording;
 mod resources;
 mod state;
+mod state_commands;
 
 use crate::functions::FunctionId;
 use crate::instance::{Instance, Registers, Status};
@@ -34,6 +35,7 @@ pub fn handler(name: &str) -> Option<Handler> {
         .or_else(|| resources::handler(name))
         .or_else(|| state::handler(name))
         .or_else(|| recording::handler(name))
+        .or_else(|| state_commands::handler(name))
         .or_else(|| commands::handler(name))
 }
 
@@ -89,7 +91,7 @@ mod tests {
     #[test]
     fn every_handler_name_is_in_the_function_table() {
         // A handler for a name the table does not have would never run.
-        for name in ALL_HANDLED {
+        for name in ALL_HANDLED.iter().chain(state_commands::NAMES) {
             assert!(functions::lookup(name).is_some(), "{name}");
             assert!(handler(name).is_some(), "{name}");
         }

@@ -27,3 +27,4 @@ A register that looked like a leftover from an earlier call is not listed as an 
 | [0007-program-shaders.md](0007-program-shaders.md) | The shader setup call and its record |
 | [0008-program-shader-state.md](0008-program-shader-state.md) | Retained shader record state and open fields |
 | [0009-shader-memory-layout.md](0009-shader-memory-layout.md) | Observed shader prefix, header, and code offsets |
+| [0010-remaining-command-state.md](0010-remaining-command-state.md) | Census gaps, firm state recording and unresolved argument contracts |
