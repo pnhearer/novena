@@ -7,6 +7,10 @@ Sources: [census 0001](../census/0001-program-a-startup.txt),
 Method, implementation choices and limits:
 [provenance 0026](../provenance/0026-remaining-command-state.md).
 
+This records the first pass. [Signatures 0011](0011-command-evidence.md)
+revisits all eight unresolved commands and the resolver, adds six likely
+state-only recording contracts, and accounts for the three remaining gaps.
+
 On entry to this work, comparison with `crates/novena/src/api` gives **25
 command calls** with only the generic raw recorder, which returns
 `Unimplemented`, and **one resolver** with no handler. That is 26 of the 168
@@ -76,8 +80,9 @@ fields is decoded.
 
 ## Calls kept unresolved
 
-These eight commands retain the earlier raw recording and `Unimplemented`
-status. The resolver remains a host responsibility. Firm facts within an
+At the end of this first pass these eight commands retained the earlier raw
+recording and `Unimplemented` status. The resolver remained a host
+responsibility. Firm facts within an
 entry do not establish enough of its contract for a successful state handler.
 
 | Function | Census calls | Arguments and pointer targets | Result | Confidence | Evidence and objects touched |

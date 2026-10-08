@@ -91,7 +91,18 @@ impl State {
             }) => {
                 self.buffers.insert(stream, (address, size));
             }
-            RecordedCommand::BindVertexStates { kind, settings } => {
+            RecordedCommand::State(StateCommand::BindStates {
+                kind,
+                count,
+                first_settings,
+                experiment_settings,
+                ..
+            }) => {
+                let settings = experiment_settings.or_else(|| match count {
+                    0 => Some(Vec::new()),
+                    1 => first_settings.map(|settings| vec![settings]),
+                    _ => None,
+                });
                 self.vertex_states.insert(kind, settings);
             }
             RecordedCommand::BindState { kind, settings }

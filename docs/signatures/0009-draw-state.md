@@ -9,8 +9,8 @@ It does not assign meanings to enumerations or describe unobserved layouts.
 | DrawArraysInstanced | commands, primitive, first, count, baseInstance, instances; primitive 5, first 0, count 4, baseInstance 0, final values 0x20 or 0x40; order guessed | An instanced non-indexed draw has this shape | Final argument order and instance semantics |
 | DrawElementsBaseVertex | commands, primitive, indexType, count, indices, baseVertex; primitive 4, index type 1 or 2, count 3 or 6, wide indices, base vertex 0 | An indexed draw has this shape | Index meanings, memory layout, primitive semantics |
 | BindVertexBuffer | commands, index, buffer, size; index 0, wide buffer, size | A vertex stream can be bound by index, address, and size | Address and element layout |
-| BindVertexStreamState | commands, count, states; count 1 and one of four state addresses | Vertex stream state is a counted pointer array | State layout and field meanings |
-| BindVertexAttribState | commands, count, states; count 1, 2, or 5 and one of four state addresses | Vertex attributes are a counted pointer array | State layout and field meanings |
+| BindVertexStreamState | commands, count, states; count 1 and one of four state addresses | Likely counted inline state storage, see signatures 0011 | Element stride, state layout and field meanings |
+| BindVertexAttribState | commands, count, states; count 1, 2, or 5 and one of four state addresses | Likely counted state storage, see signatures 0011 | Element layout and field meanings; an array of addresses is not established |
 | SetViewport | commands, x, y, width, height; x and y always zero; sizes include 0x500 by 0x2d0 and 0x780 by 0x438 | A viewport has integer origin and size | Coordinate and depth convention |
 | SetScissor | Same shape as SetViewport; x and y always zero and final values are sizes | A scissor has integer origin and size | Bounds and coordinate convention |
 | BindBlendState, BindChannelMaskState, BindColorState | commands, state; addresses observed | Blend and color state are bound objects | Layout, enable, factors, operations, masks |

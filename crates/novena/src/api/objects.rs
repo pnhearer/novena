@@ -22,10 +22,6 @@ pub enum RecordedCommand {
         kind: &'static str,
         settings: Option<Vec<(&'static str, [u64; 6])>>,
     },
-    BindVertexStates {
-        kind: &'static str,
-        settings: Option<Vec<StateSettings>>,
-    },
     ClearColor {
         index: u32,
         color: [f32; 4],
@@ -77,7 +73,7 @@ pub enum RecordedCommand {
 
 pub type StateSettings = Vec<(&'static str, [u64; 6])>;
 
-/// Firm recording fields from signatures 0010. Values stay opaque and wide;
+/// Recording fields from signatures 0010 and 0011. Values stay opaque and wide;
 /// this representation does not assign enumeration meanings or integer widths.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StateCommand {
@@ -87,6 +83,36 @@ pub enum StateCommand {
         /// Snapshot of settings known through earlier setter calls. An unknown
         /// object stays unknown; its program-memory layout is never guessed.
         settings: Option<Vec<(&'static str, [u64; 6])>>,
+    },
+    BindStates {
+        kind: &'static str,
+        count: u64,
+        address: u64,
+        /// Only the object at the supplied base address is known. No element
+        /// stride or pointer-array layout is inferred for subsequent elements.
+        first_settings: Option<StateSettings>,
+        /// Bounded snapshots using explicit host spacing, only for opt-in drawing.
+        /// This does not establish a program-memory layout. Provenance 0028.
+        experiment_settings: Option<Vec<StateSettings>>,
+    },
+    BindSamplerReference {
+        stage: u64,
+        index: u64,
+        /// May be a handle or a pointer. Neither interpretation is decoded.
+        reference: u64,
+    },
+    FenceSync {
+        sync: u64,
+        condition: u64,
+        flags: u64,
+    },
+    SaveZCullData {
+        address: u64,
+        size: u64,
+    },
+    RestoreZCullData {
+        address: u64,
+        size: u64,
     },
     Stencil {
         setting: &'static str,

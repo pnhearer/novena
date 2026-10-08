@@ -1,4 +1,4 @@
-//! State-only command recording. Signatures 0010, provenance notes 0026 and 0028.
+//! Command-state recording. Signatures 0010 and 0011, provenance notes 0026 and 0028.
 //! Polygon offset retains a raw three-register hypothesis for opt-in execution.
 //! No command here executes, writes
 //! program memory, signals synchronization, or allocates rendering resources.
@@ -32,6 +32,12 @@ pub(super) const NAMES: &[&str] = &[
     "nvnCommandBufferBindImage",
     "nvnCommandBufferClearBuffer",
     "nvnCommandBufferDispatchCompute",
+    "nvnCommandBufferBindVertexAttribState",
+    "nvnCommandBufferBindVertexStreamState",
+    "nvnCommandBufferBindSeparateSampler",
+    "nvnCommandBufferFenceSync",
+    "nvnCommandBufferSaveZCullData",
+    "nvnCommandBufferRestoreZCullData",
 ];
 
 pub fn handler(name: &str) -> Option<Handler> {
@@ -70,6 +76,81 @@ fn record_state(instance: &Instance, function: FunctionId, r: &mut Registers) ->
             value: r.x[2],
         },
         "SetPolygonOffsetClamp" => StateCommand::PolygonOffset([r.d[0], r.d[1], r.d[2]]),
+        "BindVertexAttribState" | "BindVertexStreamState" => {
+            let kind = name.strip_prefix("Bind").expect("binding");
+            let first_settings = if r.x[1] == 0 {
+                None
+            } else {
+                match instance.objects.get(r.x[2]) {
+                    Some(Object::State {
+                        kind: actual,
+                        settings,
+                    }) if actual == kind => Some(settings),
+                    _ => None,
+                }
+            };
+            // Counted object spacing is a host choice, not a guest layout. 0028.
+            #[cfg(feature = "vulkan")]
+            let stride = instance
+                .gpu
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_ref()
+                .and_then(|gpu| gpu.first_draw.as_ref())
+                .and_then(|contract| {
+                    if kind == "VertexAttribState" {
+                        contract.attribute_state_stride
+                    } else {
+                        contract.stream_state_stride
+                    }
+                });
+            #[cfg(not(feature = "vulkan"))]
+            let stride: Option<u64> = None;
+            let count = r.x[1];
+            let address = r.x[2];
+            let experiment_settings =
+                (count <= 16 && stride.is_some() && (count <= 1 || stride != Some(0)))
+                    .then(|| {
+                        (0..count)
+                            .map(|index| {
+                                let at = index.checked_mul(stride?)?.checked_add(address)?;
+                                match instance.objects.get(at) {
+                                    Some(Object::State {
+                                        kind: actual,
+                                        settings,
+                                    }) if actual == kind => Some(settings),
+                                    _ => None,
+                                }
+                            })
+                            .collect::<Option<Vec<_>>>()
+                    })
+                    .flatten();
+            StateCommand::BindStates {
+                kind,
+                count: r.x[1],
+                address: r.x[2],
+                first_settings,
+                experiment_settings,
+            }
+        }
+        "BindSeparateSampler" => StateCommand::BindSamplerReference {
+            stage: r.x[1],
+            index: r.x[2],
+            reference: r.x[3],
+        },
+        "FenceSync" => StateCommand::FenceSync {
+            sync: r.x[1],
+            condition: r.x[2],
+            flags: r.x[3],
+        },
+        "SaveZCullData" => StateCommand::SaveZCullData {
+            address: r.x[1],
+            size: r.x[2],
+        },
+        "RestoreZCullData" => StateCommand::RestoreZCullData {
+            address: r.x[1],
+            size: r.x[2],
+        },
         "Barrier" => StateCommand::Barrier(r.x[1]),
         "SetTiledCacheAction" => StateCommand::TiledCacheAction(r.x[1]),
         "BindUniformBuffer" => StateCommand::BindUniformBuffer {
@@ -239,6 +320,56 @@ mod tests {
                 },
             ),
             ("CommandBufferDispatchCompute", DispatchCompute([a, b, c])),
+            (
+                "CommandBufferBindVertexAttribState",
+                BindStates {
+                    kind: "VertexAttribState",
+                    count: a,
+                    address: b,
+                    first_settings: None,
+                    experiment_settings: None,
+                },
+            ),
+            (
+                "CommandBufferBindVertexStreamState",
+                BindStates {
+                    kind: "VertexStreamState",
+                    count: a,
+                    address: b,
+                    first_settings: None,
+                    experiment_settings: None,
+                },
+            ),
+            (
+                "CommandBufferBindSeparateSampler",
+                BindSamplerReference {
+                    stage: a,
+                    index: b,
+                    reference: c,
+                },
+            ),
+            (
+                "CommandBufferFenceSync",
+                FenceSync {
+                    sync: a,
+                    condition: b,
+                    flags: c,
+                },
+            ),
+            (
+                "CommandBufferSaveZCullData",
+                SaveZCullData {
+                    address: a,
+                    size: b,
+                },
+            ),
+            (
+                "CommandBufferRestoreZCullData",
+                RestoreZCullData {
+                    address: a,
+                    size: b,
+                },
+            ),
         ];
         for (suffix, _) in &cases {
             let mut r = Registers {
@@ -332,6 +463,123 @@ mod tests {
         }
         assert_eq!(end(&instance, 0x200), expected);
         assert_eq!(instance.objects.get(0x999), None);
+    }
+
+    #[test]
+    fn counted_bindings_snapshot_only_the_known_base_object() {
+        let instance = Instance::new();
+        start(&instance, 0x200);
+        let mut expected = Vec::new();
+        for kind in ["VertexAttribState", "VertexStreamState"] {
+            let mut r = Registers::default();
+            r.x[0] = 0x300;
+            assert_eq!(
+                call(&instance, &format!("{kind}SetDefaults"), &mut r),
+                Status::Ok
+            );
+            let setting = if kind == "VertexAttribState" {
+                "StreamIndex"
+            } else {
+                "Stride"
+            };
+            for value in [1, 2] {
+                r = Registers::default();
+                r.x[0] = 0x300;
+                r.x[1] = value;
+                assert_eq!(
+                    call(&instance, &format!("{kind}Set{setting}"), &mut r),
+                    Status::Ok
+                );
+                r.x[..3].copy_from_slice(&[0x200, 5, 0x300]);
+                assert_eq!(
+                    call(&instance, &format!("CommandBufferBind{kind}"), &mut r),
+                    Status::Ok
+                );
+                expected.push(RecordedCommand::State(StateCommand::BindStates {
+                    kind,
+                    count: 5,
+                    address: 0x300,
+                    first_settings: Some(
+                        (1..=value).map(|v| (setting, [v, 0, 0, 0, 0, 0])).collect(),
+                    ),
+                    experiment_settings: None,
+                }));
+            }
+            // Zero count, unknown base and another state family stay opaque.
+            instance.objects.put(
+                0x400,
+                Object::State {
+                    kind: "BlendState",
+                    settings: vec![],
+                },
+            );
+            for (count, address) in [(0, 0x300), (0, 0), (2, 0x999), (1, 0x400)] {
+                r.x[..3].copy_from_slice(&[0x200, count, address]);
+                assert_eq!(
+                    call(&instance, &format!("CommandBufferBind{kind}"), &mut r),
+                    Status::Ok
+                );
+                expected.push(RecordedCommand::State(StateCommand::BindStates {
+                    kind,
+                    count,
+                    address,
+                    first_settings: None,
+                    experiment_settings: None,
+                }));
+            }
+        }
+        assert_eq!(end(&instance, 0x200), expected);
+        assert_eq!(instance.objects.get(0x999), None);
+    }
+
+    #[test]
+    fn new_handlers_never_follow_references_and_respect_recording_lifetimes() {
+        use crate::instance::Host;
+        use std::{
+            ffi::c_void,
+            sync::atomic::{AtomicU64, Ordering},
+        };
+
+        unsafe extern "C" fn read(user: *mut c_void, _: u64, _: *mut u8, _: u64) -> i32 {
+            // SAFETY: user points to the live counter below.
+            unsafe { &*user.cast::<AtomicU64>() }.fetch_add(1, Ordering::Relaxed);
+            1
+        }
+        let mut reads = Box::new(AtomicU64::new(0));
+        // SAFETY: the counter outlives the instance and is safe to share.
+        let instance = unsafe {
+            Instance::with_host(Host {
+                user: (&mut *reads as *mut AtomicU64).cast(),
+                read_memory: Some(read),
+                ..Host::default()
+            })
+        };
+        for name in &NAMES[17..] {
+            start(&instance, 0x200);
+            start(&instance, 0x300);
+            reads.store(0, Ordering::Relaxed);
+            let id = functions::lookup(name).unwrap();
+            let mut r = Registers::default();
+            // Direct handler calls exclude the independent shape observer,
+            // which samples readable registers in Instance::call.
+            for address in [0x200, 0x300] {
+                r.x = [address, u64::MAX, u64::MAX, u64::MAX, 4, 5, 6, 7];
+                assert_eq!(record_state(&instance, id, &mut r), Status::Ok);
+            }
+            assert_eq!(reads.load(Ordering::Relaxed), 0, "{name}");
+            let first = end(&instance, 0x200);
+            assert_eq!(first.len(), 1, "{name}");
+            // Calls after EndRecording do not enter the next recording.
+            r.x[..4].copy_from_slice(&[0x200, 1, 2, 3]);
+            assert_eq!(record_state(&instance, id, &mut r), Status::Ok);
+            r.x[0] = 0x200;
+            assert_eq!(
+                call(&instance, "CommandBufferBeginRecording", &mut r),
+                Status::Ok
+            );
+            assert!(end(&instance, 0x200).is_empty());
+            assert_eq!(end(&instance, 0x300), first, "{name}");
+        }
     }
 
     #[test]
@@ -488,6 +736,8 @@ mod tests {
             observed_gpu_address: None,
         };
         instance.objects.put(0x600, pool.clone());
+        let sync = Object::Sync { device: 0x100 };
+        instance.objects.put(0x8000, sync.clone());
         start(&instance, 0x200);
         for name in NAMES {
             let mut r = Registers::default();
@@ -522,6 +772,7 @@ mod tests {
         assert_eq!(memory.writes.load(Ordering::Relaxed), 0);
         assert_eq!(memory.buffer, [0xa5; 16]);
         assert_eq!(instance.objects.get(0x600), Some(pool));
+        assert_eq!(instance.objects.get(0x8000), Some(sync));
         assert_eq!(
             pixels.lock().unwrap().as_ref().unwrap().pixels,
             [11, 22, 33, 44]
@@ -556,20 +807,37 @@ mod tests {
         assert_eq!(called, 168);
         assert_eq!(
             missing,
-            [
-                "nvnCommandBufferBindSeparateSampler",
-                "nvnCommandBufferClearTexture",
-                "nvnCommandBufferFenceSync",
-                "nvnCommandBufferRestoreZCullData",
-                "nvnCommandBufferSaveZCullData",
-                "nvnDeviceGetProcAddress",
-            ]
+            ["nvnCommandBufferClearTexture", "nvnDeviceGetProcAddress",]
         );
         let vertex_bindings = [
             "nvnCommandBufferBindVertexAttribState",
             "nvnCommandBufferBindVertexStreamState",
         ];
-        assert_eq!(missing.len() + NAMES.len() + vertex_bindings.len(), 26);
+        assert_eq!(missing.len() + NAMES.len(), 26);
+
+        let follow_up = include_str!("../../../../docs/signatures/0011-command-evidence.md");
+        let rows: Vec<_> = follow_up
+            .lines()
+            .filter(|line| {
+                line.starts_with("| CommandBuffer") || line.starts_with("| DeviceGetProcAddress")
+            })
+            .map(|line| line.split('|').map(str::trim).collect::<Vec<_>>())
+            .filter(|cells| cells[2].parse::<u64>().is_ok())
+            .collect();
+        let revisited: std::collections::BTreeSet<_> = rows
+            .iter()
+            .map(|cells| format!("nvn{}", cells[1]))
+            .collect();
+        assert_eq!(rows.len(), 9);
+        assert_eq!(
+            revisited,
+            missing
+                .iter()
+                .chain(&NAMES[18..])
+                .chain(&["nvnCommandBufferSetPolygonOffsetClamp"])
+                .map(|name| name.to_string())
+                .collect()
+        );
 
         let baseline: std::collections::BTreeSet<_> = missing
             .iter()
@@ -585,6 +853,14 @@ mod tests {
                 (fields.len() == 3).then(|| (fields[2], fields[0]))
             })
             .collect();
+        for cells in rows {
+            let name = format!("nvn{}", cells[1]);
+            assert_eq!(
+                counts[name.as_str()],
+                cells[2],
+                "follow-up count for {name}"
+            );
+        }
         let note = include_str!("../../../../docs/signatures/0010-remaining-command-state.md");
         let mut documented = std::collections::BTreeSet::new();
         for line in note.lines().filter(|line| {
@@ -599,5 +875,37 @@ mod tests {
             documented,
             baseline.into_iter().map(str::to_string).collect()
         );
+    }
+
+    #[test]
+    fn open_commands_keep_raw_arguments_and_resolver_never_invents_an_address() {
+        let instance = Instance::new();
+        start(&instance, 0x200);
+        let arguments = Registers {
+            x: [0x200, 0x300, 0, 0x400, 0x500, 0xf, 6, 7],
+            d: [0, 0, 0x7f7fffff, 3, 4, 5, 6, 7],
+            sp: 0x900,
+        };
+        let mut expected = Vec::new();
+        {
+            let name = "nvnCommandBufferClearTexture";
+            let id = functions::lookup(name).unwrap();
+            let mut r = arguments;
+            assert_eq!(instance.call(id, &mut r), Status::Unimplemented);
+            expected.push(RecordedCommand::Raw {
+                function: id.0,
+                registers: arguments.x,
+            });
+            // The existing raw command fallback stores general registers only.
+            assert_eq!(&r.d[1..], &arguments.d[1..]);
+        }
+        assert_eq!(end(&instance, 0x200), expected);
+        let resolver = functions::lookup("nvnDeviceGetProcAddress").unwrap();
+        for device in [0, 0x100] {
+            let mut r = arguments;
+            r.x[..2].copy_from_slice(&[device, 0x400]);
+            assert_eq!(instance.call(resolver, &mut r), Status::Unimplemented);
+            assert_eq!(r.x[0], 0);
+        }
     }
 }

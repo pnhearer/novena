@@ -82,3 +82,8 @@ Two value kinds come up here that the set-up path did not have:
 2026-10-08: [signatures 0010](0010-remaining-command-state.md) refines the
 remaining recording fields and corrects the SetPolygonOffsetClamp d2 value.
 Execution meanings and the float signature remain unresolved.
+
+[Signatures 0011](0011-command-evidence.md) revisits the eight remaining
+commands. Six now have likely state-only recording contracts. Separate
+sampler binding retains an opaque reference; its handle-versus-pointer
+interpretation remains open. Texture clear and polygon offset remain open.

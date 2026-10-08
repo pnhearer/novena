@@ -24,7 +24,7 @@ What works today:
 - CPU texture copies with four bytes per base-level texel, 64 KiB host reads, no format decoding, and a 4096 by 4096 texel limit.
 - Render scaling and optional vblank pacing through the host interface.
 - CPU clears for window-presented textures and an optional Vulkan backend for arena-backed color and depth clears, supported texture copies, and native swapchain or offscreen presentation.
-- Recorded draw commands, 17 documented state-only command handlers, and retained shader records.
+- Recorded draw commands, 24 documented command-state handlers, and retained shader records.
 - An opt-in Vulkan first draw with one float4 vertex attribute, one RGBA8 target,
   translated vertex and fragment stages, and disabled depth, stencil, blend,
   and culling, plus explicit host uniform bank mappings backed by arena ranges.

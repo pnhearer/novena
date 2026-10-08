@@ -39,57 +39,6 @@ pub fn handler(name: &str) -> Option<Handler> {
             crate::api::resources::retry_pending(instance, r.x[1], "bind");
             record(instance, 0, r, RecordedCommand::BindProgram(r.x[1]))
         },
-        "nvnCommandBufferBindVertexStreamState" | "nvnCommandBufferBindVertexAttribState" => {
-            |i, f, r| {
-                let kind = match crate::functions::name(f).unwrap() {
-                    "nvnCommandBufferBindVertexStreamState" => "VertexStreamState",
-                    "nvnCommandBufferBindVertexAttribState" => "VertexAttribState",
-                    _ => unreachable!("vertex state handler"),
-                };
-                let address = r.x[2];
-                // Counted object spacing is a host choice, not a guest layout. 0028.
-                #[cfg(feature = "vulkan")]
-                let stride = i
-                    .gpu
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .as_ref()
-                    .and_then(|gpu| gpu.first_draw.as_ref())
-                    .and_then(|contract| {
-                        if kind == "VertexAttribState" {
-                            contract.attribute_state_stride
-                        } else {
-                            contract.stream_state_stride
-                        }
-                    })
-                    .unwrap_or(0);
-                #[cfg(not(feature = "vulkan"))]
-                let stride = 0_u64;
-                let count = r.x[1];
-                let settings = (count <= 16 && (count <= 1 || stride != 0))
-                    .then(|| {
-                        (0..count)
-                            .map(|index| {
-                                let at = index.checked_mul(stride)?.checked_add(address)?;
-                                match i.objects.get(at) {
-                                    Some(Object::State {
-                                        kind: actual,
-                                        settings,
-                                    }) if actual == kind => Some(settings),
-                                    _ => None,
-                                }
-                            })
-                            .collect::<Option<Vec<_>>>()
-                    })
-                    .flatten();
-                record(
-                    i,
-                    0,
-                    r,
-                    RecordedCommand::BindVertexStates { kind, settings },
-                )
-            }
-        }
         "nvnCommandBufferSetRenderTargets" => |instance, _, r| {
             let count = r.x[1].min(16);
             let mut colors = Vec::with_capacity(count as usize);

@@ -97,6 +97,30 @@ fn every_census_name_is_in_the_function_table() {
 }
 
 #[test]
+fn resolver_request_manifest_is_exactly_the_aggregate_census_set() {
+    let census = fs::read_to_string(root().join("docs/census/0001-program-a-startup.txt"))
+        .expect("census file");
+    let requested: Vec<_> = census
+        .lines()
+        .filter_map(|line| {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            (fields.len() == 3 && fields[1] == "yes").then(|| fields[2])
+        })
+        .collect();
+    let manifest = fs::read_to_string(root().join("docs/signatures/0011-resolver-requests.txt"))
+        .expect("resolver request manifest");
+    let documented: Vec<_> = manifest
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .collect();
+    assert_eq!(requested.len(), 534);
+    assert_eq!(documented, requested);
+    for name in documented {
+        assert!(novena::functions::lookup(name).is_some(), "{name}");
+    }
+}
+
+#[test]
 fn stored_reports_never_contain_wide_values() {
     // A hexadecimal value of nine or more digits is wider than 32 bits and
     // could be an address. Shape and census files must not carry any.

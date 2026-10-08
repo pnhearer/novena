@@ -4,6 +4,12 @@
 - Author: Khargoosh
 - Covers: signatures 0010, `api/state_commands.rs`, `StateCommand`, recording dispatch and queue handling
 
+Follow-up: [provenance 0028](0028-command-evidence.md) and
+[signatures 0011](../signatures/0011-command-evidence.md) revisit the nine
+gaps left by this pass. Six more commands have likely recording contracts.
+The opt-in draw experiment also retains polygon-offset words under a host
+hypothesis. Texture clear and the resolver remain unsuccessful.
+
 ## What was learned
 
 Comparison of census 0001 with the API handlers found 25 command functions

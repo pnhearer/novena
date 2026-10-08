@@ -28,3 +28,4 @@ A register that looked like a leftover from an earlier call is not listed as an 
 | [0008-program-shader-state.md](0008-program-shader-state.md) | Retained shader record state and open fields |
 | [0009-shader-memory-layout.md](0009-shader-memory-layout.md) | Observed shader prefix, header, and code offsets |
 | [0010-remaining-command-state.md](0010-remaining-command-state.md) | Census gaps, firm state recording and unresolved argument contracts |
+| [0011-command-evidence.md](0011-command-evidence.md) | Evidence for all eight remaining commands, six likely recording contracts and resolver request limits |
