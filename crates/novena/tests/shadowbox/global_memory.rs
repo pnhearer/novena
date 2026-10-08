@@ -485,7 +485,9 @@ impl novena::ShaderTranslator for PipelineTranslator {
 #[test]
 #[ignore = "requires Vulkan, the 1 GiB arena and spirv-val; never skips"]
 fn compute_pipeline_cache_executes_translated_program() {
-    use novena::gpu::pipelines::{CacheStats, ComputePipelines};
+    use novena::gpu::pipelines::{
+        AsyncComputePipelines, CacheStats, ComputePipelines, PipelineStatus,
+    };
     use std::sync::atomic::Ordering;
 
     let context = Arc::new(Context::new().expect("compute Vulkan context"));
@@ -524,7 +526,22 @@ fn compute_pipeline_cache_executes_translated_program() {
         ldc,
         global(true, 4, 8, 4, 32, true),
     ]);
-    let uniform_pipeline = cache.get_or_compile(&uniform_program).unwrap();
+    let mut pool = AsyncComputePipelines::new(cache, 2, 8).unwrap();
+    let uniform_request = pool.request(&uniform_program).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let uniform_pipeline = loop {
+        match uniform_request.poll() {
+            PipelineStatus::Ready(pipeline) => break pipeline,
+            PipelineStatus::Failed(error) => panic!("{error}"),
+            _ => assert!(std::time::Instant::now() < deadline, "worker timed out"),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    };
+    let same = match pool.request(&uniform_program).unwrap().poll() {
+        PipelineStatus::Ready(pipeline) => pipeline,
+        _ => panic!("completed pipeline must be reused"),
+    };
+    assert!(Arc::ptr_eq(&uniform_pipeline, &same));
     let bindings = uniform_pipeline.bindings();
     assert_eq!(bindings.len(), 1);
     assert_eq!(
@@ -536,9 +553,9 @@ fn compute_pipeline_cache_executes_translated_program() {
         vk::DescriptorType::UNIFORM_BUFFER.as_raw()
     );
     assert_eq!(translator.0.load(Ordering::Relaxed), 3);
-    assert_eq!(cache.stats(), CacheStats { hits: 1, misses: 3 });
-    // Pipeline ownership is independent of the cache.
-    drop(cache);
+    assert_eq!(pool.stats(), CacheStats { hits: 2, misses: 3 });
+    // Pipeline ownership is independent of the cache and its workers.
+    drop(pool);
     memory.write_pool(1, 0, &input).unwrap();
     memory.write_pool(2, 0, &[0xa5; BYTES]).unwrap();
     submit_pipeline(&context, &memory, &first, &[]);

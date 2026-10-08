@@ -11,8 +11,9 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 
 [features]
 default = []
-vulkan = ["dep:ash"]
+vulkan = ["dep:ash", "dep:blake3"]
 shadowbox = ["vulkan"]
 
 [dependencies]
 ash = { version = "0.38", optional = true, default-features = false, features = ["loaded"] }
+blake3 = { version = "1", optional = true }

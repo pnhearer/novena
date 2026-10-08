@@ -1,11 +1,18 @@
-//! Content-keyed compute pipelines. Evidence: provenance 0025.
+//! Content-keyed compute pipelines. Evidence: provenance 0025 and 0026.
 use super::{Context, GlobalMemory};
 use crate::{ShaderTranslator, SHADER_STAGE_UNKNOWN};
 use ash::vk;
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::Arc,
+    path::Path,
+    sync::{
+        atomic::{AtomicU64, AtomicU8, Ordering},
+        mpsc, Arc, Mutex,
+    },
+    thread::{self, JoinHandle},
 };
+
+pub use super::pipeline_disk::TranslationIdentity;
 
 /// One resource declaration in the translated SPIR-V, including descriptor arrays.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -220,11 +227,190 @@ pub struct CacheStats {
 /// A device-local cache with one fixed translator and translation configuration.
 /// The translator must produce stable output for a byte sequence during this cache's life.
 pub struct ComputePipelines {
-    context: Arc<Context>,
-    translator: Arc<dyn ShaderTranslator>,
+    compiler: Arc<Compiler>,
     pipelines: HashMap<Vec<u8>, Arc<ComputePipeline>>,
     stats: CacheStats,
-    driver_cache: vk::PipelineCache,
+}
+
+/// Driver loading reports checked data supplied to successful cache creation.
+/// It does not report whether the driver avoided compilation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PersistenceStats {
+    pub driver_cache_loaded: bool,
+    pub translation_hits: u64,
+}
+
+struct Compiler {
+    context: Arc<Context>,
+    translator: Arc<dyn ShaderTranslator>,
+    driver_cache: Mutex<vk::PipelineCache>,
+    disk: Option<super::pipeline_disk::DiskCache>,
+    driver_cache_loaded: bool,
+    translation_hits: AtomicU64,
+    diagnostics: Mutex<Vec<String>>,
+}
+
+impl Compiler {
+    fn new(
+        context: &Arc<Context>,
+        translator: Arc<dyn ShaderTranslator>,
+        persistence: Option<(&Path, &TranslationIdentity)>,
+    ) -> Result<Arc<Self>, String> {
+        if persistence.is_some_and(|(_, identity)| identity.version.is_empty()) {
+            return Err("persistent cache requires a translator version".into());
+        }
+        let disk = persistence.map(|(directory, identity)| {
+            let mut ids = vk::PhysicalDeviceIDProperties::default();
+            let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut ids);
+            // SAFETY: the live instance supports Vulkan 1.2 and owns this physical device.
+            unsafe {
+                context
+                    .instance
+                    .get_physical_device_properties2(context.physical_device, &mut properties);
+            }
+            let base = properties.properties;
+            super::pipeline_disk::DiskCache::new(directory, identity, &base, &ids)
+        });
+        let mut diagnostics = Vec::new();
+        let initial = disk.as_ref().and_then(|disk| match disk.load_driver() {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                diagnostics.push(format!("load driver cache: {error}"));
+                None
+            }
+        });
+        let create = |bytes: &[u8]| {
+            // SAFETY: data is empty or a checked, application-owned cache blob.
+            unsafe {
+                context.device.create_pipeline_cache(
+                    &vk::PipelineCacheCreateInfo::default().initial_data(bytes),
+                    None,
+                )
+            }
+        };
+        let (driver_cache, driver_cache_loaded) =
+            match create(initial.as_deref().unwrap_or_default()) {
+                Ok(cache) => (cache, initial.is_some()),
+                Err(error) if initial.is_some() => {
+                    diagnostics.push(format!("driver rejected cache: {error:?}"));
+                    (
+                        create(&[]).map_err(|error| format!("create pipeline cache: {error:?}"))?,
+                        false,
+                    )
+                }
+                Err(error) => return Err(format!("create pipeline cache: {error:?}")),
+            };
+        Ok(Arc::new(Self {
+            context: context.clone(),
+            translator,
+            driver_cache: Mutex::new(driver_cache),
+            disk,
+            driver_cache_loaded,
+            translation_hits: AtomicU64::new(0),
+            diagnostics: Mutex::new(diagnostics),
+        }))
+    }
+
+    fn diagnostic(&self, message: String) {
+        let mut diagnostics = self.diagnostics.lock().unwrap();
+        if diagnostics.len() < 32 {
+            diagnostics.push(message);
+        }
+    }
+
+    fn compile(&self, program: &[u8]) -> Result<Arc<ComputePipeline>, String> {
+        let cached = self
+            .disk
+            .as_ref()
+            .and_then(|disk| match disk.load_translation(program) {
+                Ok(words) => words,
+                Err(error) => {
+                    self.diagnostic(format!("load translation cache: {error}"));
+                    None
+                }
+            });
+        let from_disk = cached.is_some();
+        let words = match cached {
+            Some(words) => words,
+            None => self.translator.translate(SHADER_STAGE_UNKNOWN, program)?,
+        };
+        let created = {
+            // Serialize Vulkan creation with driver snapshots. Translation and I/O
+            // happen outside this lock; workers never use the queue or command pools.
+            let cache = self.driver_cache.lock().unwrap();
+            ComputePipeline::create(&self.context, *cache, &words)
+        };
+        let pipeline = match created {
+            Ok(pipeline) => Arc::new(pipeline),
+            Err(error) if from_disk => {
+                self.diagnostic(format!("discard translation cache: {error}"));
+                let words = self.translator.translate(SHADER_STAGE_UNKNOWN, program)?;
+                let cache = self.driver_cache.lock().unwrap();
+                let pipeline = Arc::new(ComputePipeline::create(&self.context, *cache, &words)?);
+                drop(cache);
+                self.save_translation(program, &words);
+                self.persist_driver();
+                return Ok(pipeline);
+            }
+            Err(error) => return Err(error),
+        };
+        if from_disk {
+            self.translation_hits.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.save_translation(program, &words);
+        }
+        self.persist_driver();
+        Ok(pipeline)
+    }
+
+    fn save_translation(&self, program: &[u8], words: &[u32]) {
+        if let Some(disk) = &self.disk {
+            if let Err(error) = disk.save_translation(program, words) {
+                self.diagnostic(format!("save translation cache: {error}"));
+            }
+        }
+    }
+
+    fn persist_driver(&self) {
+        let Some(disk) = &self.disk else { return };
+        let bytes = {
+            let cache = self.driver_cache.lock().unwrap();
+            // SAFETY: this lock excludes all creation and snapshot calls on the cache.
+            unsafe { self.context.device.get_pipeline_cache_data(*cache) }
+        };
+        match bytes {
+            Ok(bytes) => {
+                if let Err(error) = disk.save_driver(&bytes) {
+                    self.diagnostic(format!("save driver cache: {error}"));
+                }
+            }
+            Err(error) => self.diagnostic(format!("snapshot driver cache: {error:?}")),
+        }
+    }
+
+    fn persistence_stats(&self) -> PersistenceStats {
+        PersistenceStats {
+            driver_cache_loaded: self.driver_cache_loaded,
+            translation_hits: self.translation_hits.load(Ordering::Relaxed),
+        }
+    }
+
+    fn take_diagnostics(&self) -> Vec<String> {
+        std::mem::take(&mut *self.diagnostics.lock().unwrap())
+    }
+}
+
+impl Drop for Compiler {
+    fn drop(&mut self) {
+        // SAFETY: the last compiler owner is gone, so no worker can access the cache.
+        let cache = *self
+            .driver_cache
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner());
+        unsafe {
+            self.context.device.destroy_pipeline_cache(cache, None);
+        }
+    }
 }
 
 impl ComputePipelines {
@@ -232,40 +418,42 @@ impl ComputePipelines {
         context: &Arc<Context>,
         translator: Arc<dyn ShaderTranslator>,
     ) -> Result<Self, String> {
-        // SAFETY: the context owns the device; initial cache data is empty.
-        let driver_cache = unsafe {
-            context
-                .device
-                .create_pipeline_cache(&vk::PipelineCacheCreateInfo::default(), None)
-        }
-        .map_err(|error| format!("create pipeline cache: {error:?}"))?;
+        Self::build(context, translator, None)
+    }
+
+    /// Use only a private host-owned directory. Its contents are disposable.
+    /// Version/configuration must identify every translator option affecting output.
+    pub fn persistent(
+        context: &Arc<Context>,
+        translator: Arc<dyn ShaderTranslator>,
+        directory: &Path,
+        identity: &TranslationIdentity,
+    ) -> Result<Self, String> {
+        Self::build(context, translator, Some((directory, identity)))
+    }
+
+    fn build(
+        context: &Arc<Context>,
+        translator: Arc<dyn ShaderTranslator>,
+        persistence: Option<(&Path, &TranslationIdentity)>,
+    ) -> Result<Self, String> {
         Ok(Self {
-            context: context.clone(),
-            translator,
+            compiler: Compiler::new(context, translator, persistence)?,
             pipelines: HashMap::new(),
             stats: CacheStats::default(),
-            driver_cache,
         })
     }
 
-    /// The translator must supply SPIR-V valid for this device, including features
-    /// beyond the narrow global-memory feature checks. A miss uses its emitted
-    /// specialization defaults.
-    ///
-    /// Header plus code, as supplied by Novena's shader record reader.
-    /// Full byte equality handles hash collisions. Guest addresses are absent.
+    /// Synchronous prewarming/testing API. The frame path uses AsyncComputePipelines.
+    /// The translator must supply SPIR-V valid for this device. Full input equality
+    /// handles digest collisions, and guest addresses are absent from the key.
     pub fn get_or_compile(&mut self, program: &[u8]) -> Result<Arc<ComputePipeline>, String> {
         if let Some(pipeline) = self.pipelines.get(program) {
             self.stats.hits += 1;
             return Ok(pipeline.clone());
         }
         self.stats.misses += 1;
-        let words = self.translator.translate(SHADER_STAGE_UNKNOWN, program)?;
-        let pipeline = Arc::new(ComputePipeline::create(
-            &self.context,
-            self.driver_cache,
-            &words,
-        )?);
+        let pipeline = self.compiler.compile(program)?;
         self.pipelines.insert(program.to_vec(), pipeline.clone());
         Ok(pipeline)
     }
@@ -273,15 +461,190 @@ impl ComputePipelines {
     pub fn stats(&self) -> CacheStats {
         self.stats
     }
+
+    pub fn persistence_stats(&self) -> PersistenceStats {
+        self.compiler.persistence_stats()
+    }
+
+    /// Collect diagnostics away from the frame path.
+    pub fn take_diagnostics(&self) -> Vec<String> {
+        self.compiler.take_diagnostics()
+    }
 }
 
-impl Drop for ComputePipelines {
+/// A frame polls this state and skips the draw unless Ready is returned.
+pub enum PipelineStatus {
+    Queued,
+    Compiling,
+    Ready(Arc<ComputePipeline>),
+    Failed(String),
+}
+
+struct RequestState {
+    phase: AtomicU8,
+    result: Mutex<Option<Result<Arc<ComputePipeline>, String>>>,
+}
+
+/// Owned completion handle. Replacing a program replaces its handle, so an old
+/// completion cannot modify the current program or follow a guest pointer.
+#[derive(Clone)]
+pub struct PipelineRequest(Arc<RequestState>);
+
+impl PipelineRequest {
+    pub fn poll(&self) -> PipelineStatus {
+        match self.0.phase.load(Ordering::Acquire) {
+            0 => PipelineStatus::Queued,
+            1 => PipelineStatus::Compiling,
+            _ => match self.0.result.try_lock() {
+                Ok(result) => match result.as_ref().expect("completed request has a result") {
+                    Ok(pipeline) => PipelineStatus::Ready(pipeline.clone()),
+                    Err(error) => PipelineStatus::Failed(error.clone()),
+                },
+                Err(_) => PipelineStatus::Compiling,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequestError {
+    QueueFull,
+    Stopped,
+}
+
+struct CompileJob {
+    program: Vec<u8>,
+    state: Arc<RequestState>,
+}
+
+/// Bounded compiler pool. Construction and shutdown belong outside frame recording.
+/// Requests and polling never wait for compilation, cache locks or disk operations.
+pub struct AsyncComputePipelines {
+    compiler: Arc<Compiler>,
+    requests: HashMap<Vec<u8>, PipelineRequest>,
+    sender: Option<mpsc::SyncSender<CompileJob>>,
+    workers: Vec<JoinHandle<()>>,
+    stats: CacheStats,
+}
+
+impl AsyncComputePipelines {
+    /// Converts a prewarm cache into a worker service, preserving ready pipelines.
+    /// Queue capacity bounds waiting work; worker_count bounds active work.
+    pub fn new(
+        cache: ComputePipelines,
+        worker_count: usize,
+        queue_capacity: usize,
+    ) -> Result<Self, String> {
+        if worker_count == 0 || queue_capacity == 0 {
+            return Err("compiler pool requires workers and queue capacity".into());
+        }
+        let (sender, receiver) = mpsc::sync_channel::<CompileJob>(queue_capacity);
+        let receiver = Arc::new(Mutex::new(receiver));
+        let mut result = Self {
+            compiler: cache.compiler,
+            requests: cache
+                .pipelines
+                .into_iter()
+                .map(|(program, pipeline)| {
+                    (
+                        program,
+                        PipelineRequest(Arc::new(RequestState {
+                            phase: AtomicU8::new(2),
+                            result: Mutex::new(Some(Ok(pipeline))),
+                        })),
+                    )
+                })
+                .collect(),
+            sender: Some(sender),
+            workers: Vec::new(),
+            stats: cache.stats,
+        };
+        for index in 0..worker_count {
+            let receiver = receiver.clone();
+            let compiler = result.compiler.clone();
+            let worker = thread::Builder::new()
+                .name(format!("pipeline-{index}"))
+                .spawn(move || loop {
+                    let job = {
+                        let receiver = receiver.lock().unwrap();
+                        receiver.recv()
+                    };
+                    let Ok(job) = job else { break };
+                    job.state.phase.store(1, Ordering::Release);
+                    let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        compiler.compile(&job.program)
+                    }))
+                    .unwrap_or_else(|_| Err("pipeline compiler panicked".into()));
+                    *job.state.result.lock().unwrap() = Some(compiled);
+                    job.state.phase.store(2, Ordering::Release);
+                })
+                .map_err(|error| format!("start pipeline worker: {error}"))?;
+            result.workers.push(worker);
+        }
+        Ok(result)
+    }
+
+    /// Duplicate requests share one result. QueueFull leaves no cache entry;
+    /// skip this frame and retry later. Failed requests require explicit retry.
+    pub fn request(&mut self, program: &[u8]) -> Result<PipelineRequest, RequestError> {
+        if let Some(request) = self.requests.get(program) {
+            self.stats.hits += 1;
+            return Ok(request.clone());
+        }
+        let state = Arc::new(RequestState {
+            phase: AtomicU8::new(0),
+            result: Mutex::new(None),
+        });
+        self.sender
+            .as_ref()
+            .ok_or(RequestError::Stopped)?
+            .try_send(CompileJob {
+                program: program.to_vec(),
+                state: state.clone(),
+            })
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full(_) => RequestError::QueueFull,
+                mpsc::TrySendError::Disconnected(_) => RequestError::Stopped,
+            })?;
+        let request = PipelineRequest(state);
+        self.requests.insert(program.to_vec(), request.clone());
+        self.stats.misses += 1;
+        Ok(request)
+    }
+
+    /// Forget only a failed request. Existing handles retain their original result.
+    pub fn retry_failed(&mut self, program: &[u8]) -> bool {
+        if self
+            .requests
+            .get(program)
+            .is_some_and(|request| matches!(request.poll(), PipelineStatus::Failed(_)))
+        {
+            self.requests.remove(program);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn stats(&self) -> CacheStats {
+        self.stats
+    }
+
+    pub fn persistence_stats(&self) -> PersistenceStats {
+        self.compiler.persistence_stats()
+    }
+
+    /// Collect diagnostics away from the frame path.
+    pub fn take_diagnostics(&self) -> Vec<String> {
+        self.compiler.take_diagnostics()
+    }
+}
+
+impl Drop for AsyncComputePipelines {
     fn drop(&mut self) {
-        // SAFETY: pipeline creation borrows this cache mutably; no call is pending.
-        unsafe {
-            self.context
-                .device
-                .destroy_pipeline_cache(self.driver_cache, None);
+        self.sender.take();
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
         }
     }
 }

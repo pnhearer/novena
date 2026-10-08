@@ -4,10 +4,11 @@ Novena will build Vulkan pipelines from owned snapshots of guest shader programs
 Translation output defines the shader interface. Recorded guest object addresses
 identify state, while program contents identify reusable compiled code.
 
-Stage 1 provides a compute pipeline cache and a command recording helper in
+The compute service provides content caching, optional disk persistence, a
+bounded background compiler pool and a command recording helper in
 `gpu::pipelines`, behind `vulkan`. An optional `shadowbox` feature enables its
-translated GPU proof. Graphics pipelines, disk persistence, background workers,
-and execution of guest command-buffer dispatch records are later stages.
+translated GPU proof. Graphics pipelines and execution of guest command-buffer
+dispatch records are later stages.
 The existing guest queue path still executes clears and copies as before.
 
 ## Program capture and translation boundary
@@ -118,78 +119,118 @@ no API to change them.
 ## Content cache
 
 `ComputePipelines` fixes a translator and its configuration for the cache's
-lifetime. `get_or_compile` looks up the complete normalized header and code
-before invoking translation. Hash-table equality compares all bytes, so hash
-collisions cannot alias programs. Identical snapshots from different allocations
-share one `Arc<ComputePipeline>`. A changed header or instruction misses.
-Failures remain retryable and do not enter the successful cache.
+lifetime. Its synchronous `get_or_compile` API is for prewarming and tests.
+The frame-facing service is `AsyncComputePipelines`. Both compare the complete
+normalized header and code before translation. Identical snapshots from
+different allocations share one result. Changed bytes miss. Hash collisions
+cannot alias programs because memory keys compare all bytes and disk records
+retain and compare the original input.
 
-A miss translates once, reflects once, creates set and pipeline layouts, and
-creates a compute pipeline through a device-local `VkPipelineCache`. The
-temporary shader module is destroyed after pipeline creation. Partial failures
-destroy created layouts and any partially returned pipelines. The pipeline
-owns a shared context reference and survives cache destruction.
+A miss loads cached SPIR-V or translates, reflects the interface, creates
+layouts and creates a compute pipeline through a device-local `VkPipelineCache`.
+The temporary shader module is destroyed after pipeline creation. Partial
+failures destroy created layouts and any partially returned pipelines.
+A pipeline owns a shared context reference and survives cache or pool destruction.
 
-This cache does not yet replace the existing eager translation during
-ProgramSetShaders or its late-read retry path. The next integration should route
-both paths through one compiler service. It must retain each program's snapshot
-or request handle instead of translating eagerly and translating again at
-pipeline construction.
+The host opts into persistence with a private cache directory and a
+`TranslationIdentity`. The version must be nonempty and identify the translator
+revision. Configuration must identify generation and every option affecting
+output. The namespace includes those length-prefixed strings, the compute
+`main` entry point and interface revision, the disk format revision, Vulkan
+deviceUUID, driverUUID, pipelineCacheUUID, vendor ID and device ID.
+A BLAKE3 digest names the namespace and each program record.
+Changing translator version, configuration or device/driver identity starts a
+separate cache. Guest addresses and Vulkan handles never identify code.
 
-Persistent translation keys will use a stable digest of header and code plus
-translator version, generation, options, entry point and interface revision.
-Retain enough content identity to detect collisions. Changing translators or
-options creates a new namespace. A graphics pipeline key also includes all stage
-contents, specialization values, descriptor compatibility, attachment formats
-and sample count, and the established static render state. Dynamic viewport and
-scissor values stay outside that key. Vulkan handles and guest object addresses
-never identify code contents.
+Each translation record contains the full normalized input followed by
+little-endian SPIR-V words. Loading compares input identity, reflects the module
+again and creates a fresh Vulkan pipeline. If a disk translation fails reflection
+or pipeline creation, the service retries fresh translation and replaces the
+record after successful creation. Failed fresh translations are never persisted.
+A translation hit avoids the translator; it does not reuse a Vulkan handle
+across processes.
+
+This service does not yet replace eager translation during ProgramSetShaders
+or its late-read retry path. Guest dispatch and graphics execution still need
+established binding and state contracts. A future integration must capture
+once, request compilation through this service, and retain the request handle
+instead of translating twice. A graphics key will also need all stage contents,
+specialization values, descriptor compatibility, attachment formats, sample
+count and established static render state. Dynamic viewport and scissor values
+stay outside that key.
 
 ## Driver cache persistence
 
-Stage 1 owns an empty in-memory `VkPipelineCache`. Disk persistence is the next
-cache stage. Driver cache data accelerates Vulkan compilation; it neither stores
-Novena's content map nor promises a driver cache hit.
+Driver cache data accelerates Vulkan compilation. It neither stores Novena's
+content map nor guarantees a driver cache hit. Both cache kinds use an envelope
+with an eight-byte kind tag, a little-endian format version, namespace digest,
+64-bit payload length and BLAKE3 payload checksum. Reads are bounded to 64 MiB.
+Unknown versions, wrong namespaces, invalid lengths and damaged checksums become
+misses with diagnostics. A checksum detects damage, not hostile modification.
+Only private application-owned cache files are eligible for loading.
 
-Use a private cache directory supplied by the host. Persist only complete blobs
-returned by `vkGetPipelineCacheData`. Serialize snapshots against creation and
-merge operations. Wrap the blob with a format version, length, checksum and
-translation/interface revision. Write a uniquely named temporary file, flush it,
-and atomically replace the destination. A torn write must leave either the old
-complete file or the new one. Separate process writers use separate temporary
-files; one writer owns each final cache file.
+The driver loader additionally decodes the Vulkan version-one header as
+little-endian bytes. It requires header size 32, header version 1, and matching
+vendor ID, device ID and pipelineCacheUUID. It never casts file bytes to a Rust
+structure. Driver cache creation retries with empty data if loading fails or
+the driver rejects the accepted blob.
 
-Before loading, bound file size, check the envelope and checksum, and decode
-the Vulkan version-one header as little-endian bytes. Its header size is 32.
-Check header version, vendor ID, device ID and pipelineCacheUUID against the
-selected device. Do not reinterpret the bytes as a Rust struct. Incompatible,
-truncated or corrupt files become cache misses. A checksum detects damage; it
-does not make an arbitrary untrusted blob valid Vulkan initial data.
-Only the application's previously retrieved driver data is eligible for reuse.
-Cache I/O failure reports a diagnostic and preserves ordinary compilation.
+One mutex serializes Vulkan creation and `vkGetPipelineCacheData` on the shared
+driver cache. Translation and file I/O happen outside this mutex. Successful
+compilation saves the translation and a complete driver snapshot on the worker.
+No cache I/O runs during request submission or polling. The synchronous prewarm
+API performs that same I/O on its caller and belongs outside frame recording.
+
+Writers create unique temporary files in the destination directory with exclusive
+creation, write and flush the entire envelope and payload, then atomically rename
+the file and flush the directory. Readers open only final filenames. An abandoned
+temporary file is ignored. Concurrent threads and processes use distinct
+temporary files. The last complete rename wins for a shared destination.
+Driver snapshots are not merged across processes, so concurrent writers may lose
+warmup coverage while preserving a valid complete file. Translation records for
+different content have separate destinations. Cache I/O failure preserves
+ordinary compilation and reports a bounded diagnostic list through
+`take_diagnostics`, collected away from the frame path.
 
 ## Background compilation
 
-After capture, queue owned snapshots to a bounded compiler service. Its content
-map tracks queued, compiling, ready and failed requests. Duplicate requests join
-one in-flight result. Workers perform translation and Vulkan creation without
-holding guest object-table locks or using host callbacks. Program replacement
-retains a generation token so completion of an older request cannot replace the
-current program.
+Construct `AsyncComputePipelines` from an in-memory or persistent
+`ComputePipelines`, a positive worker count and a positive queue capacity.
+Construction loads the driver cache and starts workers before frame recording.
+Ready prewarmed pipelines transfer into the service. Queue capacity bounds
+waiting jobs; worker count bounds active jobs.
 
-Prewarm at ProgramSetShaders and retry when code becomes readable. Ready results
-can be bound immediately. On a cold first use, preserve command order and wait
-for the requested pipeline before submitting dependent work. Never substitute
-a dummy shader or drop a draw to hide a miss. Background compilation reduces
-work on the recording thread; it cannot guarantee that unseen shaders finish
-before their first use.
+After capture, `request` queues an owned snapshot with nonblocking `try_send`.
+Its caller owns the content map, so workers never lock that map or guest object
+tables. Duplicate requests return handles to one shared result.
+`PipelineRequest::poll` reports queued, compiling, ready or failed. Polling uses
+an atomic phase and a nonblocking result-lock attempt. Workers translate and
+create Vulkan objects without host callbacks, guest pointers, queue submission
+or command-pool use. Translator panics become failed requests and the worker
+continues. Failed requests stay visible until explicit `retry_failed`; this
+prevents a failing program from triggering compilation every frame.
 
-Keep queue submission on the executor. Compilation does not use the queue.
-A later submission owner retains pipelines, descriptor pools, resource
-allocations and command pools until its fence signals. Command-pool use and
-queue use need explicit external synchronization across all context owners.
-Mutable access to one cache does not synchronize other owners of the context.
-Shutdown drains workers and submissions before destroying their resources.
+On a cold first use, the frame polls once and skips the draw if its pipeline is
+queued, compiling, failed, or cannot be queued because the bounded queue is full.
+It continues recording the frame's other commands without waiting for the
+missing pipeline. Queue-full submission leaves no cached request and can retry
+on the next frame. A ready pipeline can be bound immediately. A skipped draw is
+not replayed later in that frame. This is a host design choice, not observed
+guest behavior or a claim of equivalent output. Measure missing-draw effects
+and compilation latency later before choosing a final rendering policy.
+
+A program replacement retains its new request handle. An old completion only
+updates its own handle, so it cannot replace the current program. Future guest
+integration should prewarm at ProgramSetShaders and retry capture when code
+becomes readable. Graphics execution and that guest integration remain later
+stages; the current guest path still skips draws.
+
+Queue submission stays on the executor. A submission owner retains pipelines,
+descriptor pools, resource allocations and command pools until its fence
+signals. Queue and command-pool synchronization remain the caller's responsibility.
+Pool destruction closes the work queue, drains queued jobs and joins every worker.
+Do this outside frame recording. Submitted resources still require their own
+completion tracking before destruction.
 
 ## Render-state mapping
 
@@ -218,11 +259,14 @@ DispatchCompute has a likely three-integer argument shape in signatures 0002.
 The host-side helper takes explicit Vulkan workgroup counts. Guest dispatch
 execution still needs validated units, resource binding and command ordering.
 
-## Stage 1 execution and proof
+## Execution and proof
 
-Construct `ComputePipelines` with a context and translator, call
-`get_or_compile` with the owned header/code snapshot, populate descriptors using
-the returned layouts, then call the pipeline's unsafe `record_dispatch`.
+For synchronous prewarming, construct `ComputePipelines` with a context and
+translator and call `get_or_compile` with the owned header/code snapshot.
+For frame recording, convert that cache to `AsyncComputePipelines`, request the
+snapshot and use only a ready result. Skip the draw while its result is
+unavailable. Populate descriptors using the ready pipeline's layouts, then call
+its unsafe `record_dispatch`.
 The helper checks arena device identity, set count and workgroup limits. It
 binds the pipeline and sets, pushes delta, dispatches, and records shader-write
 to host-read visibility. Its caller owns upload visibility, image layouts,
@@ -239,10 +283,18 @@ The proof translates original synthetic compute instructions and checks complete
 pool-byte results for a physical-address copy and a uniform-buffer LDC followed
 by a global store. It validates SPIR-V, exercises real descriptor layout creation
 and binding, verifies one translation and one pipeline on a content hit, and
-checks a changed-content miss. It also executes a pipeline after its cache has
-been dropped. Reflection unit tests cover image/sampler types, fixed arrays,
+checks a changed-content miss. It compiles the uniform-buffer pipeline on the
+worker pool, verifies reuse and executes it after the pool has been dropped. Reflection unit tests cover image/sampler types, fixed arrays,
 sparse bindings, runtime buffer members and unsupported interfaces.
 
 [Provenance 0025](../provenance/0025-compute-pipelines.md) records the sources and
-verification. GPU texture and storage-image descriptor use, graphics execution,
-disk cache recovery and worker scheduling require their own later proofs.
+verification. GPU texture and storage-image descriptor use and graphics
+execution still require later proofs. Persistent cache recovery and
+worker scheduling have separate original host tests:
+
+```sh
+cargo test --features vulkan --test pipeline_cache -- --include-ignored --nocapture
+```
+
+[Provenance 0026](../provenance/0026-persistent-pipelines.md) records the disk and
+background-compilation sources, experiments and limits.

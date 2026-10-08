@@ -11,6 +11,7 @@ use std::sync::Arc;
 mod commands;
 mod images;
 mod memory;
+mod pipeline_disk;
 mod present;
 use images::{Image, Images};
 use present::Window;
