@@ -1,13 +1,16 @@
-//! Bounded execution of recorded first draws. Evidence: signatures 0009, provenance 0027.
-use super::objects::{Object, RecordedCommand, ShaderTranslation, StateCommand};
+//! Bounded execution of recorded draws. Evidence: signatures 0009, provenance 0027, 0028.
+use super::objects::{Object, RecordedCommand, ShaderTranslation, StateCommand, StateSettings};
 use crate::{
-    gpu::{graphics::Draw, Backend},
+    gpu::{
+        graphics::{mapped, Draw, VertexAttribute, VertexBinding, VertexInput},
+        Backend,
+    },
     Instance, Status,
 };
 use ash::vk;
 use std::collections::HashMap;
 
-type Settings = Vec<(&'static str, [u64; 6])>;
+type Settings = StateSettings;
 
 pub(super) struct Request<'a> {
     pub targets: &'a [u64],
@@ -21,7 +24,8 @@ pub(super) struct Request<'a> {
 #[derive(Default)]
 pub(super) struct State {
     program: Option<u64>,
-    buffer: Option<(u64, u64, u64)>,
+    buffers: HashMap<u64, (u64, u64)>,
+    vertex_states: HashMap<&'static str, Option<Vec<Settings>>>,
     states: HashMap<&'static str, Option<Settings>>,
     viewport: Option<[u64; 5]>,
     scissor: Option<[u64; 5]>,
@@ -36,17 +40,15 @@ impl State {
                 index: stream,
                 address,
                 size,
-            }) => self.buffer = Some((stream, address, size)),
+            }) => {
+                self.buffers.insert(stream, (address, size));
+            }
+            RecordedCommand::BindVertexStates { kind, settings } => {
+                self.vertex_states.insert(kind, settings);
+            }
             RecordedCommand::BindState { kind, settings }
             | RecordedCommand::State(StateCommand::BindState { kind, settings, .. })
-                if matches!(
-                    kind,
-                    "VertexStreamState"
-                        | "VertexAttribState"
-                        | "ColorState"
-                        | "DepthStencilState"
-                        | "PolygonState"
-                ) =>
+                if matches!(kind, "ColorState" | "DepthStencilState" | "PolygonState") =>
             {
                 self.states.insert(kind, settings);
             }
@@ -88,13 +90,9 @@ impl State {
             first,
             count,
         } = request;
-        let contract = backend.first_draw.ok_or(Status::Unimplemented)?;
-        if self.unsupported
-            || targets.len() != 1
-            || depth != 0
-            || views != [0, 0]
-            || primitive != contract.triangle_list
-        {
+        let contract = backend.first_draw.as_ref().ok_or(Status::Unimplemented)?;
+        let topology = mapped(&contract.topologies, primitive).ok_or(Status::Unimplemented)?;
+        if self.unsupported || targets.len() != 1 || depth != 0 || views != [0, 0] {
             return Err(Status::Unimplemented);
         }
         let Some(Object::Texture { description, .. }) = instance.objects.get(targets[0]) else {
@@ -111,16 +109,8 @@ impl State {
         {
             return Err(Status::Unimplemented);
         }
-        let stream = self.settings("VertexStreamState", &["Stride", "Divisor"])?;
-        let stride = value(stream, "Stride")?[0];
-        if value(stream, "Divisor")?[0] != 0 {
-            return Err(Status::Unimplemented);
-        }
-        let attribute = self.settings("VertexAttribState", &["Format", "StreamIndex"])?;
-        let format = value(attribute, "Format")?;
-        if format[0] != contract.float4 || value(attribute, "StreamIndex")?[0] != 0 {
-            return Err(Status::Unimplemented);
-        }
+        let streams = self.vertex_settings("VertexStreamState", &["Stride", "Divisor"])?;
+        let attributes = self.vertex_settings("VertexAttribState", &["Format", "StreamIndex"])?;
         let color = self.settings("ColorState", &["BlendEnable"])?;
         if color.iter().any(|(_, args)| args[0] != 0) || value(color, "BlendEnable")?[1] != 0 {
             return Err(Status::Unimplemented);
@@ -138,34 +128,63 @@ impl State {
         if value(polygon, "CullFace")?[0] != contract.cull_none {
             return Err(Status::Unimplemented);
         }
-        let stride = u32::try_from(stride).map_err(|_| Status::BadArgument)?;
-        let offset = u32::try_from(format[1]).map_err(|_| Status::BadArgument)?;
-        if stride == 0 || !stride.is_multiple_of(4) || !offset.is_multiple_of(4) {
-            return Err(Status::BadArgument);
-        }
-        let (stream, address, size) = self.buffer.ok_or(Status::Unimplemented)?;
-        if stream != 0 {
-            return Err(Status::Unimplemented);
-        }
-        let resolution = instance
-            .objects
-            .resolve_gpu_address(address)
-            .map_err(|_| Status::BadArgument)?;
-        if size == 0 || size > resolution.remaining {
-            return Err(Status::BadArgument);
-        }
-        let end = vertex_end(first, count, stride, offset).ok_or(Status::BadArgument)?;
-        if end > size {
-            return Err(Status::BadArgument);
-        }
         let memory = backend.global_memory.as_ref().ok_or(Status::BadArgument)?;
-        let (buffer, at) = memory
-            .image_region(
-                resolution.pool,
-                resolution.offset,
-                usize::try_from(size).map_err(|_| Status::BadArgument)?,
-            )
-            .ok_or(Status::BadArgument)?;
+        let mut input = VertexInput {
+            bindings: Vec::new(),
+            attributes: Vec::new(),
+        };
+        let mut buffers = Vec::new();
+        for attribute in attributes {
+            let format = value(attribute, "Format")?;
+            let format_kind =
+                mapped(&contract.attribute_formats, format[0]).ok_or(Status::Unimplemented)?;
+            let offset = u32::try_from(format[1]).map_err(|_| Status::BadArgument)?;
+            let binding = u32::try_from(value(attribute, "StreamIndex")?[0])
+                .map_err(|_| Status::BadArgument)?;
+            let stream = streams.get(binding as usize).ok_or(Status::Unimplemented)?;
+            if value(stream, "Divisor")?[0] != 0 {
+                return Err(Status::Unimplemented);
+            }
+            let stride =
+                u32::try_from(value(stream, "Stride")?[0]).map_err(|_| Status::BadArgument)?;
+            let (bytes, alignment) = format_kind.layout();
+            let (address, size) = *self
+                .buffers
+                .get(&u64::from(binding))
+                .ok_or(Status::Unimplemented)?;
+            let resolution = instance
+                .objects
+                .resolve_gpu_address(address)
+                .map_err(|_| Status::BadArgument)?;
+            // Every fetched element, including the arena binding address, must be aligned.
+            let (buffer, at) = memory
+                .image_region(
+                    resolution.pool,
+                    resolution.offset,
+                    usize::try_from(size).map_err(|_| Status::BadArgument)?,
+                )
+                .ok_or(Status::BadArgument)?;
+            if size == 0
+                || size > resolution.remaining
+                || !stride.is_multiple_of(alignment)
+                || !(at + u64::from(offset)).is_multiple_of(u64::from(alignment))
+                || vertex_end(first, count, stride, offset, bytes).ok_or(Status::BadArgument)?
+                    > size
+            {
+                return Err(Status::BadArgument);
+            }
+            input.attributes.push(VertexAttribute {
+                binding,
+                format: format_kind,
+                offset,
+            });
+            if !input.bindings.iter().any(|b| b.binding == binding) {
+                input.bindings.push(VertexBinding { binding, stride });
+                buffers.push((binding, buffer, at));
+            }
+        }
+        input.bindings.sort_unstable_by_key(|b| b.binding);
+        buffers.sort_unstable_by_key(|b| b.0);
         let viewport = rectangle(self.viewport, description.width, description.height)?;
         let scissor = rectangle(self.scissor, description.width, description.height)?;
         let stages = match instance
@@ -206,7 +225,7 @@ impl State {
         }
         let Some(pipeline) = backend
             .graphics
-            .request(&stages, stride, offset)
+            .request(&stages, input, topology)
             .map_err(|_| Status::Unimplemented)?
         else {
             return Ok(());
@@ -215,8 +234,7 @@ impl State {
             return Err(Status::BadArgument);
         }
         let draw = Draw {
-            buffer,
-            offset: at,
+            buffers,
             first,
             count,
             viewport: vk::Viewport {
@@ -235,6 +253,22 @@ impl State {
         backend
             .draw(targets[0], &pipeline, &draw)
             .ok_or(Status::InternalError)
+    }
+
+    fn vertex_settings(&self, kind: &str, allowed: &[&str]) -> Result<&Vec<Settings>, Status> {
+        let settings = self
+            .vertex_states
+            .get(kind)
+            .and_then(Option::as_ref)
+            .ok_or(Status::Unimplemented)?;
+        if settings
+            .iter()
+            .flatten()
+            .any(|(name, _)| !allowed.contains(name))
+        {
+            return Err(Status::Unimplemented);
+        }
+        Ok(settings)
     }
 }
 
@@ -261,7 +295,7 @@ fn rectangle(recorded: Option<[u64; 5]>, width: u64, height: u64) -> Result<[u32
     ])
 }
 
-fn vertex_end(first: u32, count: u32, stride: u32, offset: u32) -> Option<u64> {
+fn vertex_end(first: u32, count: u32, stride: u32, offset: u32, bytes: u32) -> Option<u64> {
     if count == 0 {
         return Some(0);
     }
@@ -269,7 +303,7 @@ fn vertex_end(first: u32, count: u32, stride: u32, offset: u32) -> Option<u64> {
     u64::from(last)
         .checked_mul(u64::from(stride))?
         .checked_add(u64::from(offset))?
-        .checked_add(16)
+        .checked_add(u64::from(bytes))
 }
 
 #[cfg(test)]
@@ -277,8 +311,10 @@ mod tests {
     use super::*;
     #[test]
     fn vertex_bounds_include_first_offset_and_last_attribute() {
-        assert_eq!(vertex_end(2, 3, 32, 8), Some(152));
-        assert_eq!(vertex_end(u32::MAX, 2, 16, 0), None);
-        assert_eq!(vertex_end(u32::MAX, 0, 16, 0), Some(0));
+        assert_eq!(vertex_end(2, 3, 32, 8, 16), Some(152));
+        assert_eq!(vertex_end(2, 3, 32, 8, 4), Some(140));
+        assert_eq!(vertex_end(u32::MAX, 2, 16, 0, 16), None);
+        assert_eq!(vertex_end(u32::MAX, 0, 16, 0, 16), Some(0));
+        assert_eq!(vertex_end(10, 3, 0, 2, 4), Some(6));
     }
 }

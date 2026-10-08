@@ -46,21 +46,48 @@ pub fn handler(name: &str) -> Option<Handler> {
                     "nvnCommandBufferBindVertexAttribState" => "VertexAttribState",
                     _ => unreachable!("vertex state handler"),
                 };
-                // Signatures 0004 supports a direct stream-state object at count one.
-                // Direct attribute-state identity is the experiment choice in 0027.
-                // No object stride is inferred.
-                let settings = if r.x[1] == 1 {
-                    match i.objects.get(r.x[2]) {
-                        Some(Object::State {
-                            kind: actual,
-                            settings,
-                        }) if actual == kind => Some(settings),
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
-                record(i, 0, r, RecordedCommand::BindState { kind, settings })
+                let address = r.x[2];
+                // Counted object spacing is a host choice, not a guest layout. 0028.
+                #[cfg(feature = "vulkan")]
+                let stride = i
+                    .gpu
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .as_ref()
+                    .and_then(|gpu| gpu.first_draw.as_ref())
+                    .and_then(|contract| {
+                        if kind == "VertexAttribState" {
+                            contract.attribute_state_stride
+                        } else {
+                            contract.stream_state_stride
+                        }
+                    })
+                    .unwrap_or(0);
+                #[cfg(not(feature = "vulkan"))]
+                let stride = 0_u64;
+                let count = r.x[1];
+                let settings = (count <= 16 && (count <= 1 || stride != 0))
+                    .then(|| {
+                        (0..count)
+                            .map(|index| {
+                                let at = index.checked_mul(stride)?.checked_add(address)?;
+                                match i.objects.get(at) {
+                                    Some(Object::State {
+                                        kind: actual,
+                                        settings,
+                                    }) if actual == kind => Some(settings),
+                                    _ => None,
+                                }
+                            })
+                            .collect::<Option<Vec<_>>>()
+                    })
+                    .flatten();
+                record(
+                    i,
+                    0,
+                    r,
+                    RecordedCommand::BindVertexStates { kind, settings },
+                )
             }
         }
         "nvnCommandBufferSetRenderTargets" => |instance, _, r| {

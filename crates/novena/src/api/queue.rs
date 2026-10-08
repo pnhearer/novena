@@ -374,6 +374,7 @@ pub fn handler(name: &str) -> Option<Handler> {
                             | RecordedCommand::SetDepthRange(_)
                             | RecordedCommand::BindProgram(_)
                             | RecordedCommand::BindState { .. }
+                            | RecordedCommand::BindVertexStates { .. }
                             | RecordedCommand::Raw { .. }
                             | RecordedCommand::State(_)) => {
                                 #[cfg(feature = "vulkan")]

@@ -8,3 +8,15 @@ mod support;
 fn first_draw_executes_translated_triangle() {
     support::run("first_draw_executes_translated_triangle");
 }
+
+#[test]
+#[ignore = "requires NOVENA_SHADOWBOX_PATH, Vulkan and spirv-val"]
+fn primitive_topologies_read_back_pixels() {
+    support::run("primitive_topologies_read_back_pixels");
+}
+
+#[test]
+#[ignore = "requires NOVENA_SHADOWBOX_PATH, Vulkan, glslangValidator and spirv-val"]
+fn vertex_formats_read_back_pixels() {
+    support::run("vertex_formats_read_back_pixels");
+}

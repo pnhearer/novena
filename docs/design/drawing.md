@@ -1,29 +1,31 @@
 # Drawing support and open questions
 
-Novena executes the first controlled non-indexed draw through its Vulkan queue
-path. Guest enum mappings remain open. The experiment uses an explicit host
-contract and original synthetic shaders. This document distinguishes that
-implementation from facts in `docs/signatures` and `docs/provenance`.
+Novena executes controlled non-indexed lists, strips, and fans through its
+Vulkan queue path. It decodes multiple attributes from shared or separate
+streams. Guest enum mappings remain open. The experiment uses an explicit
+host contract and original synthetic shaders. This document distinguishes
+that implementation from facts in `docs/signatures` and `docs/provenance`.
 
 ## First draw
 
 With `vulkan`, a Rust host enables the experiment through
 `Instance::set_first_draw_contract`. `FirstDrawContract` supplies host-selected
-raw tokens for triangle-list topology, float4 attributes, no culling, RGBA8,
-a 2D target, and identity swizzle. These tokens do not establish guest enums.
-The test deliberately uses tokens outside the observed sets.
+raw token tables for topology and attribute formats, plus no culling, RGBA8,
+a 2D target, and identity swizzle. It also supplies optional object spacing
+for counted attribute and stream bindings. These choices do not establish
+guest enums or layouts. Unknown or duplicate tokens are unsupported.
 No contract means a submitted draw returns `Unimplemented`.
 
 The supported recording has these limits:
 
 | Input | Executed behavior |
 | --- | --- |
-| `DrawArrays` | One instance, recorded first vertex and count, triangle list |
-| Vertex buffer | Stream zero, pool-resolved address, bounded size in the flat arena |
-| Vertex stream state | Count one, recorded positive stride, divisor explicitly zero |
-| Vertex attribute state | Count one, recorded stream zero and offset, host-selected float4 token |
+| `DrawArrays` | One instance, recorded first vertex and count, host-selected triangle list, strip, or fan; restart disabled |
+| Vertex buffer | Each active stream has a pool-resolved address and bounded size in the flat arena |
+| Vertex stream state | Count at most 16, recorded byte stride, divisor explicitly zero; zero stride repeats one element |
+| Vertex attribute state | Count at most 16, explicit stream and byte offset, host-selected format; each array index maps to the same shader location |
 | Program | Exactly one translated vertex `main` and one fragment `main`, paired by SPIR-V execution model |
-| Shader interface | One 32-bit float4 vertex input, its reflected location, no user varyings, one float4 color output at location zero |
+| Shader interface | Consecutive 32-bit float scalar or vector inputs starting at location zero, matching float varyings, one float4 color output at location zero |
 | Color target | One pool-backed 2D base level, tightly packed RGBA8, no views, zero flags and depth-stencil mode, host-selected identity swizzle |
 | Viewport and scissor | Explicit zero origin, positive sizes bounded by the target, Vulkan pixel coordinates |
 | Color state | Target zero, blend enable explicitly zero, all channels written |
@@ -31,11 +33,11 @@ The supported recording has these limits:
 | Polygon state | Explicit host-selected no-cull token, fill mode and one sample |
 | Depth range | Vulkan interval zero through one, optional recorded interval must match |
 
-Bindings capture the recorded side-table settings, so later setters do not
-change an earlier binding. Count-one stream-state bindings identify the state
-object itself, as signatures 0004 describes. Direct attribute-state identity
-is an experiment choice. Its array layout remains open. No object stride is
-inferred.
+Bindings capture side-table settings, so later setters do not change an
+earlier binding. Count-one stream-state bindings identify the state object
+itself, as signatures 0004 describes. Direct attribute-state identity remains
+an experiment choice. Counts above one require explicit host object spacing.
+Guest array layouts remain open. No object stride is inferred.
 Each recording starts with empty draw state. State inheritance across recordings
 is open. Program translation is retained by program and read at submission.
 Program replacement, finalization, and late-read generation handling remain open.
@@ -91,8 +93,25 @@ The proof also checks driver-cache reopening, damaged-cache recovery and reuse
 from a fresh process.
 [Provenance 0027](../provenance/0027-drawing.md) records the sources and checks.
 
-All enum conversion beyond the host contract, additional attributes or streams,
-user varyings, formats, nonzero viewport origins, coordinate conversion,
+Steps 2 and 3 have a separate repeatable check:
+
+```sh
+python3 scripts/check-drawing.py
+```
+
+The check requires a configured translator, Vulkan, `spirv-val`, and
+`glslangValidator`. It refuses skips. The topology proof uses translated
+synthetic instructions for both observed primitive tokens and a synthetic fan
+token. An additional translated input changes position W and pixel coverage.
+The format proof uses original source shaders, two inputs, and a matching
+varying. It checks twelve formats, shared and separate streams, nonzero
+offsets, varied byte strides, zero stride, snapshots, and exact fetch bounds.
+All cases compare canonical target bytes with presentation readback.
+[Provenance 0028](../provenance/0028-vertex-decoding.md) distinguishes these host
+proofs from guest hypotheses and lists the real-program confirmation tests.
+
+All enum conversion beyond the host contract, integer shader inputs,
+packed attribute formats, nonzero viewport origins, coordinate conversion,
 specialization overrides, textures, samplers, uniforms, index data, instancing,
 depth, stencil, blend, masks, culling, polygon variation, multisampling, views,
 array layers, additional levels, multiple targets and asynchronous draw
@@ -103,7 +122,13 @@ needed to close these gaps.
 
 The signatures establish one `BindVertexBuffer` shape with stream index 0, a GPU address, and a size. They establish counted arrays for `BindVertexStreamState` and `BindVertexAttribState`. `VertexStreamStateSetStride` takes a stride, `VertexStreamStateSetDivisor` takes 0 or 1, `VertexAttribStateSetFormat` takes a format-like value and an offset, and `VertexAttribStateSetStreamIndex` takes a stream index from 0 through 3. The first word behind a vertex stream state matches a stride value. See [command buffer state binding](../signatures/0002-command-buffer.md#state-binding), [vertex state objects](../signatures/0003-objects.md#state-objects), and [pointer arrays](../signatures/0004-pointers.md#arrays-of-objects).
 
-Registered pools now resolve vertex addresses into the flat arena. The first draw proof checks that mapping with a nonzero offset. Missing knowledge includes the byte size and element interpretation of guest attribute formats, the location represented by each attribute state, the complete stream-state layout, and whether a divisor of 1 has instancing semantics. The recorded buffer address is a GPU address, so its usable host address needs pool resolution or another established mapping.
+Registered pools resolve vertex addresses into the flat arena. The first draw
+proof checks that mapping with a nonzero offset. Step 3 adds a second attribute,
+format conversion, and separate streams through the host contract.
+[Provenance 0028](../provenance/0028-vertex-decoding.md#format-mappings)
+lists all twelve `VkFormat` mappings and their confirmation tests.
+Guest format tokens, attribute locations, object spacing, the complete
+stream-state layout, and divisor semantics remain open.
 
 The smallest useful observation is one draw with one vertex buffer and one attribute. Vary the attribute format, offset, stream index, and stride one at a time. Dump the state object at offset `+0x00` and later words with labels. Vary the vertex buffer pool offset and compare the draw's address with the pool base. Read the vertex bytes at the resolved offset and compare a known color or position change in the result.
 
@@ -120,6 +145,12 @@ The smallest useful observation is two indexed draws over the same three indices
 `DrawArrays` and `DrawElementsBaseVertex` both carry a `primitive` value. The observed values are 5 for `DrawArrays` and 4 for indexed draws. The signatures do not map either value to a topology. See [draw state](../signatures/0009-draw-state.md).
 
 Missing knowledge is the value-to-topology map, including the number of vertices consumed and the restart behavior, if any.
+
+Step 2 implements host-selected lists, strips, and fans. The experimental
+choices 4 to triangle list and 5 to triangle strip remain hypotheses. Counts
+alone cannot distinguish a strip from a fan. The fan test uses a synthetic
+token, with no proposed guest value. The maps and an asymmetric real-program
+confirmation test are in [provenance 0028](../provenance/0028-vertex-decoding.md#topology-mappings).
 
 The smallest useful observation is the same three or four vertices drawn with one primitive value at a time. Change only the primitive value and inspect the number and arrangement of generated vertices or fragments.
 
@@ -196,8 +227,8 @@ The smallest useful observation is a program with two shader records and a draw 
 ## Ordered first attempts
 
 1. Implemented as the first draw experiment above: a non-indexed draw with one vertex buffer, one attribute, one color target, no texture or uniform buffer, and depth, stencil, blending, and culling disabled. Host tokens select topology and formats. Guest mappings and coordinate semantics remain open.
-2. Repeat the first draw with a second primitive value and a controlled vertex arrangement to establish topology.
-3. Add a second attribute and vary its format, offset, and stream state to establish vertex decoding.
+2. Implemented through an explicit host contract: repeat the first draw with primitive values 4 and 5 and a synthetic fan token over the same controlled vertices. Guest topology hypotheses still require real-program confirmation.
+3. Implemented through an explicit host contract: add a second attribute and vary its format, offset, stride, and stream. Twelve `VkFormat` choices pass readback. Guest tokens, array spacing, and location mapping still require real-program confirmation.
 4. Add uniform data after its bank mapping is observed.
 5. Add indexed drawing after index type, address, and count semantics are observed.
 6. Add depth and stencil, then rasterizer variation, after attachment formats and state mappings are observed.

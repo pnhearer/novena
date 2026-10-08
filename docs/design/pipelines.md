@@ -167,12 +167,14 @@ It uses retained translated words from the bound program, so queue execution
 does not translate again. SPIR-V execution models pair stages independently of
 record order and the unresolved `BindProgram` mask.
 
-The content key contains the complete vertex and fragment words, stride, and
-attribute offset. Full equality prevents hash collisions from aliasing code.
-Input location comes from the vertex module. The supported output is location
-zero in RGBA8 with one sample. Triangle list, float4 format, no culling, no
-blend, and no depth or stencil are fixed for this cache. Their constancy makes
-them implicit key fields. Changing that scope requires extending the key.
+The content key contains complete vertex and fragment words, topology, active
+stream indices and strides, and each attribute's stream, format, and offset.
+Full equality prevents hash collisions from aliasing code. Attribute array
+indices map to shader locations as an explicit experiment assumption.
+The supported output is location zero in RGBA8 with one sample. No culling,
+blend, depth, or stencil are fixed for this cache. Their constancy makes them
+implicit key fields. The contract supports triangle lists, strips, fans, and
+the twelve float-converting formats in provenance 0028.
 Guest addresses, vertex buffer contents, viewport, and scissor stay outside it.
 Specialization uses emitted defaults. Overrides remain open.
 
@@ -197,7 +199,8 @@ workers before releasing their driver cache. Loading uses the same checked
 envelope, device identity and empty-cache fallback as compute.
 `graphics_pending_count` reports outstanding jobs; persistence statistics and
 `take_graphics_cache_diagnostics` expose disk loading and bounded diagnostics.
-`retry_graphics_pipeline` explicitly forgets a failed content request.
+`retry_graphics_pipeline` takes the translated stages, complete `VertexInput`,
+and `PrimitiveTopology` to forget exactly one failed content request.
 
 Draw execution requests a pipeline and polls once. Queued, compiling or
 queue-full work skips only that draw, with no wait or cache I/O on submission.
@@ -208,7 +211,8 @@ established guest semantic or equivalent output guarantee.
 The first queue executor requires explicit recorded disable flags and a host
 `FirstDrawContract` for unresolved tokens. It resolves the vertex slice through
 registered pools and checks the last fetched attribute, including first vertex,
-stride, and offset. Attachment bytes load from and store to the flat arena.
+stride, offset, and format size in every active stream. Attachment bytes load
+from and store to the flat arena.
 Draws finish on a fence before temporary views and framebuffers are destroyed.
 Completed earlier operations download their bytes even if a later command in
 the submission fails. Later draws cannot silently consume unsupported state.
@@ -216,6 +220,10 @@ the submission fails. Later draws cannot silently consume unsupported state.
 The translated triangle proof covers recording, queue submission, arena storage,
 presentation, readback, state snapshots, content hits, and changed-content misses.
 [Provenance 0027](../provenance/0027-drawing.md) records this stage.
+The topology and second-attribute proofs extend those checks to separate
+streams, zero stride, format conversion, and matching float varyings.
+[Provenance 0028](../provenance/0028-vertex-decoding.md) records the mappings,
+their limits, and real-program confirmation tests.
 
 ## Driver cache persistence
 

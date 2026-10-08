@@ -22,6 +22,10 @@ pub enum RecordedCommand {
         kind: &'static str,
         settings: Option<Vec<(&'static str, [u64; 6])>>,
     },
+    BindVertexStates {
+        kind: &'static str,
+        settings: Option<Vec<StateSettings>>,
+    },
     ClearColor {
         index: u32,
         color: [f32; 4],
@@ -70,6 +74,8 @@ pub enum RecordedCommand {
         registers: [u64; 8],
     },
 }
+
+pub type StateSettings = Vec<(&'static str, [u64; 6])>;
 
 /// Firm recording fields from signatures 0010. Values stay opaque and wide;
 /// this representation does not assign enumeration meanings or integer widths.

@@ -40,11 +40,18 @@ novena = {{ path = {novena:?}, features = ["vulkan"] }}
 ash = {{ version = "0.38", default-features = false, features = ["loaded"] }}
 shadowbox = {{ path = {shadowbox:?} }}
 "#,
-            source = crate_root.join(if test == "first_draw_executes_translated_triangle" {
-                "tests/shadowbox/drawing.rs"
-            } else {
-                "tests/shadowbox/global_memory.rs"
-            }),
+            source = crate_root.join(
+                if matches!(
+                    test,
+                    "first_draw_executes_translated_triangle"
+                        | "primitive_topologies_read_back_pixels"
+                        | "vertex_formats_read_back_pixels"
+                ) {
+                    "tests/shadowbox/drawing.rs"
+                } else {
+                    "tests/shadowbox/global_memory.rs"
+                }
+            ),
             novena = crate_root,
         ),
     )

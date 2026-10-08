@@ -5,6 +5,10 @@
 - Covers: recorded draw state, graphics pipelines, color attachments, the
   translated triangle proof, and the drawing and pipeline designs
 
+Update, 2026-10-08: this note describes the initial experiment.
+[Provenance 0028](0028-vertex-decoding.md) extends its host contract, input
+interface, cache key, and GPU proofs for drawing steps 2 and 3.
+
 ## Facts and sources
 
 The call shapes come from signatures 0002, 0003, 0004, and 0009. They establish

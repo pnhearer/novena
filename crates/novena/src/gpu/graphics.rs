@@ -1,4 +1,4 @@
-//! First draw pipelines. Public Vulkan state and explicit host choices. Provenance: 0027.
+//! Bounded drawing with public Vulkan state and host choices. Provenance: 0027, 0028.
 use super::{
     pipeline_workers::AsyncPipelines,
     pipelines::{
@@ -10,23 +10,109 @@ use super::{
 use ash::vk;
 use std::{collections::HashMap, path::Path, sync::Arc};
 
-/// Opt-in host interpretation for the first draw experiment, not established guest enums.
-/// The selected tokens mean triangle list, one float4 attribute, no culling, and
-/// tightly packed RGBA8 respectively. Viewport/scissor use Vulkan pixel coordinates.
-/// Unbound raster state uses fill, one sample and all color channels.
-#[derive(Clone, Copy, Debug)]
+/// Opt-in host interpretation, not established guest enums. Provenance: 0028.
+/// Viewport/scissor use Vulkan pixel coordinates. Raster state uses fill,
+/// one sample and all color channels. Duplicate tokens are rejected at use.
+#[derive(Clone, Debug)]
 pub struct FirstDrawContract {
-    pub triangle_list: u32,
-    pub float4: u64,
+    pub topologies: Vec<(u32, PrimitiveTopology)>,
+    pub attribute_formats: Vec<(u64, VertexFormat)>,
+    /// Host-selected object spacing for counted bindings. None supports count one only.
+    pub attribute_state_stride: Option<u64>,
+    pub stream_state_stride: Option<u64>,
     pub cull_none: u64,
     pub rgba8: u64,
     pub target_2d: u64,
     pub identity_swizzle: [u64; 4],
 }
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum PrimitiveTopology {
+    TriangleList,
+    TriangleStrip,
+    TriangleFan,
+}
+
+impl PrimitiveTopology {
+    fn vk(self) -> vk::PrimitiveTopology {
+        match self {
+            Self::TriangleList => vk::PrimitiveTopology::TRIANGLE_LIST,
+            Self::TriangleStrip => vk::PrimitiveTopology::TRIANGLE_STRIP,
+            Self::TriangleFan => vk::PrimitiveTopology::TRIANGLE_FAN,
+        }
+    }
+}
+
+/// Float-converting vertex formats from public Vulkan documentation, provenance 0028.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum VertexFormat {
+    Float,
+    Float2,
+    Float3,
+    Float4,
+    Half2,
+    Half4,
+    Unorm8x4,
+    Snorm8x4,
+    Unorm16x2,
+    Unorm16x4,
+    Snorm16x2,
+    Snorm16x4,
+}
+
+impl VertexFormat {
+    pub(crate) fn vk(self) -> vk::Format {
+        match self {
+            Self::Float => vk::Format::R32_SFLOAT,
+            Self::Float2 => vk::Format::R32G32_SFLOAT,
+            Self::Float3 => vk::Format::R32G32B32_SFLOAT,
+            Self::Float4 => vk::Format::R32G32B32A32_SFLOAT,
+            Self::Half2 => vk::Format::R16G16_SFLOAT,
+            Self::Half4 => vk::Format::R16G16B16A16_SFLOAT,
+            Self::Unorm8x4 => vk::Format::R8G8B8A8_UNORM,
+            Self::Snorm8x4 => vk::Format::R8G8B8A8_SNORM,
+            Self::Unorm16x2 => vk::Format::R16G16_UNORM,
+            Self::Unorm16x4 => vk::Format::R16G16B16A16_UNORM,
+            Self::Snorm16x2 => vk::Format::R16G16_SNORM,
+            Self::Snorm16x4 => vk::Format::R16G16B16A16_SNORM,
+        }
+    }
+
+    pub(crate) fn layout(self) -> (u32, u32) {
+        match self {
+            Self::Float => (4, 4),
+            Self::Float2 => (8, 4),
+            Self::Float3 => (12, 4),
+            Self::Float4 => (16, 4),
+            Self::Half2 | Self::Unorm16x2 | Self::Snorm16x2 => (4, 2),
+            Self::Half4 | Self::Unorm16x4 | Self::Snorm16x4 => (8, 2),
+            Self::Unorm8x4 | Self::Snorm8x4 => (4, 1),
+        }
+    }
+}
+
+pub(crate) fn mapped<T: Copy, K: PartialEq>(table: &[(K, T)], token: K) -> Option<T> {
+    let mut matches = table.iter().filter(|(key, _)| *key == token);
+    let result = matches.next()?.1;
+    matches.next().is_none().then_some(result)
+}
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub(crate) struct VertexInput {
+pub struct VertexInput {
+    pub bindings: Vec<VertexBinding>,
+    pub attributes: Vec<VertexAttribute>,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct VertexBinding {
+    pub binding: u32,
     pub stride: u32,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct VertexAttribute {
+    pub binding: u32,
+    pub format: VertexFormat,
     pub offset: u32,
 }
 
@@ -35,6 +121,7 @@ struct Key {
     vertex: Vec<u32>,
     fragment: Vec<u32>,
     input: VertexInput,
+    topology: PrimitiveTopology,
 }
 
 pub(crate) struct GraphicsPipelines {
@@ -84,10 +171,10 @@ impl GraphicsPipelines {
     pub fn request(
         &mut self,
         stages: &[Vec<u32>],
-        stride: u32,
-        offset: u32,
+        input: VertexInput,
+        topology: PrimitiveTopology,
     ) -> Result<Option<Arc<GraphicsPipeline>>, String> {
-        let key = Key::new(stages, stride, offset)?;
+        let key = Key::new(stages, input, topology)?;
         let request = match self.pool.request(key) {
             Ok(request) => request,
             Err(RequestError::QueueFull) => return Ok(None),
@@ -102,10 +189,10 @@ impl GraphicsPipelines {
     pub fn retry_failed(
         &mut self,
         stages: &[Vec<u32>],
-        stride: u32,
-        offset: u32,
+        input: VertexInput,
+        topology: PrimitiveTopology,
     ) -> Result<bool, String> {
-        Ok(self.pool.retry_failed(&Key::new(stages, stride, offset)?))
+        Ok(self.pool.retry_failed(&Key::new(stages, input, topology)?))
     }
     pub fn stats(&self) -> CacheStats {
         self.pool.stats
@@ -121,7 +208,11 @@ impl GraphicsPipelines {
     }
 }
 impl Key {
-    fn new(stages: &[Vec<u32>], stride: u32, offset: u32) -> Result<Self, String> {
+    fn new(
+        stages: &[Vec<u32>],
+        input: VertexInput,
+        topology: PrimitiveTopology,
+    ) -> Result<Self, String> {
         if stages.len() != 2 {
             return Err("first draw requires exactly two translated stages".into());
         }
@@ -140,18 +231,17 @@ impl Key {
         }
         let vertex = vertex.ok_or("missing vertex stage")?;
         let fragment = fragment.ok_or("missing fragment stage")?;
-        let input = VertexInput { stride, offset };
         Ok(Self {
             vertex: vertex.clone(),
             fragment: fragment.clone(),
             input,
+            topology,
         })
     }
 }
 
 pub(crate) struct Draw {
-    pub buffer: vk::Buffer,
-    pub offset: u64,
+    pub buffers: Vec<(u32, vk::Buffer, u64)>,
     pub viewport: vk::Viewport,
     pub scissor: vk::Rect2D,
     pub first: u32,
@@ -186,8 +276,8 @@ fn execution_model(words: &[u32]) -> Result<u32, String> {
     }
 }
 
-// Inspect the narrow float4 interface from public SPIR-V types and decorations.
-fn float4_interface(words: &[u32], storage: u32) -> Result<Option<u32>, String> {
+// Inspect scalar/vector float interfaces from public types and decorations.
+fn float_interface(words: &[u32], storage: u32) -> Result<Vec<(u32, u32)>, String> {
     let instructions = instructions(words)?;
     let mut types = HashMap::new();
     let mut locations = HashMap::new();
@@ -208,7 +298,7 @@ fn float4_interface(words: &[u32], storage: u32) -> Result<Option<u32>, String> 
             _ => {}
         }
     }
-    let mut result = None;
+    let mut result = Vec::new();
     for &(op, args) in &instructions {
         if op != 59 || args.len() < 3 || args[2] != storage {
             continue;
@@ -225,8 +315,10 @@ fn float4_interface(words: &[u32], storage: u32) -> Result<Option<u32>, String> 
             }
             continue;
         }
-        let Some(&(23, [_, scalar, 4])) = types.get(ty) else {
-            return Err("first draw requires a float4 interface".into());
+        let (scalar, components) = match types.get(ty) {
+            Some((23, [_, scalar, components @ 2..=4])) => (scalar, *components),
+            Some((22, [_, 32])) => (ty, 1),
+            _ => return Err("draw requires scalar/vector float interfaces".into()),
         };
         if !matches!(types.get(scalar), Some((22, [_, 32]))) {
             return Err("first draw requires 32-bit floats".into());
@@ -234,10 +326,12 @@ fn float4_interface(words: &[u32], storage: u32) -> Result<Option<u32>, String> 
         let location = *locations
             .get(&args[1])
             .ok_or("missing interface location")?;
-        if result.replace(location).is_some() {
-            return Err("multiple interface locations are unsupported".into());
+        if result.iter().any(|&(at, _)| at == location) {
+            return Err("duplicate interface location".into());
         }
+        result.push((location, components));
     }
+    result.sort_unstable();
     Ok(result)
 }
 
@@ -255,14 +349,21 @@ impl GraphicsPipeline {
         {
             return Err("first draw does not support descriptors".into());
         }
-        let location = float4_interface(&key.vertex, 1)?.ok_or("missing vertex attribute")?;
-        if float4_interface(&key.vertex, 3)?.is_some()
-            || float4_interface(&key.fragment, 1)?.is_some()
+        let inputs = float_interface(&key.vertex, 1)?;
+        if inputs.is_empty()
+            || inputs.len() != key.input.attributes.len()
+            || inputs
+                .iter()
+                .enumerate()
+                .any(|(i, &(at, _))| at != i as u32)
         {
-            return Err("first draw does not support user varyings".into());
+            return Err("attribute state indices must match shader locations".into());
         }
-        if float4_interface(&key.fragment, 3)? != Some(0) {
-            return Err("first draw requires color output location zero".into());
+        if float_interface(&key.vertex, 3)? != float_interface(&key.fragment, 1)? {
+            return Err("vertex and fragment varying interfaces differ".into());
+        }
+        if float_interface(&key.fragment, 3)? != [(0, 4)] {
+            return Err("draw requires float4 color output location zero".into());
         }
         let limits = unsafe {
             context
@@ -270,24 +371,32 @@ impl GraphicsPipeline {
                 .get_physical_device_properties(context.physical_device)
         }
         .limits;
-        if key.input.stride == 0
-            || key.input.stride > limits.max_vertex_input_binding_stride
-            || key.input.offset > limits.max_vertex_input_attribute_offset
-            || location >= limits.max_vertex_input_attributes
-        {
-            return Err("vertex input exceeds device limits".into());
+        if key.input.attributes.len() > limits.max_vertex_input_attributes as usize {
+            return Err("too many vertex attributes".into());
         }
-        let supported = unsafe {
-            context.instance.get_physical_device_format_properties(
-                context.physical_device,
-                vk::Format::R32G32B32A32_SFLOAT,
-            )
-        };
-        if !supported
-            .buffer_features
-            .contains(vk::FormatFeatureFlags::VERTEX_BUFFER)
-        {
-            return Err("float4 vertex input is unavailable".into());
+        for binding in &key.input.bindings {
+            if binding.binding >= limits.max_vertex_input_bindings
+                || binding.stride > limits.max_vertex_input_binding_stride
+            {
+                return Err("vertex binding exceeds device limits".into());
+            }
+        }
+        for attribute in &key.input.attributes {
+            if attribute.offset > limits.max_vertex_input_attribute_offset {
+                return Err("vertex attribute exceeds device limits".into());
+            }
+            let supported = unsafe {
+                context.instance.get_physical_device_format_properties(
+                    context.physical_device,
+                    attribute.format.vk(),
+                )
+            };
+            if !supported
+                .buffer_features
+                .contains(vk::FormatFeatureFlags::VERTEX_BUFFER)
+            {
+                return Err("vertex format is unavailable".into());
+            }
         }
         let mut result = Self {
             context: context.clone(),
@@ -352,20 +461,35 @@ impl GraphicsPipeline {
                 .module(fragment)
                 .name(c"main"),
         ];
-        let bindings = [vk::VertexInputBindingDescription::default()
-            .binding(0)
-            .stride(key.input.stride)
-            .input_rate(vk::VertexInputRate::VERTEX)];
-        let attributes = [vk::VertexInputAttributeDescription::default()
-            .binding(0)
-            .location(location)
-            .format(vk::Format::R32G32B32A32_SFLOAT)
-            .offset(key.input.offset)];
+        let bindings: Vec<_> = key
+            .input
+            .bindings
+            .iter()
+            .map(|b| {
+                vk::VertexInputBindingDescription::default()
+                    .binding(b.binding)
+                    .stride(b.stride)
+                    .input_rate(vk::VertexInputRate::VERTEX)
+            })
+            .collect();
+        let attributes: Vec<_> = key
+            .input
+            .attributes
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                vk::VertexInputAttributeDescription::default()
+                    .binding(a.binding)
+                    .location(i as u32)
+                    .format(a.format.vk())
+                    .offset(a.offset)
+            })
+            .collect();
         let input = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_binding_descriptions(&bindings)
             .vertex_attribute_descriptions(&attributes);
-        let assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+        let assembly =
+            vk::PipelineInputAssemblyStateCreateInfo::default().topology(key.topology.vk());
         let viewport = vk::PipelineViewportStateCreateInfo::default()
             .viewport_count(1)
             .scissor_count(1);
@@ -421,7 +545,9 @@ impl GraphicsPipeline {
     pub unsafe fn record(&self, command: vk::CommandBuffer, memory: &GlobalMemory, draw: &Draw) {
         let device = &self.context.device;
         device.cmd_bind_pipeline(command, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
-        device.cmd_bind_vertex_buffers(command, 0, &[draw.buffer], &[draw.offset]);
+        for &(binding, buffer, offset) in &draw.buffers {
+            device.cmd_bind_vertex_buffers(command, binding, &[buffer], &[offset]);
+        }
         device.cmd_set_viewport(command, 0, &[draw.viewport]);
         device.cmd_set_scissor(command, 0, &[draw.scissor]);
         memory.push_delta(
@@ -468,28 +594,30 @@ mod tests {
     fn derives_stage_and_single_float4_location_from_translation() {
         let vertex = interface(0, 1, 3);
         assert_eq!(execution_model(&vertex).unwrap(), 0);
-        assert_eq!(float4_interface(&vertex, 1).unwrap(), Some(3));
-        assert_eq!(float4_interface(&vertex, 3).unwrap(), None);
+        assert_eq!(float_interface(&vertex, 1).unwrap(), [(3, 4)]);
+        assert!(float_interface(&vertex, 3).unwrap().is_empty());
         assert!(stage_bindings(&vertex, 0).unwrap().is_empty());
         assert!(stage_bindings(&vertex, 4).is_err());
         let fragment = interface(4, 3, 0);
         assert_eq!(execution_model(&fragment).unwrap(), 4);
-        assert_eq!(float4_interface(&fragment, 3).unwrap(), Some(0));
+        assert_eq!(float_interface(&fragment, 3).unwrap(), [(0, 4)]);
     }
     #[test]
-    fn rejects_extra_attributes_scalar_types_and_fragment_builtin_outputs() {
+    fn accepts_extra_float_attributes_and_rejects_bad_interfaces() {
         let mut words = interface(0, 1, 0);
         instruction(&mut words, 59, &[3, 5, 1]);
         instruction(&mut words, 71, &[5, 30, 1]);
-        assert!(float4_interface(&words, 1)
+        assert_eq!(float_interface(&words, 1).unwrap(), [(0, 4), (1, 4)]);
+        instruction(&mut words, 71, &[5, 30, 0]);
+        assert!(float_interface(&words, 1)
             .unwrap_err()
-            .contains("multiple"));
+            .contains("duplicate"));
         let mut words = interface(0, 1, 0);
         words[12] = 16; // Float width.
-        assert!(float4_interface(&words, 1).is_err());
+        assert!(float_interface(&words, 1).is_err());
         let mut words = interface(4, 3, 0);
         instruction(&mut words, 71, &[4, 11, 22]); // FragDepth.
-        assert!(float4_interface(&words, 3).unwrap_err().contains("builtin"));
+        assert!(float_interface(&words, 3).unwrap_err().contains("builtin"));
         let mut words = interface(0, 1, 0);
         words.push(0);
         assert!(execution_model(&words).unwrap_err().contains("length"));

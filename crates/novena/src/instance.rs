@@ -299,8 +299,8 @@ impl Instance {
     pub fn retry_graphics_pipeline(
         &self,
         stages: &[Vec<u32>],
-        stride: u32,
-        offset: u32,
+        input: crate::gpu::graphics::VertexInput,
+        topology: crate::gpu::graphics::PrimitiveTopology,
     ) -> Result<bool, String> {
         self.gpu
             .lock()
@@ -308,7 +308,7 @@ impl Instance {
             .as_mut()
             .ok_or("Vulkan backend is unavailable")?
             .graphics
-            .retry_failed(stages, stride, offset)
+            .retry_failed(stages, input, topology)
     }
 
     pub fn set_shader_translator(&self, translator: Option<Arc<dyn ShaderTranslator>>) {
