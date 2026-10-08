@@ -7,9 +7,12 @@ use std::{env, fs, path::PathBuf, process::Command};
 fn run(test: &str) {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root = crate_root.join("../..").canonicalize().unwrap();
-    let shadowbox = env::var_os("NOVENA_SHADOWBOX_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("NOVENA_SHADOWBOX_PATH-unset"));
+    // The translator is a separate project: point NOVENA_SHADOWBOX_PATH at its
+    // crates/shadowbox directory to run these checks; without it they skip.
+    let Some(shadowbox) = env::var_os("NOVENA_SHADOWBOX_PATH").map(PathBuf::from) else {
+        eprintln!("SKIP {test}: NOVENA_SHADOWBOX_PATH is not set");
+        return;
+    };
     if !shadowbox.join("Cargo.toml").is_file() {
         eprintln!(
             "SKIP {test}: Shadowbox checkout absent at {}",

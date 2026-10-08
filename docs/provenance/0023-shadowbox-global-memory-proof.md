@@ -66,9 +66,8 @@ Shadowbox's `docs/design/global-memory-flat.md`, citing Mesa
 zeroed record selecting Shadowbox's compute stage. The test uses its public
 translation API rather than reproducing its emitter or decoder.
 
-The dependency points to the requested sibling checkout at
-the directory named by `NOVENA_SHADOWBOX_PATH`. Verification uses its
-`gmem-flat` revision `57bb5cf7b87cc5e73f0a87c6c9f441bf9f0eae14`.
+The dependency is the Shadowbox checkout named by `NOVENA_SHADOWBOX_PATH`.
+Verification used its `gmem-flat` revision `57bb5cf7b87cc5e73f0a87c6c9f441bf9f0eae14`.
 2026-10-07: [Merge note 0024](0024-gmem-flat-merge.md) supersedes the original
 workspace dependency arrangement. Shadowbox is now a dev-dependency only in
 an isolated test package. Novena builds without that checkout, and the wrapper
