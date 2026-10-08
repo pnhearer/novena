@@ -69,7 +69,7 @@ Novena does not infer those semantics from the observed flag values.
 
 ## Vulkan allocation and features
 
-The arena buffer has `SHADER_DEVICE_ADDRESS`, `STORAGE_BUFFER`, `TRANSFER_SRC`,
+The arena buffer has `SHADER_DEVICE_ADDRESS`, `STORAGE_BUFFER`, `UNIFORM_BUFFER`, `TRANSFER_SRC`,
 and `TRANSFER_DST` usage. Its allocation includes the `DEVICE_ADDRESS` flag.
 Novena binds the complete allocation before querying its buffer address. See the
 [Buffer device address guide](https://docs.vulkan.org/guide/latest/buffer_device_address.html).
@@ -134,7 +134,10 @@ not destroy its device. Pools never migrate to another buffer or device address.
 Novena still records draws without executing shaders, as described in
 [drawing.md](drawing.md). This change supplies GPU memory, address returns,
 feature negotiation, module checks, and the push-constant helper. It does not
-add a production graphics pipeline or dispatch implementation.
+add a production graphics pipeline or guest dispatch implementation.
+The [compute pipeline stage](pipelines.md) now supplies cached host compute
+pipelines and a dispatch recording helper, including bounded uniform descriptors.
+Guest command-buffer shader execution remains unfinished.
 
 The direct Vulkan tests execute project-authored physical-address shaders through
 the production allocator and delta helper. They establish the memory contract
@@ -161,7 +164,7 @@ results. Run it explicitly with
 
 Shadowbox is a dev-dependency of an isolated test package generated under
 `target`, so Novena builds without that checkout. The test reports `SKIP` if
-the default sibling path is absent. Set `NOVENA_SHADOWBOX_PATH` to the directory
+`NOVENA_SHADOWBOX_PATH` is unset; a configured path without a manifest fails. Set `NOVENA_SHADOWBOX_PATH` to the directory
 containing Shadowbox's `Cargo.toml` to use another checkout. With a checkout
 present, translation, validation, and GPU failures fail the test. See
 [merge note 0024](../provenance/0024-gmem-flat-merge.md) for the dependency and

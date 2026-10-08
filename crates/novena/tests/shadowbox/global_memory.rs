@@ -6,7 +6,7 @@ use novena::{
     global_memory::{ARENA_SIZE, GUEST_BASE},
     gpu::{Context, GlobalMemory},
 };
-use shadowbox::{interface::ShaderInput, PUSH_GLOBAL_DELTA_OFFSET, PUSH_GLOBAL_DELTA_SIZE};
+use shadowbox::{PUSH_GLOBAL_DELTA_OFFSET, PUSH_GLOBAL_DELTA_SIZE};
 use std::{ffi::CString, fs, path::PathBuf, process::Command, sync::Arc};
 
 const BYTES: usize = 128;
@@ -50,7 +50,7 @@ fn addresses(source: u64, destination: u64) -> Vec<u64> {
     ]
 }
 
-fn translate(instructions: &[u64]) -> Vec<u32> {
+fn program_bytes(instructions: &[u64]) -> Vec<u8> {
     // gm107.c:2174-2182,2215-2216: one control word per three instructions.
     let mut slots = instructions.to_vec();
     slots.push(EXIT);
@@ -61,13 +61,15 @@ fn translate(instructions: &[u64]) -> Vec<u32> {
             code.extend(bundle.get(slot).copied().unwrap_or(NOP).to_le_bytes());
         }
     }
-    shadowbox::translate(&ShaderInput {
-        code: &code,
-        // Shadowbox headers.rs:67-74: a zero stage field selects compute.
-        program_record: &[0; 128],
-    })
-    .expect("synthetic Maxwell translation")
-    .spirv
+    let mut program = vec![0; 80];
+    program.extend(code);
+    program
+}
+
+fn translate(instructions: &[u64]) -> Vec<u32> {
+    shadowbox::translate_header_prefixed(&program_bytes(instructions))
+        .expect("synthetic Maxwell translation")
+        .spirv
 }
 
 struct Case {
@@ -464,4 +466,195 @@ fn shadowbox_programs_execute_in_novena_arena() {
     }
     assert_eq!(memory.addresses(), map, "arena delta remains fixed");
     println!("{count} Shadowbox/Novena GPU cases MATCH");
+}
+
+struct PipelineTranslator(std::sync::atomic::AtomicUsize);
+impl novena::ShaderTranslator for PipelineTranslator {
+    fn translate(&self, _: novena::ShaderStage, program: &[u8]) -> Result<Vec<u32>, String> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let output =
+            shadowbox::translate_header_prefixed(program).map_err(|error| error.to_string())?;
+        if output.requires_subgroup_size_32 {
+            return Err("subgroup size 32 is not enabled by this executor".into());
+        }
+        validate(&output.spirv);
+        Ok(output.spirv)
+    }
+}
+
+#[test]
+#[ignore = "requires Vulkan, the 1 GiB arena and spirv-val; never skips"]
+fn compute_pipeline_cache_executes_translated_program() {
+    use novena::gpu::pipelines::{CacheStats, ComputePipelines};
+    use std::sync::atomic::Ordering;
+
+    let context = Arc::new(Context::new().expect("compute Vulkan context"));
+    let mut memory = GlobalMemory::new(&context, ARENA_SIZE).expect("flat arena");
+    let source = memory.allocate_pool(1, 0x1000, BYTES as u64).unwrap();
+    let destination = memory.allocate_pool(2, 0x2000, BYTES as u64).unwrap();
+    let translator = Arc::new(PipelineTranslator(std::sync::atomic::AtomicUsize::new(0)));
+    let mut cache = ComputePipelines::new(&context, translator.clone()).unwrap();
+    let mut input = [0x5a; BYTES];
+    input[32..36].copy_from_slice(&0x1234_abcd_u32.to_le_bytes());
+    let mut instructions = addresses(source, destination);
+    instructions.push(global(false, 4, 8, 2, 32, true));
+    instructions.push(global(true, 4, 8, 4, 32, true));
+    let program = program_bytes(&instructions);
+    let first = cache.get_or_compile(&program).unwrap();
+    // Distinct allocation with the same source, never object-address identity.
+    let second = cache.get_or_compile(&program.clone()).unwrap();
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(translator.0.load(Ordering::Relaxed), 1);
+    assert_eq!(cache.stats(), CacheStats { hits: 1, misses: 1 });
+    assert!(
+        first.bindings().is_empty(),
+        "physical accesses have no descriptor"
+    );
+    instructions[4] = global(false, 4, 8, 2, 36, true);
+    let changed = cache.get_or_compile(&program_bytes(&instructions)).unwrap();
+    assert!(!Arc::ptr_eq(&first, &changed));
+    assert_eq!(translator.0.load(Ordering::Relaxed), 2);
+    assert_eq!(cache.stats(), CacheStats { hits: 1, misses: 2 });
+    // Mesa SM50 OpLdc: bank bits 36..41, byte offset 20..36,
+    // dynamic offset register 8..16, B32 type 4 at 48..51. See provenance 0025.
+    let ldc = (0xef90_u64 << 48) | (4 << 48) | ALWAYS | 8 | (255 << 8) | (32 << 20) | (3 << 36);
+    let uniform_program = program_bytes(&[
+        mov(4, destination as u32),
+        mov(5, (destination >> 32) as u32),
+        ldc,
+        global(true, 4, 8, 4, 32, true),
+    ]);
+    let uniform_pipeline = cache.get_or_compile(&uniform_program).unwrap();
+    let bindings = uniform_pipeline.bindings();
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(
+        (bindings[0].set, bindings[0].binding, bindings[0].count),
+        (0, 3, 1)
+    );
+    assert_eq!(
+        bindings[0].descriptor_type.as_raw(),
+        vk::DescriptorType::UNIFORM_BUFFER.as_raw()
+    );
+    assert_eq!(translator.0.load(Ordering::Relaxed), 3);
+    assert_eq!(cache.stats(), CacheStats { hits: 1, misses: 3 });
+    // Pipeline ownership is independent of the cache.
+    drop(cache);
+    memory.write_pool(1, 0, &input).unwrap();
+    memory.write_pool(2, 0, &[0xa5; BYTES]).unwrap();
+    submit_pipeline(&context, &memory, &first, &[]);
+    let mut actual = [0; BYTES];
+    memory.read_pool(2, 0, &mut actual).unwrap();
+    let mut expected = [0xa5; BYTES];
+    expected[32..36].copy_from_slice(&input[32..36]);
+    assert_eq!(
+        actual, expected,
+        "translated compute copied exactly one word"
+    );
+    memory.write_pool(2, 0, &[0xa5; BYTES]).unwrap();
+    let buffer = memory.uniform_buffer_info(1, 0, BYTES as u64).unwrap();
+    assert!(memory.uniform_buffer_info(1, 0, 0).is_none());
+    assert!(memory.uniform_buffer_info(1, 0, BYTES as u64 + 1).is_none());
+    // SAFETY: the descriptor pool and live arena belong to this context. The
+    // set is populated from a bounded pool slice and destroyed after completion.
+    unsafe {
+        let device = &context.device;
+        let sizes = [vk::DescriptorPoolSize::default()
+            .ty(vk::DescriptorType::UNIFORM_BUFFER)
+            .descriptor_count(1)];
+        let pool = device
+            .create_descriptor_pool(
+                &vk::DescriptorPoolCreateInfo::default()
+                    .max_sets(1)
+                    .pool_sizes(&sizes),
+                None,
+            )
+            .unwrap();
+        let sets = device
+            .allocate_descriptor_sets(
+                &vk::DescriptorSetAllocateInfo::default()
+                    .descriptor_pool(pool)
+                    .set_layouts(uniform_pipeline.set_layouts()),
+            )
+            .unwrap();
+        device.update_descriptor_sets(
+            &[vk::WriteDescriptorSet::default()
+                .dst_set(sets[0])
+                .dst_binding(3)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(&[buffer])],
+            &[],
+        );
+        submit_pipeline(&context, &memory, &uniform_pipeline, &sets);
+        device.destroy_descriptor_pool(pool, None);
+    }
+    memory.read_pool(2, 0, &mut actual).unwrap();
+    assert_eq!(
+        actual, expected,
+        "translated LDC reads the reflected uniform binding"
+    );
+    println!("MATCH translated physical and uniform compute dispatches, content cache hit and changed-content miss");
+}
+
+fn submit_pipeline(
+    context: &Context,
+    memory: &GlobalMemory,
+    pipeline: &novena::gpu::pipelines::ComputePipeline,
+    sets: &[vk::DescriptorSet],
+) {
+    // SAFETY: this test exclusively uses the queue and retains all referenced
+    // pipelines, descriptors and live pools until completion.
+    unsafe {
+        let device = &context.device;
+        let pool = device
+            .create_command_pool(
+                &vk::CommandPoolCreateInfo::default().queue_family_index(context.queue_family),
+                None,
+            )
+            .unwrap();
+        let command = device
+            .allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::default()
+                    .command_pool(pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(1),
+            )
+            .unwrap()[0];
+        device
+            .begin_command_buffer(command, &vk::CommandBufferBeginInfo::default())
+            .unwrap();
+        if !sets.is_empty() {
+            assert!(pipeline
+                .record_dispatch(command, memory, &[], [1, 1, 1])
+                .is_err());
+        }
+        let limits = context
+            .instance
+            .get_physical_device_properties(context.physical_device)
+            .limits;
+        if let Some((axis, over)) = limits
+            .max_compute_work_group_count
+            .iter()
+            .enumerate()
+            .find_map(|(axis, count)| count.checked_add(1).map(|over| (axis, over)))
+        {
+            let mut groups = [1; 3];
+            groups[axis] = over;
+            assert!(pipeline
+                .record_dispatch(command, memory, sets, groups)
+                .is_err());
+        }
+        pipeline
+            .record_dispatch(command, memory, sets, [1, 1, 1])
+            .unwrap();
+        device.end_command_buffer(command).unwrap();
+        device
+            .queue_submit(
+                context.queue,
+                &[vk::SubmitInfo::default().command_buffers(&[command])],
+                vk::Fence::null(),
+            )
+            .unwrap();
+        device.queue_wait_idle(context.queue).unwrap();
+        device.destroy_command_pool(pool, None);
+    }
 }

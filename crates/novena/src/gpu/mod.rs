@@ -9,6 +9,7 @@ use std::ffi::CString;
 use std::sync::Arc;
 
 mod memory;
+pub mod pipelines;
 pub use memory::GlobalMemory;
 
 #[derive(Clone, Copy, Debug, Default)]

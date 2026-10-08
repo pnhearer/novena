@@ -31,6 +31,7 @@ impl GlobalMemory {
             .usage(
                 vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                     | vk::BufferUsageFlags::STORAGE_BUFFER
+                    | vk::BufferUsageFlags::UNIFORM_BUFFER
                     | vk::BufferUsageFlags::TRANSFER_SRC
                     | vk::BufferUsageFlags::TRANSFER_DST,
             )
@@ -90,6 +91,36 @@ impl GlobalMemory {
 
     pub fn context(&self) -> &Context {
         &self.context
+    }
+
+    /// A bounded uniform descriptor for a live pool. Evidence: provenance 0025.
+    /// The caller retains this arena and pool until descriptor users finish.
+    pub fn uniform_buffer_info(
+        &self,
+        key: u64,
+        offset: u64,
+        size: u64,
+    ) -> Option<vk::DescriptorBufferInfo> {
+        let at = self.pool_offset(key, offset, usize::try_from(size).ok()?)?;
+        // SAFETY: querying immutable properties of this context's physical device.
+        let limits = unsafe {
+            self.context
+                .instance
+                .get_physical_device_properties(self.context.physical_device)
+        }
+        .limits;
+        if size == 0
+            || size > u64::from(limits.max_uniform_buffer_range)
+            || !at.is_multiple_of(limits.min_uniform_buffer_offset_alignment)
+        {
+            return None;
+        }
+        Some(
+            vk::DescriptorBufferInfo::default()
+                .buffer(self.buffer)
+                .offset(at)
+                .range(size),
+        )
     }
 
     pub fn contains_pool(&self, key: u64) -> bool {
