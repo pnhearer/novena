@@ -1,10 +1,11 @@
-//! Bounded drawing with public Vulkan state and host choices. Provenance: 0027, 0028.
+//! Bounded drawing with public Vulkan state and host choices. Provenance: 0027, 0028, 0029.
 use super::{
     pipeline_workers::AsyncPipelines,
     pipelines::{
-        stage_bindings, CacheStats, DriverCache, PersistenceStats, PipelineStatus, RequestError,
+        CacheStats, DriverCache, PersistenceStats, PipelineStatus, RequestError,
         TranslationIdentity,
     },
+    uniforms::{self, Bank, UniformStage, BANK_SIZE},
     Context, GlobalMemory,
 };
 use ash::vk;
@@ -122,10 +123,12 @@ struct Key {
     fragment: Vec<u32>,
     input: VertexInput,
     topology: PrimitiveTopology,
+    storage: bool,
 }
 
 pub(crate) struct GraphicsPipelines {
     driver: Arc<DriverCache>,
+    requires_storage: bool,
     pool: AsyncPipelines<Key, GraphicsPipeline>,
 }
 impl GraphicsPipelines {
@@ -149,7 +152,7 @@ impl GraphicsPipelines {
     ) -> Result<Self, String> {
         let driver = DriverCache::new(
             context,
-            b"novena graphics main interface 1 disk 1",
+            b"novena graphics main interface 2 disk 1",
             persistence,
         )?;
         let worker_driver = driver.clone();
@@ -165,7 +168,17 @@ impl GraphicsPipelines {
                 Ok(Arc::new(pipeline))
             },
         )?;
-        Ok(Self { driver, pool })
+        let limits = unsafe {
+            context
+                .instance
+                .get_physical_device_properties(context.physical_device)
+        }
+        .limits;
+        Ok(Self {
+            driver,
+            pool,
+            requires_storage: u64::from(limits.max_uniform_buffer_range) < BANK_SIZE,
+        })
     }
     /// A pending or queue-full request skips only this draw. Failures stay visible.
     pub fn request(
@@ -173,8 +186,9 @@ impl GraphicsPipelines {
         stages: &[Vec<u32>],
         input: VertexInput,
         topology: PrimitiveTopology,
+        storage: bool,
     ) -> Result<Option<Arc<GraphicsPipeline>>, String> {
-        let key = Key::new(stages, input, topology)?;
+        let key = Key::new(stages, input, topology, self.uses_storage(storage))?;
         let request = match self.pool.request(key) {
             Ok(request) => request,
             Err(RequestError::QueueFull) => return Ok(None),
@@ -191,8 +205,17 @@ impl GraphicsPipelines {
         stages: &[Vec<u32>],
         input: VertexInput,
         topology: PrimitiveTopology,
+        storage: bool,
     ) -> Result<bool, String> {
-        Ok(self.pool.retry_failed(&Key::new(stages, input, topology)?))
+        Ok(self.pool.retry_failed(&Key::new(
+            stages,
+            input,
+            topology,
+            self.uses_storage(storage),
+        )?))
+    }
+    pub fn uses_storage(&self, requested: bool) -> bool {
+        requested || self.requires_storage
     }
     pub fn stats(&self) -> CacheStats {
         self.pool.stats
@@ -212,6 +235,7 @@ impl Key {
         stages: &[Vec<u32>],
         input: VertexInput,
         topology: PrimitiveTopology,
+        storage: bool,
     ) -> Result<Self, String> {
         if stages.len() != 2 {
             return Err("first draw requires exactly two translated stages".into());
@@ -236,6 +260,7 @@ impl Key {
             fragment: fragment.clone(),
             input,
             topology,
+            storage,
         })
     }
 }
@@ -246,9 +271,10 @@ pub(crate) struct Draw {
     pub scissor: vk::Rect2D,
     pub first: u32,
     pub count: u32,
+    pub descriptors: DrawDescriptors,
 }
 
-fn instructions(words: &[u32]) -> Result<Vec<(u32, &[u32])>, String> {
+pub(super) fn instructions(words: &[u32]) -> Result<Vec<(u32, &[u32])>, String> {
     if words.len() < 5 || words[0] != 0x0723_0203 {
         return Err("invalid SPIR-V header".into());
     }
@@ -265,7 +291,7 @@ fn instructions(words: &[u32]) -> Result<Vec<(u32, &[u32])>, String> {
     Ok(result)
 }
 
-fn execution_model(words: &[u32]) -> Result<u32, String> {
+pub(crate) fn execution_model(words: &[u32]) -> Result<u32, String> {
     let entries: Vec<_> = instructions(words)?
         .into_iter()
         .filter(|(op, _)| *op == 15)
@@ -340,15 +366,15 @@ pub(crate) struct GraphicsPipeline {
     pub render_pass: vk::RenderPass,
     pipeline: vk::Pipeline,
     layout: vk::PipelineLayout,
+    set_layouts: Vec<vk::DescriptorSetLayout>,
+    pub banks: Vec<Bank>,
+    pub storage: bool,
 }
 
 impl GraphicsPipeline {
     fn create(context: &Arc<Context>, cache: vk::PipelineCache, key: &Key) -> Result<Self, String> {
-        if !stage_bindings(&key.vertex, 0)?.is_empty()
-            || !stage_bindings(&key.fragment, 4)?.is_empty()
-        {
-            return Err("first draw does not support descriptors".into());
-        }
+        let mut banks = uniforms::banks(&key.vertex, UniformStage::Vertex)?;
+        banks.extend(uniforms::banks(&key.fragment, UniformStage::Fragment)?);
         let inputs = float_interface(&key.vertex, 1)?;
         if inputs.is_empty()
             || inputs.len() != key.input.attributes.len()
@@ -398,11 +424,41 @@ impl GraphicsPipeline {
                 return Err("vertex format is unavailable".into());
             }
         }
+        let (per_stage, total, range) = if key.storage {
+            (
+                limits.max_per_stage_descriptor_storage_buffers,
+                limits.max_descriptor_set_storage_buffers,
+                limits.max_storage_buffer_range,
+            )
+        } else {
+            (
+                limits.max_per_stage_descriptor_uniform_buffers,
+                limits.max_descriptor_set_uniform_buffers,
+                limits.max_uniform_buffer_range,
+            )
+        };
+        if !banks.is_empty()
+            && (u64::from(range) < BANK_SIZE
+                || limits.max_bound_descriptor_sets < 2
+                || banks.len() > total as usize
+                || [UniformStage::Vertex, UniformStage::Fragment]
+                    .iter()
+                    .any(|stage| {
+                        let count = banks.iter().filter(|b| b.stage == *stage).count();
+                        count > per_stage as usize
+                            || count > limits.max_per_stage_resources as usize
+                    }))
+        {
+            return Err("constant banks exceed device descriptor limits".into());
+        }
         let mut result = Self {
             context: context.clone(),
             render_pass: vk::RenderPass::null(),
             pipeline: vk::Pipeline::null(),
             layout: vk::PipelineLayout::null(),
+            set_layouts: Vec::new(),
+            banks,
+            storage: key.storage,
         };
         // SAFETY: these are fixed public Vulkan states, with owned partial handles.
         unsafe {
@@ -430,19 +486,53 @@ impl GraphicsPipeline {
                     None,
                 )
                 .map_err(|e| format!("create draw render pass: {e:?}"))?;
+            if !result.banks.is_empty() {
+                for stage in [UniformStage::Vertex, UniformStage::Fragment] {
+                    let bindings: Vec<_> = result
+                        .banks
+                        .iter()
+                        .filter(|b| b.stage == stage)
+                        .map(|b| {
+                            vk::DescriptorSetLayoutBinding::default()
+                                .binding(b.bank)
+                                .descriptor_type(result.descriptor_type())
+                                .descriptor_count(1)
+                                .stage_flags(stage.flags())
+                        })
+                        .collect();
+                    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+                    let mut support = vk::DescriptorSetLayoutSupport::default();
+                    context
+                        .device
+                        .get_descriptor_set_layout_support(&info, &mut support);
+                    if support.supported == vk::FALSE {
+                        return Err("constant bank layout is unavailable".into());
+                    }
+                    result.set_layouts.push(
+                        context
+                            .device
+                            .create_descriptor_set_layout(&info, None)
+                            .map_err(|e| format!("create constant bank layout: {e:?}"))?,
+                    );
+                }
+            }
             let ranges = [GlobalMemory::push_constant_range(
                 vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
             )];
             result.layout = context
                 .device
                 .create_pipeline_layout(
-                    &vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&ranges),
+                    &vk::PipelineLayoutCreateInfo::default()
+                        .set_layouts(&result.set_layouts)
+                        .push_constant_ranges(&ranges),
                     None,
                 )
                 .map_err(|e| format!("create draw layout: {e:?}"))?;
         }
-        let vertex = context.create_global_shader_module(&key.vertex)?;
-        let fragment = match context.create_global_shader_module(&key.fragment) {
+        let vertex_words = uniforms::lower(&key.vertex, UniformStage::Vertex, key.storage)?;
+        let fragment_words = uniforms::lower(&key.fragment, UniformStage::Fragment, key.storage)?;
+        let vertex = context.create_global_shader_module(&vertex_words)?;
+        let fragment = match context.create_global_shader_module(&fragment_words) {
             Ok(module) => module,
             Err(error) => {
                 unsafe {
@@ -541,12 +631,85 @@ impl GraphicsPipeline {
         Ok(result)
     }
 
+    fn descriptor_type(&self) -> vk::DescriptorType {
+        if self.storage {
+            vk::DescriptorType::STORAGE_BUFFER
+        } else {
+            vk::DescriptorType::UNIFORM_BUFFER
+        }
+    }
+
+    pub fn descriptors(
+        &self,
+        buffers: &[vk::DescriptorBufferInfo],
+    ) -> Result<DrawDescriptors, String> {
+        if buffers.len() != self.banks.len() {
+            return Err("missing constant bank ranges".into());
+        }
+        let mut result = DrawDescriptors {
+            context: self.context.clone(),
+            pool: vk::DescriptorPool::null(),
+            sets: Vec::new(),
+        };
+        if self.banks.is_empty() {
+            return Ok(result);
+        }
+        unsafe {
+            let sizes = [vk::DescriptorPoolSize::default()
+                .ty(self.descriptor_type())
+                .descriptor_count(buffers.len() as u32)];
+            result.pool = self
+                .context
+                .device
+                .create_descriptor_pool(
+                    &vk::DescriptorPoolCreateInfo::default()
+                        .max_sets(2)
+                        .pool_sizes(&sizes),
+                    None,
+                )
+                .map_err(|e| format!("create draw descriptor pool: {e:?}"))?;
+            result.sets = self
+                .context
+                .device
+                .allocate_descriptor_sets(
+                    &vk::DescriptorSetAllocateInfo::default()
+                        .descriptor_pool(result.pool)
+                        .set_layouts(&self.set_layouts),
+                )
+                .map_err(|e| format!("allocate draw descriptors: {e:?}"))?;
+            let writes: Vec<_> = self
+                .banks
+                .iter()
+                .zip(buffers)
+                .map(|(bank, buffer)| {
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(result.sets[bank.stage.set() as usize])
+                        .dst_binding(bank.bank)
+                        .descriptor_type(self.descriptor_type())
+                        .buffer_info(std::slice::from_ref(buffer))
+                })
+                .collect();
+            self.context.device.update_descriptor_sets(&writes, &[]);
+        }
+        Ok(result)
+    }
+
     /// Caller owns the active compatible render pass, live arena slice and completion.
     pub unsafe fn record(&self, command: vk::CommandBuffer, memory: &GlobalMemory, draw: &Draw) {
         let device = &self.context.device;
         device.cmd_bind_pipeline(command, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
         for &(binding, buffer, offset) in &draw.buffers {
             device.cmd_bind_vertex_buffers(command, binding, &[buffer], &[offset]);
+        }
+        if !draw.descriptors.sets.is_empty() {
+            device.cmd_bind_descriptor_sets(
+                command,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.layout,
+                0,
+                &draw.descriptors.sets,
+                &[],
+            );
         }
         device.cmd_set_viewport(command, 0, &[draw.viewport]);
         device.cmd_set_scissor(command, 0, &[draw.scissor]);
@@ -569,6 +732,25 @@ impl Drop for GraphicsPipeline {
             self.context
                 .device
                 .destroy_render_pass(self.render_pass, None);
+            for layout in &self.set_layouts {
+                self.context
+                    .device
+                    .destroy_descriptor_set_layout(*layout, None);
+            }
+        }
+    }
+}
+
+/// Per-draw sets and pool retained until synchronous submission completes.
+pub(crate) struct DrawDescriptors {
+    context: Arc<Context>,
+    pool: vk::DescriptorPool,
+    sets: Vec<vk::DescriptorSet>,
+}
+impl Drop for DrawDescriptors {
+    fn drop(&mut self) {
+        unsafe {
+            self.context.device.destroy_descriptor_pool(self.pool, None);
         }
     }
 }
@@ -576,6 +758,7 @@ impl Drop for GraphicsPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gpu::pipelines::stage_bindings;
     fn instruction(words: &mut Vec<u32>, opcode: u32, operands: &[u32]) {
         words.push(((operands.len() as u32 + 1) << 16) | opcode);
         words.extend_from_slice(operands);

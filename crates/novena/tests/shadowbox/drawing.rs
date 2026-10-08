@@ -141,6 +141,10 @@ fn shader_inputs(fragment: bool, green: f32, second: bool) -> Vec<u8> {
                 | (255 << 39),
         ]);
     }
+    pack_shader(header, instructions)
+}
+
+fn pack_shader(header: [u32; 20], mut instructions: Vec<u64>) -> Vec<u8> {
     instructions.push(EXIT);
     let mut bytes = vec![0; 0x30];
     bytes[..4].copy_from_slice(&0x12345678_u32.to_le_bytes());
@@ -217,6 +221,15 @@ fn driver_file(root: &std::path::Path) -> PathBuf {
 }
 
 fn triangle(instance: &Instance, state: &State, address: u64, size: u64, primitive: u64) {
+    triangle_state(instance, state, address, size);
+    call(
+        instance,
+        "nvnCommandBufferDrawArrays",
+        &[7, primitive, 1, 3],
+    );
+}
+
+fn triangle_state(instance: &Instance, state: &State, address: u64, size: u64) {
     put(state, 0x100, &4_u64.to_le_bytes());
     call(instance, "nvnCommandBufferBeginRecording", &[7]);
     call(
@@ -245,11 +258,6 @@ fn triangle(instance: &Instance, state: &State, address: u64, size: u64, primiti
     call(instance, "nvnCommandBufferBindPolygonState", &[7, 24]);
     call(instance, "nvnCommandBufferSetViewport", &[7, 0, 0, 64, 64]);
     call(instance, "nvnCommandBufferSetScissor", &[7, 0, 0, 64, 64]);
-    call(
-        instance,
-        "nvnCommandBufferDrawArrays",
-        &[7, primitive, 1, 3],
-    );
 }
 
 fn check_pixels(pixels: &[u8], green: u8) {
@@ -489,7 +497,7 @@ struct Fixture {
 impl Fixture {
     fn new(contract: FirstDrawContract) -> Self {
         let state = Box::new(State {
-            memory: Mutex::new(vec![0; 0x10000]),
+            memory: Mutex::new(vec![0; 0x40000]),
             frames: Mutex::new(Vec::new()),
         });
         let host = Host {
@@ -508,7 +516,7 @@ impl Fixture {
         call(
             &instance,
             "nvnMemoryPoolBuilderSetStorage",
-            &[1, 0x1000, 0x5000],
+            &[1, 0x1000, 0x30000],
         );
         call(&instance, "nvnMemoryPoolInitialize", &[2, 1]);
         let base = call(&instance, "nvnMemoryPoolGetBufferAddress", &[2]);
@@ -1236,4 +1244,404 @@ void main() { color = shade * 0.25 + 0.5; }
     assert!(f.instance.set_first_draw_contract(Some(c)));
     record(0x80, 256, 0x800, true);
     submit(&f.instance, &f.state, Status::Unimplemented);
+}
+
+fn uniform_shader(fragment: bool) -> Vec<u8> {
+    let mut header = [0_u32; 20];
+    header[0] = if fragment {
+        2 | (3 << 5) | (5 << 10) | (1 << 14)
+    } else {
+        1 | (3 << 5) | (1 << 10)
+    };
+    // Mesa OpMov: bank in bits 34..39, four-byte offset in bits 20..34.
+    let cbuf = |register: u64, offset: u64| {
+        0x4c98_0000_0000_0000 | ALWAYS | register | ((offset / 4) << 20) | (2 << 34) | (15 << 39)
+    };
+    let instructions = if fragment {
+        header[18] = 15;
+        (0..4).map(|reg| cbuf(reg, 16 + reg * 4)).collect()
+    } else {
+        header[6] = 15;
+        header[12] = 15 << 28;
+        vec![
+            0xefd8_0000_0000_0000 | ALWAYS | (255 << 8) | (0x80 << 20) | (255 << 39) | (3 << 47),
+            cbuf(3, 0),
+            0xeff0_0000_0000_0000
+                | ALWAYS
+                | (255 << 8)
+                | (0x70 << 20)
+                | (1 << 32)
+                | (255 << 39)
+                | (3 << 47),
+        ]
+    };
+    pack_shader(header, instructions)
+}
+
+#[test]
+#[ignore = "requires Vulkan, the flat arena, spirv-val and Shadowbox; never skips"]
+fn uniform_banks_colour_two_draws() {
+    use novena::gpu::uniforms::{UniformBankMapping, UniformBufferContract, UniformStage};
+    let f = Fixture::new(contract());
+    let translator = Arc::new(Translator(AtomicUsize::new(0)));
+    f.program(
+        translator.clone(),
+        &uniform_shader(true),
+        &uniform_shader(false),
+    );
+    let vertices = [
+        [-0.75, -0.75, 0.0, 1.0],
+        [0.75, -0.75, 0.0, 1.0],
+        [0.0, 0.75, 0.0, 1.0],
+    ];
+    put(&f.state, 0x1080, &[0x5a; 128]);
+    for (i, vertex) in vertices.iter().enumerate() {
+        put(&f.state, 0x1080 + (i + 1) * 32 + 8, &floats(vertex));
+    }
+    let Fixture {
+        state,
+        instance,
+        base,
+    } = f;
+    let mappings = vec![
+        UniformBankMapping {
+            stage: 0,
+            index: 1,
+            target: UniformStage::Vertex,
+            bank: 2,
+        },
+        UniformBankMapping {
+            stage: 1,
+            index: 0,
+            target: UniformStage::Fragment,
+            bank: 2,
+        },
+    ];
+    instance
+        .set_uniform_buffer_contract(UniformBufferContract {
+            bindings: mappings.clone(),
+            storage_buffers: false,
+        })
+        .unwrap();
+    // Duplicate sources or targets must fail without replacing the live mapping.
+    let mut duplicates = mappings.clone();
+    duplicates.push(mappings[0]);
+    assert!(instance
+        .set_uniform_buffer_contract(UniformBufferContract {
+            bindings: duplicates,
+            storage_buffers: false
+        })
+        .is_err());
+    let context = novena::gpu::Context::new().expect("Vulkan uniform proof");
+    let properties = unsafe {
+        context
+            .instance
+            .get_physical_device_properties(context.physical_device)
+    };
+    println!(
+        "uniform limit {}, storage limit {}, uniform alignment {}, storage alignment {}",
+        properties.limits.max_uniform_buffer_range,
+        properties.limits.max_storage_buffer_range,
+        properties.limits.min_uniform_buffer_offset_alignment,
+        properties.limits.min_storage_buffer_offset_alignment
+    );
+    let alignment = properties
+        .limits
+        .min_uniform_buffer_offset_alignment
+        .max(properties.limits.min_storage_buffer_offset_alignment)
+        .max(16);
+    let align = |offset: u64| offset.div_ceil(alignment) * alignment;
+    let vertex = align(0x8000);
+    let red = align(vertex + 0x1000);
+    let green = align(red + 0x1000);
+    let full = align(green + 0x1000);
+    assert!(full + 65536 <= 0x30000);
+    // A decoy at bank offset zero catches lost byte offsets.
+    for (offset, value) in [(vertex, 1.0_f32), (red, 0.0), (green, 0.0)] {
+        put(&state, (0x1000 + offset) as usize, &value.to_le_bytes());
+    }
+    for (offset, colour) in [
+        (red, [1.0_f32, 0.25, 0.5, 1.0]),
+        (green, [1.0, 0.75, 0.5, 1.0]),
+        (full, [1.0, 0.75, 0.5, 1.0]),
+    ] {
+        put(
+            &state,
+            (0x1000 + offset + 16) as usize,
+            &colour
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+                .collect::<Vec<_>>(),
+        );
+    }
+    // Clear to blue, matching the triangle proof's uncovered pixels.
+    let clear = [0.0_f32, 0.0, 1.0, 1.0];
+    put(
+        &state,
+        0x200,
+        &clear
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect::<Vec<_>>(),
+    );
+    call(&instance, "nvnCommandBufferBeginRecording", &[7]);
+    call(
+        &instance,
+        "nvnCommandBufferSetRenderTargets",
+        &[7, 1, 0x100, 0, 0, 0],
+    );
+    call(&instance, "nvnCommandBufferClearColor", &[7, 0, 0x200, 15]);
+    submit(&instance, &state, Status::Ok);
+    let begin = || triangle_state(&instance, &state, base + 0x80, 128);
+    let bind = |offset, size| {
+        call(
+            &instance,
+            "nvnCommandBufferBindUniformBuffer",
+            &[7, 0, 1, base + vertex, 16],
+        );
+        call(
+            &instance,
+            "nvnCommandBufferBindUniformBuffer",
+            &[7, 1, 0, base + offset, size],
+        );
+        call(&instance, "nvnCommandBufferDrawArrays", &[7, 0xf001, 1, 3]);
+    };
+    begin();
+    call(&instance, "nvnCommandBufferDrawArrays", &[7, 0xf001, 1, 3]);
+    submit(&instance, &state, Status::Unimplemented);
+    begin();
+    bind(red, 32);
+    call(
+        &instance,
+        "nvnCommandBufferBindUniformBuffer",
+        &[7, 5, 0, base + red, 32],
+    );
+    call(&instance, "nvnCommandBufferDrawArrays", &[7, 0xf001, 1, 3]);
+    submit(&instance, &state, Status::Unimplemented);
+    wait_for_graphics(&instance);
+    for storage in [false, true] {
+        instance
+            .set_uniform_buffer_contract(UniformBufferContract {
+                bindings: mappings.clone(),
+                storage_buffers: storage,
+            })
+            .unwrap();
+        begin();
+        bind(red, 32);
+        submit(&instance, &state, Status::Ok);
+        wait_for_graphics(&instance);
+        // Both draws in one recording must keep their own descriptor contents.
+        begin();
+        bind(red, 32);
+        call(
+            &instance,
+            "nvnCommandBufferBindUniformBuffer",
+            &[7, 1, 0, base + green, 32],
+        );
+        call(&instance, "nvnCommandBufferDrawArrays", &[7, 0xf001, 1, 3]);
+        submit(&instance, &state, Status::Ok);
+        call(&instance, "nvnQueuePresentTexture", &[0, 9, 0]);
+        check_pixels(&state.frames.lock().unwrap().last().unwrap().2, 191);
+        check_pixels(&state.memory.lock().unwrap()[0x2000..0x6000], 191);
+        // Separate readback also proves the first value reached the output.
+        begin();
+        bind(red, 32);
+        submit(&instance, &state, Status::Ok);
+        call(&instance, "nvnQueuePresentTexture", &[0, 9, 0]);
+        check_pixels(&state.frames.lock().unwrap().last().unwrap().2, 64);
+        check_pixels(&state.memory.lock().unwrap()[0x2000..0x6000], 64);
+        begin();
+        bind(full, 65536);
+        submit(&instance, &state, Status::Ok);
+        check_pixels(&state.memory.lock().unwrap()[0x2000..0x6000], 191);
+        for (offset, size) in [
+            (red + 1, 32),
+            (red, 0),
+            (red, 31),
+            (red, 65552),
+            (0x30000 - 16, 32),
+        ] {
+            begin();
+            bind(offset, size);
+            submit(&instance, &state, Status::BadArgument);
+        }
+    }
+    assert_eq!(
+        translator.0.load(Ordering::Relaxed),
+        2,
+        "bindings do not translate again"
+    );
+    assert_eq!(
+        instance.graphics_cache_stats().unwrap().misses,
+        if properties.limits.max_uniform_buffer_range < 65536 {
+            1
+        } else {
+            2
+        },
+        "one pipeline per selected buffer mode"
+    );
+    println!("MATCH stage-local bank 2, nonzero byte offsets, two bound colours, full 64 KiB range, uniform/storage readback and invalid ranges");
+}
+
+#[test]
+#[ignore = "requires Vulkan, the flat arena, glslangValidator and spirv-val; never skips"]
+fn uniform_banks_with_strip_and_normalized_attribute() {
+    use novena::gpu::uniforms::{UniformBankMapping, UniformBufferContract, UniformStage};
+    let mut c = contract();
+    c.topologies = vec![(0xf007, PrimitiveTopology::TriangleStrip)];
+    c.attribute_formats.push((0xf106, VertexFormat::Unorm8x4));
+    c.attribute_state_stride = Some(32);
+    c.stream_state_stride = Some(16);
+    let f = Fixture::new(c);
+    f.program(
+        Arc::new(SourceShaders {
+            vertex: compile_source(
+                "vert",
+                r#"#version 450
+layout(location = 0) in vec4 position;
+layout(location = 1) in vec4 shade;
+layout(location = 0) out vec4 tint;
+layout(set = 0, binding = 2, std140) uniform Bank { vec4 data[4096]; } bank;
+void main() { gl_Position = vec4(position.xyz, bank.data[0].x); tint = shade; }
+"#,
+            ),
+            fragment: compile_source(
+                "frag",
+                r#"#version 450
+layout(location = 0) in vec4 tint;
+layout(location = 0) out vec4 color;
+layout(set = 0, binding = 2, std140) uniform Bank { vec4 data[4096]; } bank;
+void main() { color = bank.data[1] * tint; }
+"#,
+            ),
+        }),
+        &shader(true, 0.0),
+        &shader(false, 0.0),
+    );
+    let vertices = [[8.0, 8.0], [56.0, 8.0], [8.0, 56.0], [56.0, 56.0]];
+    put(&f.state, 0x1080, &[0x5a; 192]);
+    for (i, &[x, y]) in vertices.iter().enumerate() {
+        put(
+            &f.state,
+            0x1080 + (i + 1) * 32 + 8,
+            &floats(&[x / 32.0 - 1.0, y / 32.0 - 1.0, 0.0, 1.0]),
+        );
+    }
+    put(&f.state, 0x1800, &[0x5a, 255, 128, 64, 255]);
+    call(&f.instance, "nvnVertexStreamStateSetDefaults", &[36]);
+    call(&f.instance, "nvnVertexStreamStateSetStride", &[36, 0]);
+    call(&f.instance, "nvnVertexStreamStateSetDivisor", &[36, 0]);
+    call(&f.instance, "nvnVertexAttribStateSetDefaults", &[53]);
+    call(
+        &f.instance,
+        "nvnVertexAttribStateSetFormat",
+        &[53, 0xf106, 1],
+    );
+    call(&f.instance, "nvnVertexAttribStateSetStreamIndex", &[53, 1]);
+    let context = novena::gpu::Context::new().expect("combined drawing proof");
+    let limits = unsafe {
+        context
+            .instance
+            .get_physical_device_properties(context.physical_device)
+    }
+    .limits;
+    let alignment = limits
+        .min_uniform_buffer_offset_alignment
+        .max(limits.min_storage_buffer_offset_alignment)
+        .max(16);
+    let align = |offset: u64| offset.div_ceil(alignment) * alignment;
+    let vertex = align(0x8000);
+    let red = align(vertex + 0x1000);
+    let green = align(red + 0x1000);
+    assert!(green + 32 <= 0x30000);
+    put(
+        &f.state,
+        (0x1000 + vertex) as usize,
+        &floats(&[1.0, 0.0, 0.0, 0.0]),
+    );
+    for (offset, color) in [(red, [1.0, 0.25, 0.5, 1.0]), (green, [1.0, 0.75, 0.5, 1.0])] {
+        put(&f.state, (0x1000 + offset + 16) as usize, &floats(&color));
+    }
+    let record = |offset, color_size| {
+        f.begin();
+        call(
+            &f.instance,
+            "nvnCommandBufferBindVertexBuffer",
+            &[7, 1, f.base + 0x800, color_size],
+        );
+        call(
+            &f.instance,
+            "nvnCommandBufferBindVertexBuffer",
+            &[7, 0, f.base + 0x80, 152],
+        );
+        call(
+            &f.instance,
+            "nvnCommandBufferBindVertexStreamState",
+            &[7, 2, 20],
+        );
+        call(
+            &f.instance,
+            "nvnCommandBufferBindVertexAttribState",
+            &[7, 2, 21],
+        );
+        call(
+            &f.instance,
+            "nvnCommandBufferBindUniformBuffer",
+            &[7, 0, 1, f.base + vertex, 16],
+        );
+        call(
+            &f.instance,
+            "nvnCommandBufferBindUniformBuffer",
+            &[7, 1, 0, f.base + offset, 32],
+        );
+        call(
+            &f.instance,
+            "nvnCommandBufferDrawArrays",
+            &[7, 0xf007, 1, 4],
+        );
+    };
+    for storage in [false, true] {
+        f.instance
+            .set_uniform_buffer_contract(UniformBufferContract {
+                bindings: vec![
+                    UniformBankMapping {
+                        stage: 0,
+                        index: 1,
+                        target: UniformStage::Vertex,
+                        bank: 2,
+                    },
+                    UniformBankMapping {
+                        stage: 1,
+                        index: 0,
+                        target: UniformStage::Fragment,
+                        bank: 2,
+                    },
+                ],
+                storage_buffers: storage,
+            })
+            .unwrap();
+        record(red, 5);
+        submit(&f.instance, &f.state, Status::Ok);
+        wait_for_graphics(&f.instance);
+        for (offset, color) in [(red, [255, 32, 32, 255]), (green, [255, 96, 32, 255])] {
+            record(offset, 5);
+            submit(&f.instance, &f.state, Status::Ok);
+            check_geometry(&f.pixels(), &vertices, &[[0, 1, 2], [1, 2, 3]], color);
+        }
+        record(red, 4);
+        submit(&f.instance, &f.state, Status::BadArgument);
+    }
+    let misses = if limits.max_uniform_buffer_range < 65536 {
+        1
+    } else {
+        2
+    };
+    assert_eq!(
+        f.instance.graphics_cache_stats(),
+        Some(CacheStats {
+            misses,
+            hits: 6 - misses
+        })
+    );
+    println!("MATCH strip, normalized zero-stride second stream, stage-local banks, uniform/storage modes, rebinding, cache reuse and short vertex range");
 }

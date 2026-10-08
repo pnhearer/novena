@@ -1,8 +1,9 @@
-//! Bounded execution of recorded draws. Evidence: signatures 0009, provenance 0027, 0028.
+//! Bounded execution of recorded draws. Evidence: signatures 0009, provenance 0027, 0028, 0029.
 use super::objects::{Object, RecordedCommand, ShaderTranslation, StateCommand, StateSettings};
 use crate::{
     gpu::{
-        graphics::{mapped, Draw, VertexAttribute, VertexBinding, VertexInput},
+        graphics::{execution_model, mapped, Draw, VertexAttribute, VertexBinding, VertexInput},
+        uniforms::{self, UniformStage, BANK_SIZE},
         Backend,
     },
     Instance, Status,
@@ -26,6 +27,7 @@ pub(super) struct State {
     program: Option<u64>,
     buffers: HashMap<u64, (u64, u64)>,
     vertex_states: HashMap<&'static str, Option<Vec<Settings>>>,
+    uniforms: HashMap<(u64, u64), (u64, u64)>,
     states: HashMap<&'static str, Option<Settings>>,
     viewport: Option<[u64; 5]>,
     scissor: Option<[u64; 5]>,
@@ -35,6 +37,14 @@ pub(super) struct State {
 impl State {
     pub fn record(&mut self, command: RecordedCommand) {
         match command {
+            RecordedCommand::State(StateCommand::BindUniformBuffer {
+                stage,
+                index,
+                address,
+                size,
+            }) => {
+                self.uniforms.insert((stage, index), (address, size));
+            }
             RecordedCommand::BindProgram(program) => self.program = Some(program),
             RecordedCommand::State(StateCommand::BindVertexBuffer {
                 index: stream,
@@ -223,9 +233,58 @@ impl State {
         {
             return Err(Status::BadArgument);
         }
+        if self.uniforms.keys().any(|&(stage, index)| {
+            !backend
+                .uniforms
+                .bindings
+                .iter()
+                .any(|m| m.stage == stage && m.index == index)
+        }) {
+            return Err(Status::Unimplemented);
+        }
+        let storage = backend
+            .graphics
+            .uses_storage(backend.uniforms.storage_buffers);
+        let mut uniform_buffers = Vec::new();
+        for stage in [UniformStage::Vertex, UniformStage::Fragment] {
+            let words = stages
+                .iter()
+                .find(|words| execution_model(words).ok() == Some(stage.model()))
+                .ok_or(Status::Unimplemented)?;
+            for bank in uniforms::banks(words, stage).map_err(|_| Status::Unimplemented)? {
+                let mapping = backend
+                    .uniforms
+                    .bindings
+                    .iter()
+                    .find(|m| m.target == stage && m.bank == bank.bank)
+                    .ok_or(Status::Unimplemented)?;
+                let &(address, size) = self
+                    .uniforms
+                    .get(&(mapping.stage, mapping.index))
+                    .ok_or(Status::Unimplemented)?;
+                let resolution = instance
+                    .objects
+                    .resolve_gpu_address(address)
+                    .map_err(|_| Status::BadArgument)?;
+                if size == 0
+                    || size > BANK_SIZE
+                    || !size.is_multiple_of(16)
+                    || size > resolution.remaining
+                {
+                    return Err(Status::BadArgument);
+                }
+                let info = if storage {
+                    memory.storage_buffer_info(resolution.pool, resolution.offset, size)
+                } else {
+                    memory.uniform_buffer_info(resolution.pool, resolution.offset, size)
+                }
+                .ok_or(Status::BadArgument)?;
+                uniform_buffers.push(info);
+            }
+        }
         let Some(pipeline) = backend
             .graphics
-            .request(&stages, input, topology)
+            .request(&stages, input, topology, storage)
             .map_err(|_| Status::Unimplemented)?
         else {
             return Ok(());
@@ -233,7 +292,11 @@ impl State {
         if !backend.ensure_texture(targets[0], &description, false) {
             return Err(Status::BadArgument);
         }
+        let descriptors = pipeline
+            .descriptors(&uniform_buffers)
+            .map_err(|_| Status::InternalError)?;
         let draw = Draw {
+            descriptors,
             buffers,
             first,
             count,

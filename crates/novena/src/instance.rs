@@ -233,6 +233,20 @@ impl Instance {
         true
     }
 
+    /// Configure explicit stage/index-to-bank choices for translated graphics.
+    /// Invalid mappings leave the current contract unchanged. Provenance: 0029.
+    #[cfg(feature = "vulkan")]
+    pub fn set_uniform_buffer_contract(
+        &self,
+        contract: crate::gpu::uniforms::UniformBufferContract,
+    ) -> Result<(), String> {
+        contract.validate()?;
+        let mut gpu = self.gpu.lock().unwrap_or_else(|p| p.into_inner());
+        let backend = gpu.as_mut().ok_or("Vulkan backend is unavailable")?;
+        backend.uniforms = contract;
+        Ok(())
+    }
+
     #[cfg(feature = "vulkan")]
     pub fn graphics_cache_stats(&self) -> Option<crate::gpu::pipelines::CacheStats> {
         self.gpu
@@ -302,13 +316,11 @@ impl Instance {
         input: crate::gpu::graphics::VertexInput,
         topology: crate::gpu::graphics::PrimitiveTopology,
     ) -> Result<bool, String> {
-        self.gpu
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .as_mut()
-            .ok_or("Vulkan backend is unavailable")?
+        let mut gpu = self.gpu.lock().unwrap_or_else(|p| p.into_inner());
+        let backend = gpu.as_mut().ok_or("Vulkan backend is unavailable")?;
+        backend
             .graphics
-            .retry_failed(stages, input, topology)
+            .retry_failed(stages, input, topology, backend.uniforms.storage_buffers)
     }
 
     pub fn set_shader_translator(&self, translator: Option<Arc<dyn ShaderTranslator>>) {

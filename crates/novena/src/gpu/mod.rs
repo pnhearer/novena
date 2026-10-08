@@ -15,6 +15,7 @@ mod memory;
 mod pipeline_disk;
 mod pipeline_workers;
 mod present;
+pub mod uniforms;
 use images::{Image, Images};
 use present::Window;
 pub mod pipelines;
@@ -80,6 +81,7 @@ pub struct Context {
 
 pub struct Backend {
     pub(crate) first_draw: Option<graphics::FirstDrawContract>,
+    pub(crate) uniforms: uniforms::UniformBufferContract,
     pub(crate) graphics: graphics::GraphicsPipelines,
     windows: HashMap<u64, Window>,
     offscreen: Option<Image>,
@@ -99,6 +101,7 @@ impl Backend {
         let images = Images::new(&context)?;
         Some(Self {
             first_draw: None,
+            uniforms: uniforms::UniformBufferContract::default(),
             graphics: graphics::GraphicsPipelines::new(&context)?,
             windows: HashMap::new(),
             offscreen: None,

@@ -46,6 +46,8 @@ shadowbox = {{ path = {shadowbox:?} }}
                     "first_draw_executes_translated_triangle"
                         | "primitive_topologies_read_back_pixels"
                         | "vertex_formats_read_back_pixels"
+                        | "uniform_banks_colour_two_draws"
+                        | "uniform_banks_with_strip_and_normalized_attribute"
                 ) {
                     "tests/shadowbox/drawing.rs"
                 } else {

@@ -45,7 +45,7 @@ The existing shader reader's 0x40 record stride for count two remains an
 implementation assumption. The proof does not establish that stride for guests.
 
 Unsupported fields, missing explicit state, unknown recorded commands,
-resources, or unsupported shader interfaces return `Unimplemented`.
+unsupported resources, or unsupported shader interfaces return `Unimplemented`.
 Bad addresses, short vertex ranges, invalid sizes, and missing objects return
 `BadArgument`. Vulkan draw submission failures return `InternalError`.
 Pipeline creation failures return `Unimplemented`. Feature negotiation remains open. Indexed and instanced draws are open.
@@ -112,7 +112,7 @@ proofs from guest hypotheses and lists the real-program confirmation tests.
 
 All enum conversion beyond the host contract, integer shader inputs,
 packed attribute formats, nonzero viewport origins, coordinate conversion,
-specialization overrides, textures, samplers, uniforms, index data, instancing,
+specialization overrides, textures, samplers, implicit uniform bank mappings, index data, instancing,
 depth, stencil, blend, masks, culling, polygon variation, multisampling, views,
 array layers, additional levels, multiple targets and asynchronous draw
 submission remain open. The sections below list the observations
@@ -204,11 +204,64 @@ The smallest useful observation is one shader that samples one texture through o
 
 ## Uniform buffers and constant banks
 
-`BindUniformBuffer` carries a stage value from 0, 1, or 5, a binding index from 0 through 2, a GPU address, and a size. The signatures do not establish a constant-bank layout or a shader read convention. See [resource binding](../signatures/0002-command-buffer.md#resource-binding).
+`BindUniformBuffer` records a stage, index, GPU-shaped address and extent.
+Observed stages are 0, 1 and 5, indices are 0 through 2, and extents span
+0x10 through 0xaa80. The signatures establish no stage meanings or bank map.
+See [resource binding](../signatures/0002-command-buffer.md#resource-binding)
+and [retained command state](../signatures/0010-remaining-command-state.md).
 
-Missing knowledge includes stage meanings, binding-to-bank mapping, byte alignment, range interpretation, address resolution, and the offset of each constant used by a shader. No record connects a `ProgramSetShaders` shader record to a uniform binding.
+A Rust host can now supply `Instance::set_uniform_buffer_contract` with explicit
+`UniformBankMapping` entries. Each entry maps a recorded stage/index pair to
+`UniformStage::Vertex` or `UniformStage::Fragment` and a bank from 0 through 31.
+Duplicate source pairs and duplicate target banks are rejected. There is no
+default map. Missing required bindings and unmapped recorded pairs return
+`Unimplemented`. Bindings replace the previous value for that pair within the
+recording. Each draw uses the bindings preceding it. Inheritance between
+recordings remains open.
 
-The smallest useful observation is one draw whose color depends on one known constant. Keep the program and binding index fixed, vary one word at one byte offset in the buffer, and repeat for each stage and index. The first offset that changes the result establishes the bank mapping for that shader and binding.
+Shadowbox declares each referenced bank as a set-zero uniform block containing
+4096 float4 elements, with stride 16 and member offset zero. Binding N identifies
+bank N. The backend checks this exact interface, preserves bank numbers, and
+rewrites the fragment descriptor set to 1. Vertex banks stay at set 0. This
+allows the stages to bind different ranges at the same bank number.
+
+The recorded extent selects the descriptor's byte range. It must be nonzero,
+a multiple of 16, at most 64 KiB, and contained in a registered live pool.
+The descriptor offset is the pool's arena offset plus the resolved relative
+offset. Uniform ranges must meet `minUniformBufferOffsetAlignment` and
+`maxUniformBufferRange`. Misalignment or invalid ranges return `BadArgument`.
+The executor binds the canonical arena directly. It does not round offsets or
+extend a short binding into neighboring pool bytes. The host contract requires
+all shader reads to lie within the bound extent, including indirect reads.
+Out-of-range shader-read behavior is not established by this experiment.
+
+If the device's maximum uniform range is below 64 KiB, the backend lowers bank
+pointers and variables to `StorageBuffer`, marks the variables `NonWritable`,
+and uses storage descriptors. Array layout and shader byte offsets stay the
+same. Storage ranges meet `minStorageBufferOffsetAlignment` and
+`maxStorageBufferRange`. The contract's `storage_buffers` flag can force this
+path for verification. This choice applies to the whole pipeline and belongs
+in its cache key. Descriptor counts and layouts must fit device limits.
+Graphics cache interface version 2 separates these layouts from earlier caches.
+Per-draw descriptor pools and sets live through the submission fence.
+
+The headless `uniform_banks_colour_two_draws` proof uses original translated
+vertex and fragment programs. Both read bank 2. The vertex reads its own range
+at byte zero; the fragment reads a color at byte 16. Two bindings change green
+from 0.25 to 0.75 without changing or translating the program again. Presentation
+readback and canonical pool bytes match `[255, 64, 128, 255]` and
+`[255, 191, 128, 255]`. The proof exercises both descriptor modes, a full 64 KiB
+range, rebinding in one recording, missing and unknown bindings, and invalid
+ranges. Run it with the translator selected through `NOVENA_SHADOWBOX_PATH`:
+
+```sh
+cargo test --features shadowbox --test shadowbox_drawing uniform_banks_colour_two_draws -- --ignored --nocapture
+```
+
+This proves an explicit host mapping. It establishes no new guest stage enum,
+binding-to-bank relationship, or byte-range interpretation. An observed draw
+that changes one uniform word at a time is still needed to replace the host
+contract with a guest mapping. See [provenance 0029](../provenance/0029-uniform-banks.md).
 
 ## Shader stage pairing per program
 
@@ -229,7 +282,7 @@ The smallest useful observation is a program with two shader records and a draw 
 1. Implemented as the first draw experiment above: a non-indexed draw with one vertex buffer, one attribute, one color target, no texture or uniform buffer, and depth, stencil, blending, and culling disabled. Host tokens select topology and formats. Guest mappings and coordinate semantics remain open.
 2. Implemented through an explicit host contract: repeat the first draw with primitive values 4 and 5 and a synthetic fan token over the same controlled vertices. Guest topology hypotheses still require real-program confirmation.
 3. Implemented through an explicit host contract: add a second attribute and vary its format, offset, stride, and stream. Twelve `VkFormat` choices pass readback. Guest tokens, array spacing, and location mapping still require real-program confirmation.
-4. Add uniform data after its bank mapping is observed.
+4. Implemented for explicit host bank mappings and aligned arena ranges, with uniform descriptors and a storage fallback. Observed guest mappings remain open.
 5. Add indexed drawing after index type, address, and count semantics are observed.
 6. Add depth and stencil, then rasterizer variation, after attachment formats and state mappings are observed.
 7. Add texture and sampler bindings after handle, stage, descriptor, and format behavior are observed.

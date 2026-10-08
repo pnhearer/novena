@@ -124,6 +124,34 @@ impl GlobalMemory {
         )
     }
 
+    /// Storage fallback for constant banks with a device-aligned arena range.
+    pub(crate) fn storage_buffer_info(
+        &self,
+        key: u64,
+        offset: u64,
+        size: u64,
+    ) -> Option<vk::DescriptorBufferInfo> {
+        let at = self.pool_offset(key, offset, usize::try_from(size).ok()?)?;
+        let limits = unsafe {
+            self.context
+                .instance
+                .get_physical_device_properties(self.context.physical_device)
+        }
+        .limits;
+        if size == 0
+            || size > u64::from(limits.max_storage_buffer_range)
+            || !at.is_multiple_of(limits.min_storage_buffer_offset_alignment)
+        {
+            return None;
+        }
+        Some(
+            vk::DescriptorBufferInfo::default()
+                .buffer(self.buffer)
+                .offset(at)
+                .range(size),
+        )
+    }
+
     /// Canonical tightly packed base-level texels in a live arena pool.
     pub(crate) fn image_region(
         &self,

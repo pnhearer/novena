@@ -27,7 +27,8 @@ What works today:
 - Recorded draw commands, 17 documented state-only command handlers, and retained shader records.
 - An opt-in Vulkan first draw with one float4 vertex attribute, one RGBA8 target,
   translated vertex and fragment stages, and disabled depth, stencil, blend,
-  and culling. See [drawing support](docs/design/drawing.md).
+  and culling, plus explicit host uniform bank mappings backed by arena ranges.
+  See [drawing support](docs/design/drawing.md).
 - GPU address resolution through registered memory pools, including pools learned from observed calls.
 - An opt-in `ShaderTranslator` hook that receives bounded shader bytes during shader setup and retains translated words or error counts.
 - An off-by-default translated-shader dump for local debugging. A host can set

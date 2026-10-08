@@ -168,7 +168,8 @@ does not translate again. SPIR-V execution models pair stages independently of
 record order and the unresolved `BindProgram` mask.
 
 The content key contains complete vertex and fragment words, topology, active
-stream indices and strides, and each attribute's stream, format, and offset.
+stream indices and strides, each attribute's stream, format, and offset,
+and the uniform or storage descriptor mode.
 Full equality prevents hash collisions from aliasing code. Attribute array
 indices map to shader locations as an explicit experiment assumption.
 The supported output is location zero in RGBA8 with one sample. No culling,
@@ -176,7 +177,10 @@ blend, depth, or stencil are fixed for this cache. Their constancy makes them
 implicit key fields. The contract supports triangle lists, strips, fans, and
 the twelve float-converting formats in provenance 0028.
 Guest addresses, vertex buffer contents, viewport, and scissor stay outside it.
-Specialization uses emitted defaults. Overrides remain open.
+Specialization uses emitted defaults. Overrides remain open. Stage-local
+constant banks use explicit host mappings and aligned arena ranges.
+[Provenance 0029](../provenance/0029-uniform-banks.md) records descriptor
+lifetimes and the storage fallback.
 
 The graphics service shares the bounded worker and guarded driver-cache
 implementation with compute. The compute and graphics interface domains have
@@ -185,7 +189,8 @@ graphics workers never invoke the translator or persist translation records.
 
 A content hit shares an owned request before reflection and Vulkan creation.
 A miss queues the owned stage words and vertex input. The worker checks both
-stages, rejects descriptors, creates a push layout and load/store render pass,
+stages, reflects supported constant banks, creates descriptor and push layouts
+and a load/store render pass,
 and creates the pipeline through the guarded driver cache. Temporary modules
 are destroyed on success and failure. Successful work snapshots the driver
 cache on the worker. Failed requests stay visible until explicit retry.
