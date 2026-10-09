@@ -284,9 +284,10 @@ well as the earlier image shapes. CPU checks exercise their packing and
 reject invalid dimensions. Tests classify their synthetic guest rules as
 hypotheses. None of these fixtures is observed program data.
 
-Test shader output and isolated translator packages use the configured
-temporary directory. Nested translator builds use CARGO_TARGET_DIR.
-Generated files and driver caches stay outside source directories.
+Test shader output uses the configured temporary directory. Isolated
+translator packages and nested builds use CARGO_TARGET_DIR, as in main's
+drawing check. Generated files and driver caches stay outside source
+directories.
 
 Run formatting, strict all-target/all-feature clippy, the minimal-feature
 suite and the full all-feature suite with ignored GPU tests enabled.
@@ -296,16 +297,48 @@ records establish no numeric guest format interpretation.
 
 ## Recorded check result
 
-Formatting, strict all-target/all-feature clippy and the minimal-feature suite
-pass. All eight image GPU tests pass. The catalogue samples and reads back
-73 supported host formats exactly and reports 29 unavailable host formats.
+After merging main at 8ee8cad on 2026-10-09, formatting and strict clippy pass
+for all workspace targets with default, Vulkan and all features. The
+minimal-feature suite passes 62 tests. The full all-feature suite passes
+124 tests with zero failed or ignored tests and exit code 0. The configured
+translator runs without optional skips.
 
-The full all-feature run with ignored tests enabled exits 101. Seven checks
-fail across the translated drawing, global memory and compute pipeline suites.
-The original triangle check fails on both this change and base commit c54f5ac.
-Disassembly of its translated synthetic fragment program shows a constant-zero
-color output instead of the fixture's requested color. This prevents a claim
-that the full suite passes. The external translator requires a separate repair.
+All eight image GPU tests pass. The catalogue samples and reads back
+73 supported host formats exactly and reports 29 unavailable host formats.
+All 13 drawing checks pass, including the fresh-process startup measurement.
+The translated global-memory checks match all 156 synthetic cases, and the
+compute-pipeline and startup translation checks pass. Strict clippy also
+passes for the generated drawing, global-memory and startup test packages.
+
+The principal suite commands were:
+
+```sh
+cargo fmt --all -- --check
+rustfmt --edition 2021 --check crates/novena/tests/shadowbox/*.rs
+cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
+cargo test --workspace --locked
+cargo test --workspace --locked --all-features -- --include-ignored --nocapture --test-threads=1
+```
+
+The Vulkan suite with an absent device, the default release build, strict C
+example compilation, the CPU cleared-pixel and C host runs, and the Vulkan
+textured-triangle example also pass. Main's public documentation requirement
+now covers the added enum rules, sampler fields, numeric classes and 1D image
+variants.
+
+The earlier full all-feature run exited 101 with seven failures across
+translated drawing, global memory and compute pipelines. The original triangle
+check also failed at base commit c54f5ac. The cause was the synthetic immediate
+move fixtures, which encoded zero lane masks. Their translated fragment
+programs stored zero color and their translated memory programs left sentinel
+bytes untouched.
+
+Commit 2872e6d corrected the fixtures by setting all four lane-mask bits at
+positions 12 through 15. Merging main brings that correction into this branch.
+[Startup validation provenance](0032-startup-cache-validation.md#evidence-and-integration)
+records the public encoding evidence and the corrected result. The earlier
+claim that the external translator needed repair was incorrect. No translator
+implementation changed.
 
 Independent temporary shader files also remove interference between parallel
 source-based drawing checks. All seven source-based drawing checks pass after

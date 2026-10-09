@@ -7,16 +7,22 @@ use std::collections::HashSet;
 /// Confidence concerns the guest interpretation, rather than host support.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Evidence {
+    /// Supported by recorded observations or permitted public evidence.
     Established,
+    /// Host interpretation that still requires confirming guest evidence.
     Hypothesis,
 }
 
 /// A host must name the recorded evidence or the hypothesis behind each rule.
 #[derive(Clone, Copy, Debug)]
 pub struct EnumRule<T> {
+    /// Raw caller token matched exactly by this rule.
     pub guest: u64,
+    /// Typed host value selected for the caller token.
     pub host: T,
+    /// Confidence in the guest interpretation.
     pub evidence: Evidence,
+    /// Nonempty description of the supporting evidence or hypothesis.
     pub rationale: &'static str,
 }
 
@@ -35,14 +41,20 @@ pub(crate) fn validate_rules<T>(rules: &[EnumRule<T>]) -> Result<(), String> {
 /// The recorded evidence does not supply a default guest enum table.
 #[derive(Clone, Default)]
 pub struct ImageEnums {
+    /// Explicit caller format tokens mapped to public Vulkan formats.
     pub formats: Vec<EnumRule<vk::Format>>,
+    /// Explicit caller target tokens mapped to image dimensions and layers.
     pub targets: Vec<EnumRule<ImageKind>>,
+    /// Exact caller flags mapped to linear or tiled storage.
     pub storage: Vec<EnumRule<Storage>>,
+    /// Caller component selectors; an empty table retains identity selection.
     pub swizzles: Vec<EnumRule<vk::ComponentSwizzle>>,
+    /// Caller selectors mapped to one depth or stencil aspect.
     pub depth_stencil_modes: Vec<EnumRule<vk::ImageAspectFlags>>,
 }
 
 impl ImageEnums {
+    /// Build and validate every exact storage, target and format combination.
     pub fn contract(&self) -> Result<ImageContract, String> {
         validate_rules(&self.formats)?;
         validate_rules(&self.targets)?;

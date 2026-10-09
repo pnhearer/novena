@@ -7,6 +7,7 @@
 use super::{accept, objects::Object, queue::signal_event, succeed, Handler};
 use crate::instance::Status;
 
+/// Return the handler for a supported name in this command family.
 pub fn handler(name: &str) -> Option<Handler> {
     Some(match name {
         "nvnCommandBufferInitialize" => |instance, _, registers| {

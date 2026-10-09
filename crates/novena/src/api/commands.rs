@@ -30,6 +30,7 @@ pub(super) fn record(
     Status::Ok
 }
 
+/// Return the handler for a supported name in this command family.
 pub fn handler(name: &str) -> Option<Handler> {
     if !name.starts_with("nvnCommandBuffer") {
         return None;

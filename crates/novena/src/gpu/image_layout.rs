@@ -10,7 +10,9 @@ use std::collections::HashSet;
 /// Storage selected by a host after interpreting recorded builder fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Storage {
+    /// Packed-linear storage with the layout's mip and layer alignment.
     Linear,
+    /// Block-linear storage with explicit tile exponents.
     Tiled(TileShape),
 }
 
@@ -19,41 +21,59 @@ pub enum Storage {
 pub struct ImageRule {
     /// Flags, target and format interpretations, in that order.
     pub evidence: [Evidence; 3],
+    /// Supporting evidence or hypothesis for flags, target and format, in order.
     pub rationale: [&'static str; 3],
+    /// Raw flags matched exactly by this rule.
     pub flags: u64,
+    /// Raw target token matched exactly by this rule.
     pub target: u64,
+    /// Raw format token matched exactly by this rule.
     pub format: u64,
+    /// Public Vulkan format selected by the host.
     pub host_format: vk::Format,
+    /// Image dimension and layer organization.
     pub kind: ImageKind,
+    /// Base address of host-managed program storage.
     pub storage: Storage,
 }
 
+/// Complete host rules for interpreting otherwise opaque image builder values.
 #[derive(Clone, Default)]
 pub struct ImageContract {
+    /// Unique flags, target, and format rules; no implicit mapping is added.
     pub rules: Vec<ImageRule>,
     /// Empty retains the legacy host identity choice. Nonempty requires every token.
     pub swizzles: Vec<EnumRule<vk::ComponentSwizzle>>,
+    /// Explicit caller selectors mapped to one depth or stencil aspect.
     pub depth_stencil_modes: Vec<EnumRule<vk::ImageAspectFlags>>,
 }
 
+/// Typed Vulkan image shape and format independent of guest enum values.
 #[derive(Clone)]
 pub struct ImageDescriptor {
+    /// Base texel dimensions, layers, and mip levels.
     pub shape: ImageShape,
+    /// Public Vulkan image format.
     pub format: vk::Format,
 }
 impl ImageDescriptor {
+    /// Calculate checked byte packing, or None for unsupported geometry or shape.
     pub fn packing(&self, tile: TileShape) -> Option<Layout> {
         Layout::new(self.shape, format_block(self.format)?, tile).ok()
     }
 }
 
 pub(crate) struct ResolvedImage {
+    /// Resolved typed host image shape and format.
     pub descriptor: ImageDescriptor,
+    /// Checked byte packing for the image storage.
     pub packing: Layout,
+    /// Host-selected linear or tiled storage representation.
     pub storage: Storage,
     pub components: vk::ComponentMapping,
 }
 impl ImageContract {
+    /// Reject duplicate rules, unsupported format geometry, or excessive tile exponents.
     pub fn validate(&self) -> Result<(), String> {
         validate_rules(&self.swizzles)?;
         validate_rules(&self.depth_stencil_modes)?;
@@ -296,46 +316,72 @@ pub(crate) fn format_aspects(format: vk::Format) -> vk::ImageAspectFlags {
 /// A checked texel-space box in one image mip and array layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ImageRegion {
+    /// Zero-based mip level.
     pub level: u32,
+    /// Zero-based array layer.
     pub layer: u32,
+    /// Origin of the region in texels.
     pub offset: [u32; 3],
+    /// Extent of the region in texels.
     pub extent: [u32; 3],
 }
 
+/// One mip/layer and two signed texel corners defining a blit region.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlitRegion {
+    /// Zero-based mip level.
     pub level: u32,
+    /// Zero-based array layer.
     pub layer: u32,
+    /// First and opposite corners in signed texel coordinates.
     pub offsets: [[i32; 3]; 2],
 }
 
 /// Host interpretation of a recorded opaque image-copy argument set.
 #[derive(Clone, Copy)]
 pub enum CopyOperation {
+    /// Equal-format transfer between explicit image regions.
     Copy {
+        /// Source image object key.
         source: u64,
+        /// Destination image object key.
         destination: u64,
+        /// Source subresource and region.
         from: ImageRegion,
+        /// Destination subresource and region.
         to: ImageRegion,
     },
+    /// Filtered transfer between explicit image regions.
     Blit {
+        /// Source image object key.
         source: u64,
+        /// Destination image object key.
         destination: u64,
+        /// Source subresource and region.
         from: BlitRegion,
+        /// Destination subresource and region.
         to: BlitRegion,
+        /// Vulkan filter used for the blit.
         filter: vk::Filter,
     },
 }
 
+/// Thread-safe host decoder for eight opaque recorded copy argument registers.
 pub type CopyDecoder = std::sync::Arc<dyn Fn([u64; 8]) -> Option<CopyOperation> + Send + Sync>;
 
+/// Numeric type used when sampling a public Vulkan format.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NumericClass {
+    /// Floating-point samples, including normalized and scaled formats.
     Float,
+    /// Unsigned integer samples.
     Unsigned,
+    /// Signed integer samples.
     Signed,
+    /// Depth samples represented as floating-point values.
     Depth,
 }
+/// Classify supported integer and depth formats; other formats use float samples.
 pub fn numeric_class(format: vk::Format) -> NumericClass {
     use vk::Format as F;
     match format {

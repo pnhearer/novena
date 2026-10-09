@@ -4,16 +4,22 @@ description = "A Vulkan implementation of a console graphics API, written from s
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-repository.workspace = true
 
 [lib]
 crate-type = ["rlib", "cdylib", "staticlib"]
 
 [features]
 default = []
-vulkan = ["dep:ash", "dep:blake3"]
+vulkan = ["dep:ash", "dep:blake3", "dep:serde", "dep:serde_json"]
 shadowbox = ["vulkan"]
 
 [dependencies]
 ash = { version = "0.38", optional = true, default-features = false, features = ["loaded"] }
 blake3 = { version = "1", optional = true }
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[[example]]
+name = "textured_triangle"
+required-features = ["vulkan"]

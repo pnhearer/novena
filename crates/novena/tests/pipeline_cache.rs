@@ -25,7 +25,7 @@ use std::{
 const PROGRAM: &[u8] = b"original host fixture header and code";
 
 fn directory(name: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!("pipeline-{name}-{}", std::process::id()));
+    let path = env::temp_dir().join(format!("pipeline-{name}-{}", std::process::id()));
     if path.exists() {
         fs::remove_dir_all(&path).unwrap();
     }

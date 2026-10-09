@@ -89,7 +89,12 @@ const EXIT: u64 = 0xe300_0000_0000_0000 | ALWAYS;
 const NOP: u64 = 0x50b0_0000_0000_0000 | ALWAYS;
 
 fn mov(register: u8, value: f32) -> u64 {
-    0x0100_0000_0000_0000 | ALWAYS | u64::from(register) | u64::from(value.to_bits()) << 20
+    // Mesa sm50.rs:1938-1941 sets all four lane-mask bits for an immediate move.
+    0x0100_0000_0000_0000
+        | ALWAYS
+        | (15 << 12)
+        | u64::from(register)
+        | u64::from(value.to_bits()) << 20
 }
 
 fn shader(fragment: bool, green: f32) -> Vec<u8> {
@@ -689,6 +694,10 @@ struct Fixture {
 
 impl Fixture {
     fn new(contract: FirstDrawContract) -> Self {
+        Self::with_instance(contract, |host| unsafe { Instance::with_host(host) })
+    }
+
+    fn with_instance(contract: FirstDrawContract, build: impl FnOnce(Host) -> Instance) -> Self {
         let state = Box::new(State {
             memory: Mutex::new(vec![0; 0x40000]),
             frames: Mutex::new(Vec::new()),
@@ -700,7 +709,7 @@ impl Fixture {
             present: Some(present),
             ..Host::default()
         };
-        let instance = unsafe { Instance::with_host(host) };
+        let instance = build(host);
         assert!(
             instance.set_first_draw_contract(Some(contract)),
             "Vulkan must be active"
@@ -732,7 +741,14 @@ impl Fixture {
             ("DepthStencilState", 23),
             ("PolygonState", 24),
         ] {
-            call(&instance, &format!("nvn{kind}SetDefaults"), &[address]);
+            call(
+                &instance,
+                &format!(
+                    "{}{kind}SetDefaults",
+                    &functions::all().next().unwrap().1[..3]
+                ),
+                &[address],
+            );
         }
         call(&instance, "nvnVertexStreamStateSetStride", &[20, 32]);
         call(&instance, "nvnVertexStreamStateSetDivisor", &[20, 0]);
@@ -1095,7 +1111,8 @@ fn compile_source(stage: &str, source: &str) -> Vec<u32> {
     );
     let bytes = fs::read(output).unwrap();
     fs::remove_dir_all(dir).unwrap();
-    bytes.as_chunks::<4>()
+    bytes
+        .as_chunks::<4>()
         .0
         .iter()
         .map(|w| u32::from_le_bytes(*w))
@@ -1997,7 +2014,14 @@ impl DepthProof {
             ("DepthStencilState", 23),
             ("PolygonState", 24),
         ] {
-            call(&instance, &format!("nvn{kind}SetDefaults"), &[address]);
+            call(
+                &instance,
+                &format!(
+                    "{}{kind}SetDefaults",
+                    &functions::all().next().unwrap().1[..3]
+                ),
+                &[address],
+            );
         }
         call(&instance, "nvnVertexStreamStateSetStride", &[20, 16]);
         call(&instance, "nvnVertexStreamStateSetDivisor", &[20, 0]);
@@ -3083,3 +3107,6 @@ fn textured_uniform_banks_and_persistence() {
     }
     println!("MATCH texture descriptors beside stage-local uniform and storage banks, rebinding, pipeline reuse and driver-cache reopening");
 }
+
+#[path = "startup_drawing.rs"]
+mod startup;

@@ -112,6 +112,7 @@ impl Drop for Scratch {
     }
 }
 
+/// Reusable compute conversion resources and packed-linear scratch storage.
 pub struct Transfer {
     context: Arc<Context>,
     pipeline_layout: vk::PipelineLayout,
@@ -121,6 +122,7 @@ pub struct Transfer {
 }
 
 impl Transfer {
+    /// Create the conversion pipeline and command slots; return None on setup failure.
     pub fn new(context: &Arc<Context>) -> Option<Self> {
         let limits = unsafe {
             context
@@ -196,6 +198,7 @@ impl Transfer {
         Some(result)
     }
 
+    /// Grow scratch if necessary, invalidating recordings that use replaced storage.
     pub fn ensure_capacity(&mut self, size: usize) -> Option<()> {
         if size == 0 {
             return None;
@@ -212,16 +215,19 @@ impl Transfer {
         Some(())
     }
 
+    /// Current scratch capacity in bytes.
     pub fn capacity(&self) -> usize {
         self.scratch.as_ref().map_or(0, |scratch| scratch.capacity)
     }
 
+    /// Borrow the scratch buffer handle; it remains owned by this transfer object.
     pub fn buffer(&self) -> vk::Buffer {
         self.scratch
             .as_ref()
             .map_or(vk::Buffer::null(), |scratch| scratch.buffer)
     }
 
+    /// Current scratch buffer device address; growth invalidates earlier addresses.
     pub fn address(&self) -> u64 {
         self.scratch.as_ref().map_or(0, |scratch| scratch.address)
     }

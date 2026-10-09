@@ -16,7 +16,8 @@ const EXIT: u64 = 0xe300_0000_0000_0000 | ALWAYS;
 const NOP: u64 = 0x50b0_0000_0000_0000 | ALWAYS;
 
 fn mov(register: u8, value: u32) -> u64 {
-    0x0100_0000_0000_0000 | ALWAYS | u64::from(register) | u64::from(value) << 20
+    // Mesa sm50.rs:1938-1941 sets all four lane-mask bits for an immediate move.
+    0x0100_0000_0000_0000 | ALWAYS | (15 << 12) | u64::from(register) | u64::from(value) << 20
 }
 
 // gm107.c:203-205,316,331,583-590,642-650,1898-1899.

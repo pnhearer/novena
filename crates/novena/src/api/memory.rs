@@ -33,6 +33,7 @@ fn pool_field(
     }
 }
 
+/// Return the handler for a supported name in this command family.
 pub fn handler(name: &str) -> Option<Handler> {
     Some(match name {
         "nvnMemoryPoolBuilderSetDefaults" => |instance, _, registers| {
