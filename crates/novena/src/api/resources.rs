@@ -591,6 +591,21 @@ pub fn handler(name: &str) -> Option<Handler> {
         "nvnTextureBuilderGetStorageSize" => {
             |instance, _, registers| match instance.objects.get(registers.x[0]) {
                 Some(Object::TextureBuilder(description)) => {
+                    #[cfg(feature = "vulkan")]
+                    if let Some(backend) = instance
+                        .gpu
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .as_ref()
+                    {
+                        if backend.has_image_contract() {
+                            let Some(bytes) = backend.texture_storage_size(&description) else {
+                                return Status::BadArgument;
+                            };
+                            registers.x[0] = bytes as u64;
+                            return Status::Ok;
+                        }
+                    }
                     registers.x[0] = storage_size(&description);
                     Status::Ok
                 }
@@ -690,6 +705,39 @@ pub fn handler(name: &str) -> Option<Handler> {
                 Some(Object::TextureView { base_level, .. }) => base_level,
                 _ => 0,
             };
+            #[cfg(feature = "vulkan")]
+            if let Some(backend) = instance
+                .gpu
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_ref()
+            {
+                if backend.has_image_contract() {
+                    let Some(r) = backend.resolved_image(&description) else {
+                        return Status::BadArgument;
+                    };
+                    let Some(level) = r.packing.levels().get(base_level as usize) else {
+                        return Status::BadArgument;
+                    };
+                    let base_layer = match instance.objects.get(registers.x[1]) {
+                        Some(Object::TextureView { base_layer, .. }) => base_layer,
+                        _ => 0,
+                    };
+                    if base_layer >= r.descriptor.shape.layers {
+                        return Status::BadArgument;
+                    }
+                    let (offset, stride) = match r.storage {
+                        crate::gpu::image_layout::Storage::Linear => {
+                            (level.linear_offset, r.packing.linear_layer_stride())
+                        }
+                        crate::gpu::image_layout::Storage::Tiled(_) => {
+                            (level.tiled_offset, r.packing.array_stride())
+                        }
+                    };
+                    registers.x[0] = offset as u64 + u64::from(base_layer) * stride as u64;
+                    return Status::Ok;
+                }
+            }
             let mut offset = 0;
             let (mut width, mut height) = (description.width.max(1), description.height.max(1));
             for _ in 0..base_level {

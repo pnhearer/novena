@@ -189,6 +189,15 @@ impl Window {
                 },
                 format: format.format,
                 layout: vk::ImageLayout::UNDEFINED,
+                shape: crate::tiling::ImageShape {
+                    width: extent.width,
+                    height: extent.height,
+                    depth: 1,
+                    layers: 1,
+                    levels: 1,
+                    kind: crate::tiling::ImageKind::D2,
+                },
+                size: u64::from(extent.width) * u64::from(extent.height) * 4,
             })
             .collect();
         for _ in &chain.images {

@@ -18,6 +18,7 @@ pub mod global_memory;
 pub mod gpu;
 mod instance;
 pub mod observe;
+pub mod tiling;
 
 pub use instance::{
     Census, Host, HostVulkan, Instance, Registers, ShaderStage, ShaderTranslator, Status,

@@ -40,6 +40,7 @@ pub enum RecordedCommand {
     CopyTextureToTexture {
         source: u64,
         destination: u64,
+        arguments: [u64; 8],
     },
     SetViewport([u64; 5]),
     SetScissor([u64; 5]),

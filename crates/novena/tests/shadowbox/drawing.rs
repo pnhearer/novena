@@ -2446,6 +2446,7 @@ fn texture_contract(set: u32) -> novena::gpu::textures::TextureContract {
             (203, vk::SamplerAddressMode::CLAMP_TO_BORDER),
         ],
         compare_disabled: 300,
+        lod: None,
         combined: vec![(0x1234_5678, 256, 257)],
     }
 }

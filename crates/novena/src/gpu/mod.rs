@@ -10,11 +10,13 @@ use std::sync::Arc;
 
 mod commands;
 pub mod graphics;
+pub mod image_layout;
 mod images;
 mod memory;
 mod pipeline_disk;
 mod pipeline_workers;
 mod present;
+pub mod texture_transfer;
 pub mod textures;
 pub mod uniforms;
 use images::{Image, Images};
@@ -83,6 +85,8 @@ pub struct Context {
 pub struct Backend {
     pub(crate) first_draw: Option<graphics::FirstDrawContract>,
     pub(crate) texture_contract: textures::TextureContract,
+    pub(crate) image_contract: image_layout::ImageContract,
+    pub(crate) copy_decoder: Option<image_layout::CopyDecoder>,
     pub(crate) blend_contract: Option<graphics::BlendContract>,
     samplers: HashMap<(u64, u32), textures::Sampler>,
     pub(crate) uniforms: uniforms::UniformBufferContract,
@@ -91,6 +95,7 @@ pub struct Backend {
     offscreen: Option<Image>,
     images: Images,
     bindings: HashMap<u64, (u64, u64, usize)>,
+    tiled: HashMap<u64, crate::tiling::Layout>,
     pub global_memory: Option<GlobalMemory>,
     context: Arc<Context>,
     scale: f32,
@@ -106,6 +111,8 @@ impl Backend {
         Some(Self {
             first_draw: None,
             texture_contract: textures::TextureContract::default(),
+            image_contract: image_layout::ImageContract::default(),
+            copy_decoder: None,
             blend_contract: None,
             samplers: HashMap::new(),
             uniforms: uniforms::UniformBufferContract::default(),
@@ -114,6 +121,7 @@ impl Backend {
             offscreen: None,
             images,
             bindings: HashMap::new(),
+            tiled: HashMap::new(),
             context,
             scale: scale.max(1.0),
             global_memory: None,
@@ -181,6 +189,31 @@ impl Backend {
             .is_some_and(|memory| memory.release_pool(key))
     }
 
+    pub(crate) fn resolved_image(
+        &self,
+        d: &crate::api::TextureDescription,
+    ) -> Option<image_layout::ResolvedImage> {
+        self.image_contract.resolve(d)
+    }
+    pub(crate) fn has_image_contract(&self) -> bool {
+        !self.image_contract.rules.is_empty()
+    }
+    pub(crate) fn texture_storage_size(&self, d: &crate::api::TextureDescription) -> Option<usize> {
+        let r = self.image_contract.resolve(d)?;
+        Some(match r.storage {
+            image_layout::Storage::Linear => r.packing.linear_size(),
+            image_layout::Storage::Tiled(_) => r.packing.tiled_size(),
+        })
+    }
+
+    pub fn set_image_contract(&mut self, contract: image_layout::ImageContract) -> bool {
+        if contract.validate().is_err() || !self.bindings.is_empty() {
+            return false;
+        }
+        self.image_contract = contract;
+        true
+    }
+
     pub fn context(&self) -> &Arc<Context> {
         &self.context
     }
@@ -197,6 +230,38 @@ impl Backend {
         description: &crate::api::TextureDescription,
         depth: bool,
     ) -> bool {
+        if !self.image_contract.rules.is_empty() {
+            let Some(resolved) = self.image_contract.resolve(description) else {
+                return false;
+            };
+            if depth && resolved.descriptor.format != vk::Format::D32_SFLOAT {
+                return false;
+            }
+            let bytes = match resolved.storage {
+                image_layout::Storage::Linear => resolved.packing.linear_size(),
+                image_layout::Storage::Tiled(_) => resolved.packing.tiled_size(),
+            };
+            if description.pool == 0
+                || self
+                    .global_memory
+                    .as_ref()
+                    .and_then(|m| m.image_region(description.pool, description.pool_offset, bytes))
+                    .is_none()
+            {
+                return false;
+            }
+            if !self.images.ensure_descriptor(key, &resolved.descriptor) {
+                return false;
+            }
+            self.bindings
+                .insert(key, (description.pool, description.pool_offset, bytes));
+            if matches!(resolved.storage, image_layout::Storage::Tiled(_)) {
+                self.tiled.insert(key, resolved.packing);
+            } else {
+                self.tiled.remove(&key);
+            }
+            return true;
+        }
         let width = description.width.max(1);
         let height = description.height.max(1);
         if description.depth > 1
@@ -281,7 +346,17 @@ impl Backend {
                 .global_memory
                 .as_ref()?
                 .image_region(pool, offset, bytes)?;
-            self.images.arena_transfer(key, buffer, offset, load)?;
+            if let Some(packing) = self.tiled.get(&key) {
+                let address = unsafe {
+                    self.context.device.get_buffer_device_address(
+                        &vk::BufferDeviceAddressInfo::default().buffer(buffer),
+                    )
+                }
+                .checked_add(offset)?;
+                self.images.tiled_transfer(key, address, packing, load)?;
+            } else {
+                self.images.arena_transfer(key, buffer, offset, load)?;
+            }
         }
         Some(())
     }
@@ -311,9 +386,110 @@ impl Backend {
         Some(self.samplers.get(&(pool, id))?.handle)
     }
 
+    /// Allocate or reuse a typed host image. Compressed payloads remain opaque.
+    pub fn ensure_image(&mut self, key: u64, descriptor: &image_layout::ImageDescriptor) -> bool {
+        self.images.ensure_descriptor(key, descriptor)
+    }
+
+    /// Return a whole-resource view after making transfers visible to shaders.
+    pub fn sampled_image(&mut self, key: u64) -> Option<vk::ImageView> {
+        self.images.sampled(key)
+    }
+
+    pub fn upload_image(&mut self, key: u64, bytes: &[u8]) -> bool {
+        self.images.upload(key, bytes).is_some()
+    }
+
+    /// Transfer tiled pool storage directly through its device-visible arena buffer.
+    pub fn load_tiled(
+        &mut self,
+        key: u64,
+        pool: u64,
+        offset: u64,
+        packing: &crate::tiling::Layout,
+    ) -> bool {
+        self.transfer_tiled(key, pool, offset, packing, true)
+            .is_some()
+    }
+    pub fn store_tiled(
+        &mut self,
+        key: u64,
+        pool: u64,
+        offset: u64,
+        packing: &crate::tiling::Layout,
+    ) -> bool {
+        self.transfer_tiled(key, pool, offset, packing, false)
+            .is_some()
+    }
+    /// Batch bounded transfers in one reusable command recording.
+    pub fn load_tiled_batch(
+        &mut self,
+        resources: &[(u64, u64, u64, &crate::tiling::Layout)],
+    ) -> bool {
+        self.transfer_tiled_batch(resources, true).is_some()
+    }
+    pub fn store_tiled_batch(
+        &mut self,
+        resources: &[(u64, u64, u64, &crate::tiling::Layout)],
+    ) -> bool {
+        self.transfer_tiled_batch(resources, false).is_some()
+    }
+    fn transfer_tiled_batch(
+        &mut self,
+        resources: &[(u64, u64, u64, &crate::tiling::Layout)],
+        load: bool,
+    ) -> Option<()> {
+        if resources.is_empty() || resources.len() > 256 {
+            return None;
+        }
+        let memory = self.global_memory.as_ref()?;
+        let mut ranges = Vec::with_capacity(resources.len());
+        for &(key, pool, offset, packing) in resources {
+            let (buffer, at) = memory.image_region(pool, offset, packing.tiled_size())?;
+            let address = unsafe {
+                self.context.device.get_buffer_device_address(
+                    &vk::BufferDeviceAddressInfo::default().buffer(buffer),
+                )
+            }
+            .checked_add(at)?;
+            ranges.push((key, address, packing));
+        }
+        self.images.tiled_batch(&ranges, load)
+    }
+
+    fn transfer_tiled(
+        &mut self,
+        key: u64,
+        pool: u64,
+        offset: u64,
+        packing: &crate::tiling::Layout,
+        load: bool,
+    ) -> Option<()> {
+        let (buffer, at) =
+            self.global_memory
+                .as_ref()?
+                .image_region(pool, offset, packing.tiled_size())?;
+        if !at.is_multiple_of(4) {
+            return None;
+        }
+        let address = unsafe {
+            self.context
+                .device
+                .get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(buffer))
+        }
+        .checked_add(at)?;
+        self.images.tiled_transfer(key, address, packing, load)
+    }
+
+    /// Complete all transfers before CPU access to shared arena storage.
+    pub fn wait_transfers(&self) -> bool {
+        self.images.wait().is_some()
+    }
+
     pub fn release_texture(&mut self, key: u64) {
         self.images.remove(key);
         self.bindings.remove(&key);
+        self.tiled.remove(&key);
     }
 
     pub fn clear_color(&mut self, key: u64, color: [f32; 4], mask: u32) -> bool {
@@ -396,6 +572,39 @@ impl Backend {
                 .image_region(pool, offset, size)?;
             self.images.arena_transfer(key, buffer, offset, true)?;
             self.sync_texture(key, false)
+        })()
+        .is_some()
+    }
+
+    pub fn copy_region(
+        &mut self,
+        destination: u64,
+        source: u64,
+        from: image_layout::ImageRegion,
+        to: image_layout::ImageRegion,
+    ) -> bool {
+        (|| {
+            self.sync_texture(source, true)?;
+            self.sync_texture(destination, true)?;
+            self.images.copy_region(destination, source, from, to)?;
+            self.sync_texture(destination, false)
+        })()
+        .is_some()
+    }
+    pub fn blit_region(
+        &mut self,
+        destination: u64,
+        source: u64,
+        from: image_layout::BlitRegion,
+        to: image_layout::BlitRegion,
+        filter: vk::Filter,
+    ) -> bool {
+        (|| {
+            self.sync_texture(source, true)?;
+            self.sync_texture(destination, true)?;
+            self.images
+                .blit_region(destination, source, from, to, filter)?;
+            self.sync_texture(destination, false)
         })()
         .is_some()
     }
@@ -631,6 +840,9 @@ impl Context {
             let enabled = vk::PhysicalDeviceFeatures::default()
                 .independent_blend(core.independent_blend != 0)
                 .shader_int64(true)
+                .image_cube_array(core.image_cube_array != 0)
+                .texture_compression_bc(core.texture_compression_bc != 0)
+                .texture_compression_astc_ldr(core.texture_compression_astc_ldr != 0)
                 .shader_int16(shader_features.shader_int16)
                 .fill_mode_non_solid(core.fill_mode_non_solid != 0)
                 .depth_bias_clamp(core.depth_bias_clamp != 0);

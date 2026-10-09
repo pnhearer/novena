@@ -261,6 +261,35 @@ impl Instance {
         Ok(())
     }
 
+    /// Decode opaque recorded image-copy arguments using a host-supplied contract.
+    #[cfg(feature = "vulkan")]
+    pub fn set_image_copy_decoder(
+        &self,
+        decoder: Option<crate::gpu::image_layout::CopyDecoder>,
+    ) -> bool {
+        let mut gpu = self.gpu.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(backend) = gpu.as_mut() else {
+            return false;
+        };
+        backend.copy_decoder = decoder;
+        true
+    }
+
+    /// Interpret image flags, targets and formats only through explicit host rules.
+    #[cfg(feature = "vulkan")]
+    pub fn set_image_contract(
+        &self,
+        contract: crate::gpu::image_layout::ImageContract,
+    ) -> Result<(), String> {
+        contract.validate()?;
+        let mut gpu = self.gpu.lock().unwrap_or_else(|p| p.into_inner());
+        let backend = gpu.as_mut().ok_or("Vulkan backend is unavailable")?;
+        if !backend.set_image_contract(contract) {
+            return Err("image rules cannot change while arena images are live".into());
+        }
+        Ok(())
+    }
+
     /// Opt into blend and channel argument hypotheses. Provenance: 0030.
     #[cfg(feature = "vulkan")]
     pub fn set_blend_contract(

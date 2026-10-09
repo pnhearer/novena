@@ -1,6 +1,6 @@
 //! Vulkan backing for the flat address space. Provenance: 0022-flat-global-memory.
 
-use super::{find_memory_type, Context};
+use super::Context;
 use crate::global_memory::{
     AddressMap, Allocator, GUEST_BASE, PUSH_GLOBAL_DELTA_OFFSET, PUSH_GLOBAL_DELTA_SIZE,
 };
@@ -14,6 +14,7 @@ pub struct GlobalMemory {
     device: Device,
     buffer: vk::Buffer,
     memory: vk::DeviceMemory,
+    mapped: usize,
     addresses: AddressMap,
     allocator: Allocator,
 }
@@ -41,23 +42,39 @@ impl GlobalMemory {
         // SAFETY: the device has bufferDeviceAddress enabled and size is nonzero.
         let buffer = unsafe { context.device.create_buffer(&info, None).ok()? };
         let requirements = unsafe { context.device.get_buffer_memory_requirements(buffer) };
-        let Some(ty) = find_memory_type(
-            context,
-            requirements.memory_type_bits,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        ) else {
-            unsafe { context.device.destroy_buffer(buffer, None) };
-            return None;
+        let visible =
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let properties = unsafe {
+            context
+                .instance
+                .get_physical_device_memory_properties(context.physical_device)
         };
+        let mut candidates: Vec<_> = (0..properties.memory_type_count)
+            .filter(|&ty| {
+                requirements.memory_type_bits & (1 << ty) != 0
+                    && properties.memory_types[ty as usize]
+                        .property_flags
+                        .contains(visible)
+            })
+            .collect();
+        candidates.sort_by_key(|&ty| {
+            !properties.memory_types[ty as usize]
+                .property_flags
+                .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+        });
         let mut flags =
             vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
-        let alloc = vk::MemoryAllocateInfo::default()
-            .allocation_size(requirements.size)
-            .memory_type_index(ty)
-            .push_next(&mut flags);
-        // SAFETY: allocation uses the buffer requirements and device address flag.
-        let Ok(memory) = (unsafe { context.device.allocate_memory(&alloc, None) }) else {
-            unsafe { context.device.destroy_buffer(buffer, None) };
+        let memory = candidates.into_iter().find_map(|ty| {
+            let alloc = vk::MemoryAllocateInfo::default()
+                .allocation_size(requirements.size)
+                .memory_type_index(ty)
+                .push_next(&mut flags);
+            unsafe { context.device.allocate_memory(&alloc, None).ok() }
+        });
+        let Some(memory) = memory else {
+            unsafe {
+                context.device.destroy_buffer(buffer, None);
+            }
             return None;
         };
         let addresses = (|| {
@@ -77,11 +94,24 @@ impl GlobalMemory {
             }
             return None;
         };
+        let mapped = unsafe {
+            context
+                .device
+                .map_memory(memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
+        };
+        let Ok(mapped) = mapped else {
+            unsafe {
+                context.device.destroy_buffer(buffer, None);
+                context.device.free_memory(memory, None);
+            }
+            return None;
+        };
         Some(Self {
             context: Arc::clone(context),
             device: context.device.clone(),
             buffer,
             memory,
+            mapped: mapped as usize,
             addresses,
             allocator: Allocator::new(size),
         })
@@ -192,21 +222,16 @@ impl GlobalMemory {
             let reserved = (size + 15) & !15;
             // SAFETY: this new block is within the buffer. New or recycled bytes
             // and the complete-word padding start zeroed before use.
-            let cleared = unsafe {
-                self.device
-                    .map_memory(self.memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
-                    .map(|mapped| {
-                        std::ptr::write_bytes(
-                            mapped.cast::<u8>().add(pool.offset as usize),
-                            0,
-                            reserved as usize,
-                        );
-                        self.device.unmap_memory(self.memory);
-                    })
-            };
-            if cleared.is_err() {
-                self.allocator.release(key);
-                return None;
+            unsafe {
+                if self.device.device_wait_idle().is_err() {
+                    self.allocator.release(key);
+                    return None;
+                }
+                std::ptr::write_bytes(
+                    (self.mapped as *mut u8).add(pool.offset as usize),
+                    0,
+                    reserved as usize,
+                );
             }
         }
         self.addresses.guest(pool.offset)
@@ -238,16 +263,11 @@ impl GlobalMemory {
         // flush, and exclusive access prevents simultaneous host or queue writes.
         unsafe {
             self.device.device_wait_idle().ok()?;
-            let mapped = self
-                .device
-                .map_memory(self.memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
-                .ok()?;
             std::ptr::copy_nonoverlapping(
                 bytes.as_ptr(),
-                mapped.cast::<u8>().add(offset as usize),
+                (self.mapped as *mut u8).add(offset as usize),
                 bytes.len(),
             );
-            self.device.unmap_memory(self.memory);
         }
         Some(())
     }
@@ -263,16 +283,11 @@ impl GlobalMemory {
         // host-visible memory and the output slice is valid for its length.
         unsafe {
             self.device.device_wait_idle().ok()?;
-            let mapped = self
-                .device
-                .map_memory(self.memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
-                .ok()?;
             std::ptr::copy_nonoverlapping(
-                mapped.cast::<u8>().add(offset as usize),
+                (self.mapped as *const u8).add(offset as usize),
                 bytes.as_mut_ptr(),
                 bytes.len(),
             );
-            self.device.unmap_memory(self.memory);
         }
         Some(())
     }
@@ -285,15 +300,26 @@ impl GlobalMemory {
             .iter()
             .map(|(&key, &pool)| (key, pool))
             .collect();
+        if unsafe { self.device.device_wait_idle() }.is_err() {
+            return false;
+        }
         let mut bytes = vec![0; 64 * 1024];
         for (key, pool) in pools {
             let mut offset = 0;
             while offset < pool.size {
                 let length = (pool.size - offset).min(bytes.len() as u64) as usize;
-                if !read(pool.storage + offset, &mut bytes[..length])
-                    || self.write_pool(key, offset, &bytes[..length]).is_none()
-                {
+                if !read(pool.storage + offset, &mut bytes[..length]) {
                     return false;
+                }
+                let Some(at) = self.pool_offset(key, offset, length) else {
+                    return false;
+                };
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        bytes.as_ptr(),
+                        (self.mapped as *mut u8).add(at as usize),
+                        length,
+                    );
                 }
                 offset += length as u64;
             }
@@ -309,14 +335,25 @@ impl GlobalMemory {
             .iter()
             .map(|(&key, &pool)| (key, pool))
             .collect();
+        if unsafe { self.device.device_wait_idle() }.is_err() {
+            return false;
+        }
         let mut bytes = vec![0; 64 * 1024];
         for (key, pool) in pools {
             let mut offset = 0;
             while offset < pool.size {
                 let length = (pool.size - offset).min(bytes.len() as u64) as usize;
-                if self.read_pool(key, offset, &mut bytes[..length]).is_none()
-                    || !write(pool.storage + offset, &bytes[..length])
-                {
+                let Some(at) = self.pool_offset(key, offset, length) else {
+                    return false;
+                };
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        (self.mapped as *const u8).add(at as usize),
+                        bytes.as_mut_ptr(),
+                        length,
+                    );
+                }
+                if !write(pool.storage + offset, &bytes[..length]) {
                     return false;
                 }
                 offset += length as u64;
@@ -357,6 +394,7 @@ impl Drop for GlobalMemory {
         // finish before either the buffer or its memory is freed.
         unsafe {
             let _ = self.device.device_wait_idle();
+            self.device.unmap_memory(self.memory);
             self.device.destroy_buffer(self.buffer, None);
             self.device.free_memory(self.memory, None);
         }

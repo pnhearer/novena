@@ -726,12 +726,17 @@ impl State {
                 if d.width == 0 || d.height == 0 {
                     return Err(Status::BadArgument);
                 }
+                let sample_bytes = backend
+                    .texture_storage_size(&d)
+                    .map_or(d.width.saturating_mul(d.height).saturating_mul(4), |n| {
+                        n as u64
+                    });
                 if depth == texture
                     || depth_description.as_ref().is_some_and(|other| {
                         d.pool == other.pool
                             && ranges_overlap(
                                 d.pool_offset,
-                                d.width.saturating_mul(d.height).saturating_mul(4),
+                                sample_bytes,
                                 other.pool_offset,
                                 other.width.saturating_mul(other.height).saturating_mul(5),
                             )
@@ -744,16 +749,35 @@ impl State {
                         d.pool == other.pool
                             && ranges_overlap(
                                 d.pool_offset,
-                                d.width.saturating_mul(d.height).saturating_mul(4),
+                                sample_bytes,
                                 other.pool_offset,
-                                other.width.saturating_mul(other.height).saturating_mul(4),
+                                backend.texture_storage_size(other).map_or(
+                                    other.width.saturating_mul(other.height).saturating_mul(4),
+                                    |n| n as u64,
+                                ),
                             )
                     })
                 {
                     return Err(Status::Unimplemented);
                 }
                 let c = backend.first_draw.as_ref().ok_or(Status::Unimplemented)?;
-                if d.pool == 0
+                if backend.has_image_contract() {
+                    let resolved = backend.resolved_image(&d).ok_or(Status::Unimplemented)?;
+                    let shape = resolved.descriptor.shape;
+                    if d.pool == 0
+                        || d.swizzle != c.identity_swizzle
+                        || d.depth_stencil_mode != 0
+                        || b.image_kind != Some(shape.kind)
+                        || (shape.kind == crate::tiling::ImageKind::Cube
+                            && b.arrayed != (shape.layers > 6))
+                        || crate::gpu::image_layout::numeric_class(resolved.descriptor.format)
+                            != crate::gpu::image_layout::NumericClass::Float
+                    {
+                        return Err(Status::Unimplemented);
+                    }
+                } else if b.image_kind != Some(crate::tiling::ImageKind::D2)
+                    || b.arrayed
+                    || d.pool == 0
                     || d.format != c.rgba8
                     || d.target != c.target_2d
                     || d.depth > 1

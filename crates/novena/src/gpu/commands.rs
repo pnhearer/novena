@@ -6,11 +6,23 @@ use std::sync::Arc;
 
 const FRAMES: usize = 2;
 
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct TransferKey {
+    pub image: u64,
+    pub scratch: u64,
+    pub address: u64,
+    pub scratch_address: u64,
+    pub layout: i32,
+    pub load: bool,
+    pub packing: crate::tiling::Layout,
+}
+
 struct Frame {
     pool: vk::CommandPool,
     command: vk::CommandBuffer,
     fence: vk::Fence,
     acquire: vk::Semaphore,
+    cached: Option<Vec<TransferKey>>,
 }
 
 pub(super) struct Commands {
@@ -18,6 +30,8 @@ pub(super) struct Commands {
     frames: Vec<Frame>,
     next: usize,
     failed: bool,
+    reusing: bool,
+    pending: Option<Vec<TransferKey>>,
 }
 
 impl Commands {
@@ -27,6 +41,8 @@ impl Commands {
             frames: Vec::new(),
             next: 0,
             failed: false,
+            reusing: false,
+            pending: None,
         };
         for _ in 0..FRAMES {
             let device = &context.device;
@@ -45,6 +61,7 @@ impl Commands {
                 command: vk::CommandBuffer::null(),
                 fence: vk::Fence::null(),
                 acquire: vk::Semaphore::null(),
+                cached: None,
             });
             let frame = commands.frames.last_mut()?;
             frame.command = unsafe {
@@ -74,7 +91,46 @@ impl Commands {
         Some(commands)
     }
 
+    pub fn invalidate_cached(&mut self) {
+        for frame in &mut self.frames {
+            frame.cached = None;
+        }
+        self.pending = None;
+        self.reusing = false;
+    }
+
     pub fn begin(&mut self) -> Option<(vk::CommandBuffer, vk::Semaphore)> {
+        self.begin_with_flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+    }
+
+    pub fn begin_cached(&mut self, key: Vec<TransferKey>) -> Option<(vk::CommandBuffer, bool)> {
+        if self.failed {
+            return None;
+        }
+        let frame = &self.frames[self.next];
+        if frame.cached.as_ref() == Some(&key) {
+            unsafe {
+                self.context
+                    .device
+                    .wait_for_fences(&[frame.fence], true, u64::MAX)
+                    .ok()?;
+            }
+            self.reusing = true;
+            self.pending = None;
+            return Some((frame.command, true));
+        }
+        let (command, _) = self.begin_with_flags(vk::CommandBufferUsageFlags::empty())?;
+        self.pending = Some(key);
+        Some((command, false))
+    }
+
+    fn begin_with_flags(
+        &mut self,
+        flags: vk::CommandBufferUsageFlags,
+    ) -> Option<(vk::CommandBuffer, vk::Semaphore)> {
+        self.reusing = false;
+        self.pending = None;
+        self.frames[self.next].cached = None;
         if self.failed {
             return None;
         }
@@ -90,8 +146,7 @@ impl Commands {
             device
                 .begin_command_buffer(
                     frame.command,
-                    &vk::CommandBufferBeginInfo::default()
-                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+                    &vk::CommandBufferBeginInfo::default().flags(flags),
                 )
                 .ok()?;
         }
@@ -112,7 +167,9 @@ impl Commands {
             submit = submit.wait_semaphores(&waits).wait_dst_stage_mask(&stages);
         }
         unsafe {
-            device.end_command_buffer(frame.command).ok()?;
+            if !self.reusing {
+                device.end_command_buffer(frame.command).ok()?;
+            }
             device.reset_fences(&[frame.fence]).ok()?;
             if device
                 .queue_submit(self.context.queue, &[submit], frame.fence)
@@ -122,6 +179,9 @@ impl Commands {
                 self.failed = true;
                 return None;
             }
+        }
+        if let Some(key) = self.pending.take() {
+            self.frames[self.next].cached = Some(key);
         }
         self.next = (self.next + 1) % self.frames.len();
         Some(())

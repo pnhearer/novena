@@ -1,7 +1,11 @@
 //! Render images and transfers to canonical arena bytes. Provenance: 0026 and 0028.
 
-use super::{commands::Commands, find_memory_type, Context};
-use ash::{vk, Device};
+use super::{
+    commands::Commands, find_memory_type, image_layout::ImageDescriptor,
+    texture_transfer::Transfer, Context,
+};
+use crate::tiling::{ImageKind, ImageShape, Layout, TileShape};
+use ash::{vk, vk::Handle, Device};
 use std::{collections::HashMap, sync::Arc};
 
 #[derive(Clone, Copy)]
@@ -10,6 +14,8 @@ pub(super) struct ImageInfo {
     pub extent: vk::Extent3D,
     pub format: vk::Format,
     pub layout: vk::ImageLayout,
+    pub shape: ImageShape,
+    pub size: u64,
 }
 
 pub(super) struct Image {
@@ -17,6 +23,7 @@ pub(super) struct Image {
     memory: vk::DeviceMemory,
     pub info: ImageInfo,
     view: vk::ImageView,
+    packing: Option<Layout>,
 }
 
 impl Image {
@@ -26,68 +33,144 @@ impl Image {
         height: u32,
         format: vk::Format,
     ) -> Option<Self> {
-        let limits = unsafe {
-            context
-                .instance
-                .get_physical_device_properties(context.physical_device)
-        }
-        .limits;
-        if width == 0
-            || height == 0
-            || width > limits.max_image_dimension2_d
-            || height > limits.max_image_dimension2_d
-        {
-            return None;
-        }
-        let extent = vk::Extent3D {
-            width,
-            height,
-            depth: 1,
-        };
-        let mut usage = vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST;
-        if format == vk::Format::R8G8B8A8_UNORM {
-            let properties = unsafe {
-                context
-                    .instance
-                    .get_physical_device_format_properties(context.physical_device, format)
+        let mut image = Self::with_descriptor(
+            context,
+            &ImageDescriptor {
+                shape: ImageShape {
+                    width,
+                    height,
+                    depth: 1,
+                    layers: 1,
+                    levels: 1,
+                    kind: ImageKind::D2,
+                },
+                format,
+            },
+        )?;
+        image.info.size = u64::from(width)
+            * u64::from(height)
+            * if format == vk::Format::D32_SFLOAT_S8_UINT {
+                5
+            } else {
+                4
             };
-            if !properties.optimal_tiling_features.contains(
-                vk::FormatFeatureFlags::COLOR_ATTACHMENT
-                    | vk::FormatFeatureFlags::SAMPLED_IMAGE
-                    | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR,
-            ) {
+        image.packing = None;
+        Some(image)
+    }
+
+    pub fn with_descriptor(context: &Arc<Context>, descriptor: &ImageDescriptor) -> Option<Self> {
+        let shape = descriptor.shape;
+        let format = descriptor.format;
+        let packing = if format == vk::Format::D32_SFLOAT_S8_UINT {
+            if shape.depth != 1 || shape.layers != 1 || shape.levels != 1 {
                 return None;
             }
-            usage |= vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED;
+            None
+        } else {
+            Some(descriptor.packing(TileShape {
+                height_log2: 0,
+                depth_log2: 0,
+            })?)
+        };
+        let extent = vk::Extent3D {
+            width: shape.width,
+            height: shape.height,
+            depth: shape.depth,
+        };
+        let ty = if shape.kind == ImageKind::D3 {
+            vk::ImageType::TYPE_3D
+        } else {
+            vk::ImageType::TYPE_2D
+        };
+        let flags = if shape.kind == ImageKind::Cube {
+            vk::ImageCreateFlags::CUBE_COMPATIBLE
+        } else {
+            vk::ImageCreateFlags::empty()
+        };
+        let props = unsafe {
+            context
+                .instance
+                .get_physical_device_format_properties(context.physical_device, format)
+        };
+        let mut usage = vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST;
+        if !props
+            .optimal_tiling_features
+            .contains(vk::FormatFeatureFlags::TRANSFER_SRC | vk::FormatFeatureFlags::TRANSFER_DST)
+        {
+            return None;
         }
         if matches!(
             format,
             vk::Format::D32_SFLOAT | vk::Format::D32_SFLOAT_S8_UINT
         ) {
-            let properties = unsafe {
-                context
-                    .instance
-                    .get_physical_device_format_properties(context.physical_device, format)
-            };
-            if !properties.optimal_tiling_features.contains(
-                vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT
-                    | vk::FormatFeatureFlags::TRANSFER_SRC
-                    | vk::FormatFeatureFlags::TRANSFER_DST,
-            ) {
+            if !props
+                .optimal_tiling_features
+                .contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
+            {
                 return None;
             }
             usage |= vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
+        } else {
+            if !props
+                .optimal_tiling_features
+                .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE)
+            {
+                return None;
+            }
+            usage |= vk::ImageUsageFlags::SAMPLED;
+            if props
+                .optimal_tiling_features
+                .contains(vk::FormatFeatureFlags::COLOR_ATTACHMENT)
+            {
+                usage |= vk::ImageUsageFlags::COLOR_ATTACHMENT;
+            }
         }
+        let limits = unsafe {
+            context
+                .instance
+                .get_physical_device_image_format_properties(
+                    context.physical_device,
+                    format,
+                    ty,
+                    vk::ImageTiling::OPTIMAL,
+                    usage,
+                    flags,
+                )
+                .ok()?
+        };
+        if shape.width == 0
+            || shape.height == 0
+            || shape.depth == 0
+            || shape.width > limits.max_extent.width
+            || shape.height > limits.max_extent.height
+            || shape.depth > limits.max_extent.depth
+            || shape.levels > limits.max_mip_levels
+            || shape.levels
+                > 32 - shape
+                    .width
+                    .max(shape.height)
+                    .max(shape.depth)
+                    .leading_zeros()
+            || shape.layers > limits.max_array_layers
+        {
+            return None;
+        }
+        let size = packing
+            .as_ref()
+            .map_or(u64::from(shape.width) * u64::from(shape.height) * 5, |p| {
+                p.linear_size() as u64
+            });
         let image = unsafe {
             context
                 .device
                 .create_image(
                     &vk::ImageCreateInfo::default()
-                        .image_type(vk::ImageType::TYPE_2D)
+                        .flags(flags)
+                        .image_type(ty)
                         .format(format)
                         .extent(extent)
-                        .mip_levels(1)
-                        .array_layers(1)
+                        .mip_levels(shape.levels)
+                        .array_layers(shape.layers)
                         .samples(vk::SampleCountFlags::TYPE_1)
                         .tiling(vk::ImageTiling::OPTIMAL)
                         .usage(usage)
@@ -100,11 +183,14 @@ impl Image {
             context: Arc::clone(context),
             memory: vk::DeviceMemory::null(),
             view: vk::ImageView::null(),
+            packing,
             info: ImageInfo {
                 image,
                 extent,
                 format,
                 layout: vk::ImageLayout::UNDEFINED,
+                shape,
+                size,
             },
         };
         let requirements = unsafe { context.device.get_image_memory_requirements(image) };
@@ -141,9 +227,17 @@ impl Image {
                     .create_image_view(
                         &vk::ImageViewCreateInfo::default()
                             .image(self.info.image)
-                            .view_type(vk::ImageViewType::TYPE_2D)
+                            .view_type(match self.info.shape.kind {
+                                ImageKind::D2 => vk::ImageViewType::TYPE_2D,
+                                ImageKind::D2Array => vk::ImageViewType::TYPE_2D_ARRAY,
+                                ImageKind::D3 => vk::ImageViewType::TYPE_3D,
+                                ImageKind::Cube if self.info.shape.layers == 6 => {
+                                    vk::ImageViewType::CUBE
+                                }
+                                ImageKind::Cube => vk::ImageViewType::CUBE_ARRAY,
+                            })
                             .format(self.info.format)
-                            .subresource_range(range(self.info.format)),
+                            .subresource_range(image_range(self.info)),
                         None,
                     )
                     .ok()?
@@ -175,7 +269,11 @@ pub(super) struct Buffer {
     memory: vk::DeviceMemory,
     pub buffer: vk::Buffer,
     size: u64,
+    mapped: *mut u8,
 }
+
+// SAFETY: mapped bytes belong to this owner; the queue and CPU access are serialized.
+unsafe impl Send for Buffer {}
 
 impl Buffer {
     pub fn new(context: &Arc<Context>, size: u64) -> Option<Self> {
@@ -198,6 +296,7 @@ impl Buffer {
             memory: vk::DeviceMemory::null(),
             buffer,
             size,
+            mapped: std::ptr::null_mut(),
         };
         let req = unsafe { context.device.get_buffer_memory_requirements(buffer) };
         let ty = find_memory_type(
@@ -222,36 +321,30 @@ impl Buffer {
                 .bind_buffer_memory(buffer, result.memory, 0)
                 .ok()?;
         }
+        result.mapped = unsafe {
+            context
+                .device
+                .map_memory(result.memory, 0, size, vk::MemoryMapFlags::empty())
+                .ok()?
+                .cast()
+        };
         Some(result)
     }
 
     pub fn write(&self, bytes: &[u8]) -> Option<()> {
-        if bytes.len() as u64 != self.size {
+        if bytes.len() as u64 > self.size {
             return None;
         }
         unsafe {
-            let ptr = self
-                .context
-                .device
-                .map_memory(self.memory, 0, self.size, vk::MemoryMapFlags::empty())
-                .ok()?;
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast(), bytes.len());
-            self.context.device.unmap_memory(self.memory);
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.mapped, bytes.len());
         }
         Some(())
     }
-
-    pub fn read(&self) -> Option<Vec<u8>> {
-        unsafe {
-            let ptr = self
-                .context
-                .device
-                .map_memory(self.memory, 0, self.size, vk::MemoryMapFlags::empty())
-                .ok()?;
-            let bytes = std::slice::from_raw_parts(ptr.cast::<u8>(), self.size as usize).to_vec();
-            self.context.device.unmap_memory(self.memory);
-            Some(bytes)
+    pub fn read(&self, size: usize) -> Option<Vec<u8>> {
+        if size as u64 > self.size {
+            return None;
         }
+        Some(unsafe { std::slice::from_raw_parts(self.mapped, size) }.to_vec())
     }
 }
 
@@ -259,6 +352,9 @@ impl Drop for Buffer {
     fn drop(&mut self) {
         unsafe {
             let _ = self.context.device.device_wait_idle();
+            if !self.mapped.is_null() {
+                self.context.device.unmap_memory(self.memory);
+            }
             self.context.device.destroy_buffer(self.buffer, None);
             self.context.device.free_memory(self.memory, None);
         }
@@ -269,6 +365,9 @@ pub(super) struct Images {
     context: Arc<Context>,
     commands: Commands,
     images: HashMap<u64, Image>,
+    recycled: Vec<Image>,
+    staging: Option<Buffer>,
+    transfer: Option<Transfer>,
 }
 
 impl Images {
@@ -277,7 +376,14 @@ impl Images {
             context: Arc::clone(context),
             commands: Commands::new(context)?,
             images: HashMap::new(),
+            recycled: Vec::new(),
+            staging: None,
+            transfer: None,
         })
+    }
+
+    pub fn wait(&self) -> Option<()> {
+        self.commands.wait()
     }
 
     pub fn ensure(&mut self, key: u64, width: u64, height: u64, depth: bool) -> bool {
@@ -313,7 +419,141 @@ impl Images {
     }
 
     pub fn remove(&mut self, key: u64) {
-        self.images.remove(&key);
+        if let Some(image) = self.images.remove(&key) {
+            // Destroying a referenced object invalidates executable recordings.
+            self.commands.invalidate_cached();
+            if self.commands.wait().is_some() && self.recycled.len() < 8 {
+                self.recycled.push(image);
+            }
+        }
+    }
+
+    pub fn ensure_descriptor(&mut self, key: u64, descriptor: &ImageDescriptor) -> bool {
+        if let Some(image) = self.images.get(&key) {
+            return image.info.shape == descriptor.shape
+                && image.info.format == descriptor.format
+                && image.packing.is_some();
+        }
+        let image = if let Some(i) = self.recycled.iter().position(|i| {
+            i.info.shape == descriptor.shape
+                && i.info.format == descriptor.format
+                && i.packing.is_some()
+        }) {
+            self.recycled.swap_remove(i)
+        } else {
+            let Some(image) = Image::with_descriptor(&self.context, descriptor) else {
+                return false;
+            };
+            image
+        };
+        self.images.insert(key, image);
+        true
+    }
+
+    fn staging(&mut self, size: u64) -> Option<()> {
+        self.commands.wait()?;
+        if self.staging.as_ref().is_none_or(|b| b.size < size) {
+            self.staging = Some(Buffer::new(&self.context, size)?);
+        }
+        Some(())
+    }
+
+    pub fn tiled_transfer(
+        &mut self,
+        key: u64,
+        address: u64,
+        packing: &Layout,
+        load: bool,
+    ) -> Option<()> {
+        self.tiled_batch(&[(key, address, packing)], load)
+    }
+
+    pub fn tiled_batch(&mut self, resources: &[(u64, u64, &Layout)], load: bool) -> Option<()> {
+        if resources.is_empty() || resources.len() > 256 {
+            return None;
+        }
+        for &(key, address, packing) in resources {
+            let image = self.images.get(&key)?;
+            if address == 0
+                || !address.is_multiple_of(4)
+                || image.info.shape != packing.shape()
+                || image.packing.as_ref()?.format() != packing.format()
+            {
+                return None;
+            }
+            address.checked_add(packing.tiled_size() as u64)?;
+        }
+        if self.transfer.is_none() {
+            self.transfer = Some(Transfer::new(&self.context)?);
+        }
+        let required = resources.iter().map(|r| r.2.linear_size()).max()?;
+        if self.transfer.as_ref()?.capacity() < required {
+            self.commands.wait()?;
+            self.commands.invalidate_cached();
+        }
+        self.transfer.as_mut()?.ensure_capacity(required)?;
+        let transfer = self.transfer.as_ref()?;
+        let cache = resources
+            .iter()
+            .map(|&(key, address, packing)| {
+                let image = &self.images[&key];
+                super::commands::TransferKey {
+                    image: image.info.image.as_raw(),
+                    scratch: transfer.buffer().as_raw(),
+                    address,
+                    scratch_address: transfer.address(),
+                    layout: image.info.layout.as_raw(),
+                    load,
+                    packing: packing.clone(),
+                }
+            })
+            .collect();
+        let (cmd, reused) = self.commands.begin_cached(cache)?;
+        if reused {
+            return self.commands.submit(false, None);
+        }
+        let transfer = self.transfer.as_ref()?;
+        for &(key, address, packing) in resources {
+            let image = self.images.get_mut(&key)?;
+            buffer_barrier(&self.context.device, cmd);
+            if load {
+                transfer.record(cmd, address, packing, true)?;
+            }
+            image.transition(
+                cmd,
+                if load {
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL
+                } else {
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL
+                },
+            );
+            let regions = buffer_regions(image.info, image.packing.as_ref(), 0);
+            unsafe {
+                if load {
+                    self.context.device.cmd_copy_buffer_to_image(
+                        cmd,
+                        transfer.buffer(),
+                        image.info.image,
+                        image.info.layout,
+                        &regions,
+                    );
+                } else {
+                    self.context.device.cmd_copy_image_to_buffer(
+                        cmd,
+                        image.info.image,
+                        image.info.layout,
+                        transfer.buffer(),
+                        &regions,
+                    );
+                }
+            }
+            if !load {
+                buffer_barrier(&self.context.device, cmd);
+                transfer.record(cmd, address, packing, false)?;
+            }
+            buffer_barrier(&self.context.device, cmd);
+        }
+        self.commands.submit(false, None)
     }
 
     pub fn sampled(&mut self, key: u64) -> Option<vk::ImageView> {
@@ -355,7 +595,7 @@ impl Images {
                 image.info.image,
                 image.info.layout,
                 &vk::ClearColorValue { float32: color },
-                &[range(image.info.format)],
+                &[image_range(image.info)],
             );
         }
         self.commands.submit(false, None)
@@ -444,7 +684,7 @@ impl Images {
                 image.info.image,
                 image.info.layout,
                 &vk::ClearDepthStencilValue { depth, stencil: 0 },
-                &[range(image.info.format)],
+                &[image_range(image.info)],
             );
         }
         self.commands.submit(false, None)
@@ -466,6 +706,12 @@ impl Images {
         offset: u64,
         load: bool,
     ) -> Option<()> {
+        let info = self.images.get(&key)?.info;
+        let alignment =
+            super::image_layout::format_block(info.format).map_or(4, |f| u64::from(f.bytes).max(4));
+        if !offset.is_multiple_of(alignment) {
+            return None;
+        }
         let (cmd, _) = self.commands.begin()?;
         let image = self.images.get_mut(&key)?;
         buffer_barrier(&self.context.device, cmd);
@@ -475,7 +721,7 @@ impl Images {
             vk::ImageLayout::TRANSFER_SRC_OPTIMAL
         };
         image.transition(cmd, layout);
-        let regions = buffer_regions(image.info, offset);
+        let regions = buffer_regions(image.info, image.packing.as_ref(), offset);
         unsafe {
             if load {
                 self.context.device.cmd_copy_buffer_to_image(
@@ -501,9 +747,14 @@ impl Images {
 
     pub fn upload(&mut self, key: u64, bytes: &[u8]) -> Option<()> {
         let info = self.images.get(&key)?.info;
-        let staging = Buffer::new(&self.context, image_size(info))?;
+        if bytes.len() as u64 != info.size {
+            return None;
+        }
+        self.staging(info.size)?;
+        let staging = self.staging.as_ref()?;
         staging.write(bytes)?;
-        self.arena_transfer(key, staging.buffer, 0, true)?;
+        let buffer = staging.buffer;
+        self.arena_transfer(key, buffer, 0, true)?;
         self.commands.wait()
     }
 
@@ -511,26 +762,180 @@ impl Images {
         if destination == source {
             return Some(());
         }
-        let src = self.source(source)?;
+        let src = self.images.get(&source)?.info;
         let dst = self.images.get(&destination)?.info;
-        if src.extent != dst.extent || src.format != dst.format {
+        if src.shape != dst.shape || src.format != dst.format {
+            return None;
+        }
+        let regions: Vec<_> = (0..src.shape.levels)
+            .map(|level| {
+                let extent = vk::Extent3D {
+                    width: (src.extent.width >> level).max(1),
+                    height: (src.extent.height >> level).max(1),
+                    depth: (src.extent.depth >> level).max(1),
+                };
+                vk::ImageCopy::default()
+                    .src_subresource(
+                        layers(src.format)
+                            .mip_level(level)
+                            .layer_count(src.shape.layers),
+                    )
+                    .dst_subresource(
+                        layers(dst.format)
+                            .mip_level(level)
+                            .layer_count(dst.shape.layers),
+                    )
+                    .extent(extent)
+            })
+            .collect();
+        self.record_copy(destination, source, &regions)
+    }
+
+    fn record_copy(
+        &mut self,
+        destination: u64,
+        source: u64,
+        regions: &[vk::ImageCopy],
+    ) -> Option<()> {
+        let (cmd, _) = self.commands.begin()?;
+        self.images
+            .get_mut(&source)?
+            .transition(cmd, vk::ImageLayout::TRANSFER_SRC_OPTIMAL);
+        self.images
+            .get_mut(&destination)?
+            .transition(cmd, vk::ImageLayout::TRANSFER_DST_OPTIMAL);
+        let src = self.images.get(&source)?.info;
+        let dst = self.images.get(&destination)?.info;
+        unsafe {
+            self.context
+                .device
+                .cmd_copy_image(cmd, src.image, src.layout, dst.image, dst.layout, regions);
+        }
+        self.commands.submit(false, None)
+    }
+
+    pub fn copy_region(
+        &mut self,
+        destination: u64,
+        source: u64,
+        from: super::image_layout::ImageRegion,
+        to: super::image_layout::ImageRegion,
+    ) -> Option<()> {
+        if source == destination || from.extent != to.extent {
+            return None;
+        }
+        let src = self.images.get(&source)?.info;
+        let dst = self.images.get(&destination)?.info;
+        if src.format != dst.format || !valid_region(src, from) || !valid_region(dst, to) {
+            return None;
+        }
+        let offsets = |v: [u32; 3]| vk::Offset3D {
+            x: v[0] as i32,
+            y: v[1] as i32,
+            z: v[2] as i32,
+        };
+        self.record_copy(
+            destination,
+            source,
+            &[vk::ImageCopy::default()
+                .src_subresource(
+                    layers(src.format)
+                        .mip_level(from.level)
+                        .base_array_layer(from.layer),
+                )
+                .src_offset(offsets(from.offset))
+                .dst_subresource(
+                    layers(dst.format)
+                        .mip_level(to.level)
+                        .base_array_layer(to.layer),
+                )
+                .dst_offset(offsets(to.offset))
+                .extent(vk::Extent3D {
+                    width: from.extent[0],
+                    height: from.extent[1],
+                    depth: from.extent[2],
+                })],
+        )
+    }
+
+    pub fn blit_region(
+        &mut self,
+        destination: u64,
+        source: u64,
+        from: super::image_layout::BlitRegion,
+        to: super::image_layout::BlitRegion,
+        filter: vk::Filter,
+    ) -> Option<()> {
+        if source == destination || !matches!(filter, vk::Filter::NEAREST | vk::Filter::LINEAR) {
+            return None;
+        }
+        let src = self.images.get(&source)?.info;
+        let dst = self.images.get(&destination)?.info;
+        if super::image_layout::numeric_class(src.format)
+            != super::image_layout::numeric_class(dst.format)
+            || (super::image_layout::numeric_class(src.format)
+                == super::image_layout::NumericClass::Depth
+                && (src.format != dst.format || filter != vk::Filter::NEAREST))
+        {
+            return None;
+        }
+        if !can_blit(&self.context, src.format, dst.format)
+            || !valid_blit(src, from)
+            || !valid_blit(dst, to)
+        {
+            return None;
+        }
+        let block = super::image_layout::format_block(src.format)?;
+        let block_dst = super::image_layout::format_block(dst.format)?;
+        if block.width != 1 || block.height != 1 || block_dst.width != 1 || block_dst.height != 1 {
+            return None;
+        }
+        if filter == vk::Filter::LINEAR
+            && !unsafe {
+                self.context
+                    .instance
+                    .get_physical_device_format_properties(self.context.physical_device, src.format)
+            }
+            .optimal_tiling_features
+            .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR)
+        {
             return None;
         }
         let (cmd, _) = self.commands.begin()?;
         self.images
+            .get_mut(&source)?
+            .transition(cmd, vk::ImageLayout::TRANSFER_SRC_OPTIMAL);
+        self.images
             .get_mut(&destination)?
             .transition(cmd, vk::ImageLayout::TRANSFER_DST_OPTIMAL);
+        let offsets = |v: [[i32; 3]; 2]| {
+            v.map(|v| vk::Offset3D {
+                x: v[0],
+                y: v[1],
+                z: v[2],
+            })
+        };
         unsafe {
-            self.context.device.cmd_copy_image(
+            self.context.device.cmd_blit_image(
                 cmd,
                 src.image,
-                src.layout,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 dst.image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &[vk::ImageCopy::default()
-                    .src_subresource(layers(src.format))
-                    .dst_subresource(layers(dst.format))
-                    .extent(src.extent)],
+                &[vk::ImageBlit::default()
+                    .src_subresource(
+                        layers(src.format)
+                            .mip_level(from.level)
+                            .base_array_layer(from.layer),
+                    )
+                    .src_offsets(offsets(from.offsets))
+                    .dst_subresource(
+                        layers(dst.format)
+                            .mip_level(to.level)
+                            .base_array_layer(to.layer),
+                    )
+                    .dst_offsets(offsets(to.offsets))],
+                filter,
             );
         }
         self.commands.submit(false, None)
@@ -538,14 +943,20 @@ impl Images {
 
     pub fn readback(&mut self, key: u64) -> Option<(u32, u32, Vec<u8>)> {
         let info = self.images.get(&key)?.info;
-        let staging = Buffer::new(&self.context, image_size(info))?;
-        self.arena_transfer(key, staging.buffer, 0, false)?;
+        self.staging(info.size)?;
+        let buffer = self.staging.as_ref()?.buffer;
+        self.arena_transfer(key, buffer, 0, false)?;
         self.commands.wait()?;
-        Some((info.extent.width, info.extent.height, staging.read()?))
+        Some((
+            info.extent.width,
+            info.extent.height,
+            self.staging.as_ref()?.read(info.size as usize)?,
+        ))
     }
 
     pub fn read_image(&mut self, image: &mut Image) -> Option<Vec<u8>> {
-        let staging = Buffer::new(&self.context, image_size(image.info))?;
+        self.staging(image.info.size)?;
+        let staging = self.staging.as_ref()?;
         let (cmd, _) = self.commands.begin()?;
         image.transition(cmd, vk::ImageLayout::TRANSFER_SRC_OPTIMAL);
         unsafe {
@@ -554,13 +965,13 @@ impl Images {
                 image.info.image,
                 image.info.layout,
                 staging.buffer,
-                &buffer_regions(image.info, 0),
+                &buffer_regions(image.info, image.packing.as_ref(), 0),
             );
         }
         buffer_barrier(&self.context.device, cmd);
         self.commands.submit(false, None)?;
         self.commands.wait()?;
-        staging.read()
+        staging.read(image.info.size as usize)
     }
 
     pub fn blit_offscreen(&mut self, source: ImageInfo, target: &mut Image) -> Option<()> {
@@ -580,14 +991,10 @@ impl Images {
     }
 }
 
-pub(super) fn image_size(info: ImageInfo) -> u64 {
-    u64::from(info.extent.width)
-        * u64::from(info.extent.height)
-        * if info.format == vk::Format::D32_SFLOAT_S8_UINT {
-            5
-        } else {
-            4
-        }
+fn image_range(info: ImageInfo) -> vk::ImageSubresourceRange {
+    range(info.format)
+        .level_count(info.shape.levels)
+        .layer_count(info.shape.layers)
 }
 
 pub(super) fn range(format: vk::Format) -> vk::ImageSubresourceRange {
@@ -616,7 +1023,37 @@ fn layers(format: vk::Format) -> vk::ImageSubresourceLayers {
         .layer_count(1)
 }
 
-fn buffer_regions(info: ImageInfo, offset: u64) -> Vec<vk::BufferImageCopy> {
+fn buffer_regions(
+    info: ImageInfo,
+    packing: Option<&Layout>,
+    offset: u64,
+) -> Vec<vk::BufferImageCopy> {
+    if let Some(packing) = packing {
+        let mut regions = Vec::new();
+        for layer in 0..info.shape.layers {
+            for (level, p) in packing.levels().iter().enumerate() {
+                regions.push(
+                    vk::BufferImageCopy::default()
+                        .buffer_offset(
+                            offset
+                                + (layer as usize * packing.linear_layer_stride() + p.linear_offset)
+                                    as u64,
+                        )
+                        .image_subresource(
+                            layers(info.format)
+                                .mip_level(level as u32)
+                                .base_array_layer(layer),
+                        )
+                        .image_extent(vk::Extent3D {
+                            width: p.extent[0],
+                            height: p.extent[1],
+                            depth: p.extent[2],
+                        }),
+                );
+            }
+        }
+        return regions;
+    }
     let depth = vk::BufferImageCopy::default()
         .buffer_offset(offset)
         .image_subresource(layers(info.format))
@@ -671,7 +1108,9 @@ pub(super) fn transition(
         )
     } else if layout == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL {
         (
-            vk::PipelineStageFlags::VERTEX_SHADER | vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::PipelineStageFlags::VERTEX_SHADER
+                | vk::PipelineStageFlags::FRAGMENT_SHADER
+                | vk::PipelineStageFlags::COMPUTE_SHADER,
             vk::AccessFlags::SHADER_READ,
         )
     } else if layout == vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL {
@@ -701,7 +1140,7 @@ pub(super) fn transition(
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .image(image.image)
-                .subresource_range(range(image.format))],
+                .subresource_range(image_range(image))],
         );
     }
 }
@@ -791,4 +1230,46 @@ pub(super) fn record_present(
         },
         final_layout,
     );
+}
+
+fn mip_extent(info: ImageInfo, level: u32) -> Option<[u32; 3]> {
+    if level >= info.shape.levels {
+        return None;
+    }
+    Some([
+        (info.extent.width >> level).max(1),
+        (info.extent.height >> level).max(1),
+        (info.extent.depth >> level).max(1),
+    ])
+}
+fn valid_region(info: ImageInfo, r: super::image_layout::ImageRegion) -> bool {
+    let Some(extent) = mip_extent(info, r.level) else {
+        return false;
+    };
+    if r.layer >= info.shape.layers {
+        return false;
+    }
+    let Some(block) = super::image_layout::format_block(info.format) else {
+        return false;
+    };
+    let align = [u32::from(block.width), u32::from(block.height), 1];
+    (0..3).all(|i| {
+        r.extent[i] > 0
+            && r.offset[i].is_multiple_of(align[i])
+            && r.offset[i].checked_add(r.extent[i]).is_some_and(|end| {
+                end <= extent[i] && (r.extent[i].is_multiple_of(align[i]) || end == extent[i])
+            })
+    })
+}
+fn valid_blit(info: ImageInfo, r: super::image_layout::BlitRegion) -> bool {
+    let Some(extent) = mip_extent(info, r.level) else {
+        return false;
+    };
+    r.layer < info.shape.layers
+        && (0..3).all(|i| {
+            r.offsets[0][i] != r.offsets[1][i]
+                && r.offsets
+                    .iter()
+                    .all(|v| v[i] >= 0 && v[i] as u32 <= extent[i])
+        })
 }

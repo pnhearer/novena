@@ -273,11 +273,19 @@ pub fn handler(name: &str) -> Option<Handler> {
                                 else {
                                     return Status::BadArgument;
                                 };
-                                let Some(size) = copy_size(&description) else {
-                                    return Status::BadArgument;
-                                };
                                 #[cfg(feature = "vulkan")]
                                 if let Some(backend) = gpu.as_mut() {
+                                    let size = if backend.has_image_contract() {
+                                        let Some(r) = backend.resolved_image(&description) else {
+                                            return Status::BadArgument;
+                                        };
+                                        r.packing.linear_size()
+                                    } else {
+                                        let Some(size) = copy_size(&description) else {
+                                            return Status::BadArgument;
+                                        };
+                                        size
+                                    };
                                     if !backend.ensure_texture(texture, &description, false) {
                                         return Status::BadArgument;
                                     }
@@ -298,6 +306,9 @@ pub fn handler(name: &str) -> Option<Handler> {
                                     }
                                     continue;
                                 }
+                                let Some(size) = copy_size(&description) else {
+                                    return Status::BadArgument;
+                                };
                                 let Some(data) = read_pool_bytes(instance, buffer, size) else {
                                     return Status::BadArgument;
                                 };
@@ -306,9 +317,53 @@ pub fn handler(name: &str) -> Option<Handler> {
                             RecordedCommand::CopyTextureToTexture {
                                 source,
                                 destination,
+                                arguments,
                             } => {
+                                #[cfg(not(feature = "vulkan"))]
+                                let _ = arguments;
                                 #[cfg(feature = "vulkan")]
                                 if let Some(backend) = gpu.as_mut() {
+                                    if let Some(decoder) = &backend.copy_decoder {
+                                        let Some(operation) = decoder(arguments) else {
+                                            return Status::Unimplemented;
+                                        };
+                                        use crate::gpu::image_layout::CopyOperation;
+                                        let (src, dst) = match operation {
+                                            CopyOperation::Copy {
+                                                source,
+                                                destination,
+                                                ..
+                                            }
+                                            | CopyOperation::Blit {
+                                                source,
+                                                destination,
+                                                ..
+                                            } => (source, destination),
+                                        };
+                                        for texture in [src, dst] {
+                                            let Some(Object::Texture { description, .. }) =
+                                                instance.objects.get(texture)
+                                            else {
+                                                return Status::BadArgument;
+                                            };
+                                            if !backend.ensure_texture(texture, &description, false)
+                                            {
+                                                return Status::BadArgument;
+                                            }
+                                        }
+                                        let ok = match operation {
+                                            CopyOperation::Copy { from, to, .. } => {
+                                                backend.copy_region(dst, src, from, to)
+                                            }
+                                            CopyOperation::Blit {
+                                                from, to, filter, ..
+                                            } => backend.blit_region(dst, src, from, to, filter),
+                                        };
+                                        if !ok {
+                                            return Status::Unimplemented;
+                                        }
+                                        continue;
+                                    }
                                     for texture in [source, destination] {
                                         let Some(Object::Texture { description, .. }) =
                                             instance.objects.get(texture)

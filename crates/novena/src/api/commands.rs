@@ -109,6 +109,7 @@ pub fn handler(name: &str) -> Option<Handler> {
                 RecordedCommand::CopyTextureToTexture {
                     source: r.x[1],
                     destination: r.x[2],
+                    arguments: r.x,
                 },
             )
         },
