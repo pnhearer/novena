@@ -960,8 +960,9 @@ impl State {
                 texture_infos.push(vk::DescriptorImageInfo::default().sampler(sampler));
             }
         }
-        let descriptors = pipeline
-            .descriptors(&uniform_buffers, &texture_infos)
+        let descriptors = backend
+            .graphics
+            .descriptors(&pipeline, &uniform_buffers, &texture_infos)
             .map_err(|_| Status::InternalError)?;
         let draw = Arc::new(Draw {
             descriptors,

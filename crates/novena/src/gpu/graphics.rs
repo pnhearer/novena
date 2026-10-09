@@ -1,6 +1,7 @@
-//! Bounded drawing with public Vulkan state and host choices. Provenance: 0027, 0028, 0029, 0037.
+//! Bounded drawing with public Vulkan state and host choices. Provenance: 0027, 0028, 0029, 0037, 0038.
 use super::{
     graphics_libraries::{Compiler, Part},
+    graphics_modules::{ShaderModule, ShaderModules},
     pipelines::{CacheStats, DriverCache, PersistenceStats, TranslationIdentity},
     uniforms::{self, Bank, UniformStage, BANK_SIZE},
     Context, GlobalMemory,
@@ -362,6 +363,7 @@ pub(crate) struct GraphicsPipelines {
     policy: PendingDrawPolicy,
     ready_ids: HashMap<u64, Vec<usize>>,
     ready: Vec<(Key, Arc<GraphicsPipeline>)>,
+    descriptors: HashMap<vk::Pipeline, DescriptorCache>,
 }
 impl GraphicsPipelines {
     /// Create reusable execution resources; return None if Vulkan setup fails.
@@ -392,7 +394,6 @@ impl GraphicsPipelines {
         let pool = Compiler::new(
             &driver,
             context.graphics_pipeline_libraries,
-            context.graphics_pipeline_fast_linking,
             workers,
             capacity,
         )?;
@@ -408,6 +409,7 @@ impl GraphicsPipelines {
             policy: PendingDrawPolicy::default(),
             ready_ids: HashMap::new(),
             ready: Vec::new(),
+            descriptors: HashMap::new(),
             requires_storage: u64::from(limits.max_uniform_buffer_range) < BANK_SIZE,
         })
     }
@@ -492,14 +494,20 @@ impl GraphicsPipelines {
     }
 
     pub(super) fn invalidate_descriptors(&mut self) {
-        for (_, pipeline) in &self.ready {
-            let mut cache = pipeline
-                .descriptors
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
-            cache.ids.clear();
-            cache.entries.clear();
-        }
+        self.descriptors.clear();
+    }
+
+    pub(crate) fn descriptors(
+        &mut self,
+        pipeline: &GraphicsPipeline,
+        buffers: &[vk::DescriptorBufferInfo],
+        images: &[vk::DescriptorImageInfo],
+    ) -> Result<Arc<DrawDescriptors>, String> {
+        pipeline.descriptors(
+            buffers,
+            images,
+            self.descriptors.entry(pipeline.pipeline).or_default(),
+        )
     }
 
     /// Forget a failed graphics request so a later request can compile again.
@@ -746,7 +754,7 @@ pub(crate) struct GraphicsPipeline {
     /// Whether banks use storage buffers.
     pub storage: bool,
     pub batch_safe: bool,
-    descriptors: std::sync::Mutex<DescriptorCache>,
+    modules: Vec<Arc<ShaderModule>>,
     push_set: Option<u32>,
     resource_owner: Option<Arc<GraphicsPipeline>>,
 }
@@ -757,33 +765,22 @@ impl GraphicsPipeline {
         cache: vk::PipelineCache,
         key: &Key,
         part: Option<Part>,
+        modules: &ShaderModules,
     ) -> Result<Self, String> {
-        let mut banks = uniforms::banks(&key.vertex, UniformStage::Vertex)?;
-        banks.extend(uniforms::banks(&key.fragment, UniformStage::Fragment)?);
-        let mut textures = super::textures::bindings(&key.vertex, UniformStage::Vertex)?;
-        textures.extend(super::textures::bindings(
-            &key.fragment,
-            UniformStage::Fragment,
-        )?);
-        let inputs = float_interface(&key.vertex, 1)?;
-        if inputs.is_empty()
-            || inputs.len() != key.input.attributes.len()
-            || inputs
-                .iter()
-                .enumerate()
-                .any(|(i, &(at, _))| at != i as u32)
-        {
-            return Err("attribute state indices must match shader locations".into());
-        }
-        if float_interface(&key.vertex, 3)? != float_interface(&key.fragment, 1)? {
-            return Err("vertex and fragment varying interfaces differ".into());
+        let fixed = matches!(part, Some(Part::Input | Part::Output));
+        let mut banks = Vec::new();
+        let mut textures = Vec::new();
+        if !fixed {
+            key.validate_interfaces()?;
+            banks = uniforms::banks(&key.vertex, UniformStage::Vertex)?;
+            banks.extend(uniforms::banks(&key.fragment, UniformStage::Fragment)?);
+            textures = super::textures::bindings(&key.vertex, UniformStage::Vertex)?;
+            textures.extend(super::textures::bindings(
+                &key.fragment,
+                UniformStage::Fragment,
+            )?);
         }
         let color_count = key.state.color_count.max(1);
-        if float_interface(&key.fragment, 3)?
-            != (0..color_count).map(|i| (i, 4)).collect::<Vec<_>>()
-        {
-            return Err("draw requires one float4 output per color target".into());
-        }
         let limits = unsafe {
             context
                 .instance
@@ -904,21 +901,24 @@ impl GraphicsPipeline {
         if f32::from_bits(key.state.bias[2]) != 0.0 && features.depth_bias_clamp == 0 {
             return Err("depth bias clamp is unavailable".into());
         }
+        #[cfg(feature = "draw-metrics")]
+        let layout_span = crate::draw_metrics::PipelineSpan::new(1);
         let mut result = Self {
             context: context.clone(),
             render_pass: vk::RenderPass::null(),
             pipeline: vk::Pipeline::null(),
             layout: vk::PipelineLayout::null(),
             set_layouts: Vec::new(),
-            descriptors: std::sync::Mutex::new(DescriptorCache::default()),
+            modules: Vec::new(),
             push_set: None,
             resource_owner: None,
-            batch_safe: [&key.vertex, &key.fragment].iter().all(|words| {
-                instructions(words).is_ok_and(|ops| {
-                    !ops.iter()
-                        .any(|&(op, args)| op == 32 && args.get(1) == Some(&5349))
-                })
-            }),
+            batch_safe: fixed
+                || [&key.vertex, &key.fragment].iter().all(|words| {
+                    instructions(words).is_ok_and(|ops| {
+                        !ops.iter()
+                            .any(|&(op, args)| op == 32 && args.get(1) == Some(&5349))
+                    })
+                }),
             banks,
             textures,
             storage: key.storage,
@@ -1059,7 +1059,8 @@ impl GraphicsPipeline {
                 )
                 .map_err(|e| format!("create draw layout: {e:?}"))?;
         }
-        let mut modules = Vec::new();
+        #[cfg(feature = "draw-metrics")]
+        drop(layout_span);
         let mut stages = Vec::new();
         for (words, stage, subset) in [
             (&key.vertex, UniformStage::Vertex, Part::Raster),
@@ -1068,26 +1069,14 @@ impl GraphicsPipeline {
             if part.is_some_and(|p| p != subset) {
                 continue;
             }
-            let module = uniforms::lower(words, stage, key.storage)
-                .and_then(|words| context.create_global_shader_module(&words));
-            let module = match module {
-                Ok(module) => module,
-                Err(error) => {
-                    unsafe {
-                        for module in modules {
-                            context.device.destroy_shader_module(module, None);
-                        }
-                    }
-                    return Err(error);
-                }
-            };
-            modules.push(module);
+            let module = modules.get(context, words, stage, key.storage)?;
             stages.push(
                 vk::PipelineShaderStageCreateInfo::default()
                     .stage(stage.flags())
-                    .module(module)
+                    .module(module.handle)
                     .name(c"main"),
             );
+            result.modules.push(module);
         }
         let bindings: Vec<_> = key
             .input
@@ -1169,16 +1158,16 @@ impl GraphicsPipeline {
                 .flags(vk::PipelineCreateFlags::LIBRARY_KHR)
                 .push_next(&mut subset);
         }
+        #[cfg(feature = "draw-metrics")]
+        let driver_span =
+            crate::draw_metrics::PipelineSpan::new(part.map_or(3, |p| 3 + p as usize));
         let created = unsafe {
             context
                 .device
                 .create_graphics_pipelines(cache, &[info], None)
         };
-        unsafe {
-            for module in modules {
-                context.device.destroy_shader_module(module, None);
-            }
-        }
+        #[cfg(feature = "draw-metrics")]
+        drop(driver_span);
         match created {
             Ok(pipelines) => result.pipeline = pipelines[0],
             Err((pipelines, error)) => {
@@ -1194,6 +1183,8 @@ impl GraphicsPipeline {
     }
 
     pub(super) fn link(key: &Key, parts: &[Arc<Self>]) -> Result<Self, String> {
+        #[cfg(feature = "draw-metrics")]
+        let _span = crate::draw_metrics::PipelineSpan::new(7);
         let mut banks = uniforms::banks(&key.vertex, UniformStage::Vertex)?;
         banks.extend(uniforms::banks(&key.fragment, UniformStage::Fragment)?);
         let mut textures = super::textures::bindings(&key.vertex, UniformStage::Vertex)?;
@@ -1208,7 +1199,7 @@ impl GraphicsPipeline {
             .layout(owner.layout)
             .render_pass(owner.render_pass)
             .push_next(&mut libraries);
-        // Fast links do not acquire the compilation cache or perform disk I/O.
+        // Worker links do not acquire the compilation cache or perform disk I/O.
         let created = unsafe {
             owner
                 .context
@@ -1241,7 +1232,7 @@ impl GraphicsPipeline {
                         .any(|&(op, args)| op == 32 && args.get(1) == Some(&5349))
                 })
             }),
-            descriptors: std::sync::Mutex::new(DescriptorCache::default()),
+            modules: Vec::new(),
             push_set: owner.push_set,
             resource_owner: Some(owner.clone()),
         })
@@ -1256,10 +1247,11 @@ impl GraphicsPipeline {
     }
 
     /// Allocate and populate descriptors for reflected banks and sampled resources.
-    pub fn descriptors(
+    fn descriptors(
         &self,
         buffers: &[vk::DescriptorBufferInfo],
         images: &[vk::DescriptorImageInfo],
+        cache: &mut DescriptorCache,
     ) -> Result<Arc<DrawDescriptors>, String> {
         #[cfg(feature = "draw-metrics")]
         let _span = crate::draw_metrics::Span::new(1);
@@ -1283,7 +1275,6 @@ impl GraphicsPipeline {
                 })
                 .collect(),
         };
-        let mut cache = self.descriptors.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(&id) = cache.ids.get(&key) {
             return Ok(cache.entries[id].clone());
         }

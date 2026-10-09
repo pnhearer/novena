@@ -11,6 +11,7 @@ use std::sync::Arc;
 mod commands;
 pub mod graphics;
 mod graphics_libraries;
+mod graphics_modules;
 pub mod image_enums;
 pub mod image_layout;
 mod images;
@@ -376,6 +377,8 @@ impl Backend {
     }
 
     fn sync_texture(&mut self, key: u64, load: bool) -> Option<()> {
+        #[cfg(feature = "draw-metrics")]
+        let _span = crate::draw_metrics::PipelineSpan::new(12);
         if let Some(&(pool, offset, bytes)) = self.bindings.get(&key) {
             let (buffer, offset) = self
                 .global_memory

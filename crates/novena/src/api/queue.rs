@@ -159,6 +159,8 @@ pub fn handler(name: &str) -> Option<Handler> {
                 .as_mut()
                 .and_then(|backend| backend.global_memory.as_mut())
             {
+                #[cfg(feature = "draw-metrics")]
+                let _span = crate::draw_metrics::PipelineSpan::new(13);
                 if !memory.upload(|address, bytes| instance.read_memory(address, bytes)) {
                     return Status::BadArgument;
                 }
@@ -515,6 +517,8 @@ pub fn handler(name: &str) -> Option<Handler> {
                 .as_mut()
                 .and_then(|backend| backend.global_memory.as_mut())
             {
+                #[cfg(feature = "draw-metrics")]
+                let _span = crate::draw_metrics::PipelineSpan::new(14);
                 if !memory.download(|address, bytes| instance.write_memory(address, bytes)) {
                     return Status::BadArgument;
                 }

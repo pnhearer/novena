@@ -342,7 +342,11 @@ impl DriverCache {
         &self,
         create: impl FnOnce(&Arc<Context>, vk::PipelineCache) -> Result<P, String>,
     ) -> Result<P, String> {
+        #[cfg(feature = "draw-metrics")]
+        let span = crate::draw_metrics::PipelineSpan::new(9);
         let cache = self.driver_cache.read().unwrap();
+        #[cfg(feature = "draw-metrics")]
+        drop(span);
         create(&self.context, *cache)
     }
 

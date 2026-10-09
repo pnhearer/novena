@@ -1,6 +1,7 @@
-//! Shared graphics subsets and bounded compilation. Evidence: provenance 0037.
+//! Shared graphics subsets and bounded compilation. Evidence: provenance 0037 and 0038.
 use super::{
     graphics::{DrawPipelineState, GraphicsPipeline, Key, PrimitiveTopology, VertexInput},
+    graphics_modules::ShaderModules,
     pipeline_workers::AsyncPipelines,
     pipelines::{CacheStats, DriverCache, PipelineRequest, PipelineStatus, RequestError},
 };
@@ -149,7 +150,6 @@ pub(super) struct Compiler {
     pool: AsyncPipelines<Job, GraphicsPipeline>,
     assemblies: HashMap<Key, Assembly>,
     libraries: bool,
-    fast_linking: bool,
     stats: CacheStats,
     counts: Arc<[AtomicU64; 6]>,
 }
@@ -157,25 +157,44 @@ impl Compiler {
     pub(super) fn new(
         driver: &Arc<DriverCache>,
         libraries: bool,
-        fast_linking: bool,
         workers: usize,
         capacity: usize,
     ) -> Result<Self, String> {
         let driver = driver.clone();
         let counts = Arc::new(std::array::from_fn(|_| AtomicU64::new(0)));
         let worker_counts: Arc<[AtomicU64; 6]> = counts.clone();
+        let modules = ShaderModules::default();
+        let mut warmed = HashMap::new();
+        if libraries {
+            for job in common_jobs() {
+                let JobKey::Part(part) = &job.id else {
+                    unreachable!()
+                };
+                let pipeline = driver.create(|context, cache| {
+                    GraphicsPipeline::create(context, cache, &job.source, Some(part.part), &modules)
+                })?;
+                counts[part.part as usize].fetch_add(1, Ordering::Relaxed);
+                warmed.insert(job, Arc::new(pipeline));
+            }
+        }
         let pool = AsyncPipelines::new(
-            HashMap::new(),
+            warmed,
             CacheStats::default(),
             workers,
             capacity,
             move |job: &Job| {
                 let pipeline = match &job.id {
                     JobKey::Whole(_) => driver.create(|context, cache| {
-                        GraphicsPipeline::create(context, cache, &job.source, None)
+                        GraphicsPipeline::create(context, cache, &job.source, None, &modules)
                     })?,
                     JobKey::Part(part) => driver.create(|context, cache| {
-                        GraphicsPipeline::create(context, cache, &job.source, Some(part.part))
+                        GraphicsPipeline::create(
+                            context,
+                            cache,
+                            &job.source,
+                            Some(part.part),
+                            &modules,
+                        )
                     })?,
                     JobKey::Link(_) => GraphicsPipeline::link(&job.source, &job.parts)?,
                 };
@@ -194,7 +213,6 @@ impl Compiler {
             pool,
             assemblies: HashMap::new(),
             libraries,
-            fast_linking,
             stats: CacheStats::default(),
             counts,
         })
@@ -241,7 +259,6 @@ impl Compiler {
         pool: &mut AsyncPipelines<Job, GraphicsPipeline>,
         key: &Key,
         assembly: &mut Assembly,
-        inline: bool,
         deadline: Option<Instant>,
     ) -> Result<Option<Arc<GraphicsPipeline>>, String> {
         let mut parts = Vec::new();
@@ -269,11 +286,6 @@ impl Compiler {
             return Ok(parts.pop());
         }
         if assembly.link.is_none() {
-            if inline {
-                let result = GraphicsPipeline::link(key, &parts).map(Arc::new);
-                assembly.link = Some(PipelineRequest::completed(result.clone()));
-                return result.map(Some);
-            }
             match pool.request(Job {
                 id: JobKey::Link(key.clone()),
                 source: key.clone(),
@@ -297,15 +309,13 @@ impl Compiler {
         key: Key,
         deadline: Option<Instant>,
     ) -> Result<Option<Arc<GraphicsPipeline>>, String> {
+        #[cfg(feature = "draw-metrics")]
+        let _span = crate::draw_metrics::PipelineSpan::new(0);
         self.ensure(&key)?;
         let assembly = self.assemblies.get_mut(&key).unwrap();
-        let inline = self.fast_linking && assembly.link.is_none();
-        let result = Self::advance(&mut self.pool, &key, assembly, self.fast_linking, deadline);
-        if inline && result.as_ref().is_ok_and(Option::is_some) && self.libraries {
-            self.counts[4].fetch_add(1, Ordering::Relaxed);
-        }
-        result
+        Self::advance(&mut self.pool, &key, assembly, deadline)
     }
+
     pub(super) fn compilation_stats(&self) -> super::graphics::GraphicsCompilationStats {
         let counts = self.counts.each_ref().map(|v| v.load(Ordering::Relaxed));
         super::graphics::GraphicsCompilationStats {
@@ -318,14 +328,14 @@ impl Compiler {
     pub(super) fn queue(&mut self, key: Key) -> Result<bool, String> {
         self.ensure(&key)?;
         let assembly = self.assemblies.get_mut(&key).unwrap();
-        Self::advance(&mut self.pool, &key, assembly, false, None)?;
+        Self::advance(&mut self.pool, &key, assembly, None)?;
         Ok(assembly.requests.iter().all(Option::is_some))
     }
     pub(super) fn pending(&mut self) -> usize {
         // Startup polling also enqueues the final link after all parts finish.
         let mut count = 0;
         for (key, assembly) in &mut self.assemblies {
-            if let Ok(None) = Self::advance(&mut self.pool, key, assembly, false, None) {
+            if let Ok(None) = Self::advance(&mut self.pool, key, assembly, None) {
                 count += 1;
             }
         }
@@ -358,6 +368,57 @@ impl Compiler {
         }
         failed
     }
+}
+
+fn common_jobs() -> Vec<Job> {
+    use super::graphics::{VertexAttribute, VertexBinding, VertexFormat};
+    let mut key = Key {
+        vertex: Vec::new(),
+        fragment: Vec::new(),
+        input: VertexInput {
+            bindings: vec![VertexBinding {
+                binding: 0,
+                stride: 16,
+            }],
+            attributes: vec![VertexAttribute {
+                binding: 0,
+                format: VertexFormat::Float4,
+                offset: 0,
+            }],
+        },
+        topology: PrimitiveTopology::TriangleList,
+        state: DrawPipelineState::default(),
+        storage: false,
+    };
+    let mut jobs = Vec::new();
+    for (stride, offset) in [(16, 0), (32, 8)] {
+        key.input.bindings[0].stride = stride;
+        key.input.attributes[0].offset = offset;
+        for topology in [
+            PrimitiveTopology::TriangleList,
+            PrimitiveTopology::TriangleStrip,
+            PrimitiveTopology::TriangleFan,
+        ] {
+            key.topology = topology;
+            jobs.push(Job {
+                id: JobKey::Part(PartKey::new(&key, Part::Input).unwrap()),
+                source: key.clone(),
+                parts: Vec::new(),
+            });
+        }
+    }
+    for color_count in 1..=4 {
+        key.state.color_count = color_count;
+        for attachment in [false, true] {
+            key.state.attachment = attachment;
+            jobs.push(Job {
+                id: JobKey::Part(PartKey::new(&key, Part::Output).unwrap()),
+                source: key.clone(),
+                parts: Vec::new(),
+            });
+        }
+    }
+    jobs
 }
 
 #[cfg(test)]

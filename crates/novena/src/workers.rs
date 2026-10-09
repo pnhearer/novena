@@ -1,4 +1,4 @@
-//! Bounded owned pipeline requests. Evidence: provenance 0026, 0027, and 0037.
+//! Bounded owned pipeline requests. Evidence: provenance 0026, 0027, 0037, and 0038.
 /// Cumulative request reuse and insertion counters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CacheStats {
@@ -11,7 +11,7 @@ use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicU8, Ordering},
-        mpsc, Arc, Condvar, Mutex,
+        mpsc, Arc, Condvar, Mutex, OnceLock,
     },
     thread::{self, JoinHandle},
     time::Instant,
@@ -32,7 +32,8 @@ pub enum PipelineStatus<P> {
 struct RequestState<P> {
     completed: Condvar,
     phase: AtomicU8,
-    result: Mutex<Option<Result<Arc<P>, String>>>,
+    result: OnceLock<Result<Arc<P>, String>>,
+    waiter: Mutex<()>,
 }
 
 /// Owned completion handle. Replacing a program replaces its handle, so an old
@@ -55,41 +56,42 @@ impl<P> PipelineRequest<P> {
         Self(Arc::new(RequestState {
             completed: Condvar::new(),
             phase: AtomicU8::new(2),
-            result: Mutex::new(Some(result)),
+            result: OnceLock::from(result),
+            waiter: Mutex::new(()),
         }))
     }
 
     /// Wait for completion until one shared draw deadline, then return a snapshot.
     pub fn wait_until(&self, deadline: Instant) -> PipelineStatus<P> {
-        let result = self.0.result.lock().unwrap_or_else(|p| p.into_inner());
-        let (result, _) = self
+        if self.0.result.get().is_some() {
+            return self.poll();
+        }
+        let guard = self.0.waiter.lock().unwrap_or_else(|p| p.into_inner());
+        let (_guard, _) = self
             .0
             .completed
             .wait_timeout_while(
-                result,
+                guard,
                 deadline.saturating_duration_since(Instant::now()),
-                |r| r.is_none(),
+                |_| self.0.result.get().is_none(),
             )
             .unwrap_or_else(|p| p.into_inner());
-        match result.as_ref() {
-            Some(Ok(value)) => PipelineStatus::Ready(value.clone()),
-            Some(Err(error)) => PipelineStatus::Failed(error.clone()),
-            None => self.poll(),
-        }
+        self.poll()
     }
 
     /// Return the current phase without waiting for compilation.
     pub fn poll(&self) -> PipelineStatus<P> {
+        #[cfg(feature = "draw-metrics")]
+        let _span = crate::draw_metrics::PipelineSpan::new(10);
+        if let Some(result) = self.0.result.get() {
+            return match result {
+                Ok(pipeline) => PipelineStatus::Ready(pipeline.clone()),
+                Err(error) => PipelineStatus::Failed(error.clone()),
+            };
+        }
         match self.0.phase.load(Ordering::Acquire) {
             0 => PipelineStatus::Queued,
-            1 => PipelineStatus::Compiling,
-            _ => match self.0.result.try_lock() {
-                Ok(result) => match result.as_ref().expect("completed request has a result") {
-                    Ok(pipeline) => PipelineStatus::Ready(pipeline.clone()),
-                    Err(error) => PipelineStatus::Failed(error.clone()),
-                },
-                Err(_) => PipelineStatus::Compiling,
-            },
+            _ => PipelineStatus::Compiling,
         }
     }
 }
@@ -144,7 +146,8 @@ impl<K: Eq + std::hash::Hash + Clone + Send + 'static, P: Send + Sync + 'static>
                         PipelineRequest(Arc::new(RequestState {
                             completed: Condvar::new(),
                             phase: AtomicU8::new(2),
-                            result: Mutex::new(Some(Ok(pipeline))),
+                            result: OnceLock::from(Ok(pipeline)),
+                            waiter: Mutex::new(()),
                         })),
                     )
                 })
@@ -169,7 +172,8 @@ impl<K: Eq + std::hash::Hash + Clone + Send + 'static, P: Send + Sync + 'static>
                         compiler(&job.program)
                     }))
                     .unwrap_or_else(|_| Err("pipeline compiler panicked".into()));
-                    *job.state.result.lock().unwrap() = Some(compiled);
+                    let _guard = job.state.waiter.lock().unwrap();
+                    assert!(job.state.result.set(compiled).is_ok());
                     job.state.phase.store(2, Ordering::Release);
                     job.state.completed.notify_all();
                 })
@@ -189,7 +193,8 @@ impl<K: Eq + std::hash::Hash + Clone + Send + 'static, P: Send + Sync + 'static>
         let state = Arc::new(RequestState {
             completed: Condvar::new(),
             phase: AtomicU8::new(0),
-            result: Mutex::new(None),
+            result: OnceLock::new(),
+            waiter: Mutex::new(()),
         });
         self.sender
             .as_ref()
@@ -307,6 +312,21 @@ mod deadline_tests {
         release_tx.send(()).unwrap();
         assert!(
             matches!(second.wait_until(Instant::now() + Duration::from_secs(5)), PipelineStatus::Ready(value) if *value == 8)
+        );
+    }
+
+    #[test]
+    fn completed_requests_ignore_the_waiter_lock() {
+        let ready = PipelineRequest::ready(Arc::new(7));
+        let _guard = ready.0.waiter.lock().unwrap();
+        assert!(matches!(ready.poll(), PipelineStatus::Ready(value) if *value == 7));
+        assert!(
+            matches!(ready.wait_until(Instant::now()), PipelineStatus::Ready(value) if *value == 7)
+        );
+        let failed = PipelineRequest::<u32>::completed(Err("retained failure".into()));
+        let _guard = failed.0.waiter.lock().unwrap();
+        assert!(
+            matches!(failed.poll(), PipelineStatus::Failed(error) if error == "retained failure")
         );
     }
 

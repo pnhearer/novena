@@ -52,7 +52,11 @@ novena = {{ path = {novena:?}, features = {features:?} }}
 ash = {{ version = "0.38", default-features = false, features = ["loaded"] }}
 shadowbox = {{ path = {shadowbox:?} }}
 "#,
-            features = if cache_test { vec![] } else { vec!["vulkan"] },
+            features = if cache_test {
+                vec![]
+            } else {
+                vec!["vulkan", "draw-metrics"]
+            },
             source = crate_root.join(if cache_test {
                 "tests/shadowbox/startup.rs"
             } else if test == "startup::cold_and_warm_first_draw"
