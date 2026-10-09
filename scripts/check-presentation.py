@@ -17,7 +17,10 @@ def run(command, log):
     )
     log.write("$ " + " ".join(command) + "\n" + result.stdout + "\n")
     log.flush()
-    if result.returncode or "Validation Error" in result.stdout or "VUID-" in result.stdout:
+    if result.returncode or any(message in result.stdout for message in (
+        "Validation Error", "Validation Warning", "VUID-", "SYNC-HAZARD-",
+        "Vulkan validation warning:", "Vulkan validation error:",
+    )):
         print(result.stdout, end="")
         raise RuntimeError(f"check failed with exit code {result.returncode}")
     print("Passed: " + " ".join(command))
@@ -29,18 +32,19 @@ def main():
     args = parser.parse_args()
     if args.window and not os.environ.get("DISPLAY"):
         parser.error("--window requires an X11 display")
-    (ROOT / "target").mkdir(exist_ok=True)
-    with (ROOT / "target/presentation.log").open("w") as log:
+    target = Path(os.environ.get("CARGO_TARGET_DIR", "target")).resolve()
+    target.mkdir(exist_ok=True)
+    with (target / "presentation.log").open("w") as log:
         run(["cargo", "test", "--locked", "--features", "vulkan", "--test",
              "presentation", "--", "--ignored", "--nocapture"], log)
         if args.window:
             run(["cargo", "build", "--locked", "--features", "vulkan"], log)
             run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-Iinclude",
-                 "examples/present.c", "-Ltarget/debug", "-lnovena", "-lX11",
-                 "-lvulkan", "-lm", "-Wl,-rpath,$ORIGIN/debug", "-o", "target/present"], log)
-            run(["target/present", "--frames", "120", "--resize"], log)
-            run(["target/present", "--frames", "120", "--resize", "--unpaced"], log)
-    print("Full output: target/presentation.log")
+                 "examples/present.c", f"-L{target / 'debug'}", "-lnovena", "-lX11",
+                 "-lvulkan", "-lm", "-Wl,-rpath,$ORIGIN/debug", "-o", str(target / "present")], log)
+            run([str(target / "present"), "--frames", "120", "--resize"], log)
+            run([str(target / "present"), "--frames", "120", "--resize", "--unpaced"], log)
+    print(f"Full output: {target / 'presentation.log'}")
 
 
 if __name__ == "__main__":

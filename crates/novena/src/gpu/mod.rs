@@ -27,6 +27,7 @@ mod subgroups;
 pub mod texture_transfer;
 pub mod textures;
 pub mod uniforms;
+mod validation;
 use images::{Image, Images};
 use present::Window;
 pub mod pipelines;
@@ -112,6 +113,7 @@ pub struct Context {
     pub(crate) max_push_descriptors: u32,
     command_workers: command_workers::Runtime,
     completion: Mutex<QueueCompletion>,
+    validation: Option<validation::Validation>,
 }
 
 struct QueueCompletion {
@@ -1118,9 +1120,15 @@ impl Context {
     }
 
     fn with_extensions(extensions: &[CString], swapchain: bool) -> Option<Self> {
+        let validation_mode = validation::Mode::from_env();
         // SAFETY: loading the system Vulkan loader is the boundary of this
         // optional backend; ash validates the returned function table.
-        let entry = unsafe { Entry::load().ok()? };
+        let entry = unsafe { Entry::load() };
+        let entry = if validation_mode.is_some() {
+            entry.expect("validation loader required")
+        } else {
+            entry.ok()?
+        };
         let api_version = unsafe { entry.try_enumerate_instance_version() }
             .ok()?
             .unwrap_or(vk::API_VERSION_1_0)
@@ -1134,6 +1142,21 @@ impl Context {
             .engine_name(&app)
             .api_version(api_version);
         let mut extensions = extensions.to_vec();
+        let mut validation = validation_mode.map(|_| validation::Validation::new());
+        if validation.is_some() {
+            for name in [
+                ash::ext::debug_utils::NAME,
+                ash::ext::layer_settings::NAME,
+                ash::ext::validation_features::NAME,
+            ] {
+                if !extensions
+                    .iter()
+                    .any(|existing| existing.as_c_str() == name)
+                {
+                    extensions.push(name.to_owned());
+                }
+            }
+        }
         if swapchain {
             let supported = unsafe { entry.enumerate_instance_extension_properties(None).ok()? };
             for name in [
@@ -1150,16 +1173,56 @@ impl Context {
             }
         }
         let pointers: Vec<_> = extensions.iter().map(|name| name.as_ptr()).collect();
-        let create = vk::InstanceCreateInfo::default()
+        let mut create = vk::InstanceCreateInfo::default()
             .application_info(&info)
             .enabled_extension_names(&pointers);
+        let layers = [c"VK_LAYER_KHRONOS_validation".as_ptr()];
+        let settings = validation_mode.map_or_else(Vec::new, |mode| {
+            let layers = unsafe { entry.enumerate_instance_layer_properties() }
+                .expect("Vulkan validation layer enumeration required");
+            let layer = layers
+                .iter()
+                .find(|layer| unsafe {
+                    std::ffi::CStr::from_ptr(layer.layer_name.as_ptr())
+                        == c"VK_LAYER_KHRONOS_validation"
+                })
+                .expect("Vulkan validation layer required");
+            mode.settings(layer.spec_version)
+        });
+        let mut layer_settings = vk::LayerSettingsCreateInfoEXT::default().settings(&settings);
+        let mut features = validation_mode.map(validation::Mode::features);
+        let mut debug_info = validation.as_ref().map(validation::Validation::create_info);
+        if let Some(debug_info) = debug_info.as_mut() {
+            create = create
+                .enabled_layer_names(&layers)
+                .push_next(&mut layer_settings)
+                .push_next(features.as_mut().unwrap())
+                .push_next(debug_info);
+        }
         // SAFETY: `create` points only to local, immutable Vulkan structs.
-        let instance = unsafe { entry.create_instance(&create, None).ok()? };
+        let instance = unsafe { entry.create_instance(&create, None) };
+        let instance = if validation.is_some() {
+            instance.expect("Vulkan validation instance required")
+        } else {
+            instance.ok()?
+        };
+        if let Some(validation) = validation.as_mut() {
+            validation.attach(&entry, &instance);
+        }
         // SAFETY: the instance is live and owns this enumeration.
-        let result = Self::create_device(&instance, swapchain, api_version);
+        let result = Self::create_device(
+            &instance,
+            swapchain,
+            api_version,
+            matches!(validation_mode, Some(validation::Mode::Gpu)),
+        );
         let Some((pick, device, family, shader_features, libraries, fast_linking)) = result else {
+            if let Some(validation) = validation.as_mut() {
+                validation.detach();
+            }
             // SAFETY: no device was created and the instance is owned here.
             unsafe { instance.destroy_instance(None) };
+            assert!(validation.is_none(), "Vulkan validation device required");
             return None;
         };
         // SAFETY: queue zero was requested by create_device.
@@ -1186,11 +1249,15 @@ impl Context {
         let Ok(semaphore) = semaphore else {
             unsafe {
                 device.destroy_device(None);
+                if let Some(validation) = validation.as_mut() {
+                    validation.detach();
+                }
                 instance.destroy_instance(None);
             }
             return None;
         };
         Some(Self {
+            validation,
             graphics_pipeline_libraries: libraries,
             graphics_pipeline_fast_linking: fast_linking,
             push_descriptors,
@@ -1231,6 +1298,7 @@ impl Context {
         instance: &Instance,
         swapchain: bool,
         api_version: u32,
+        gpu_validation: bool,
     ) -> Option<(vk::PhysicalDevice, Device, u32, ShaderFeatures, bool, bool)> {
         // SAFETY: instance is live for all enumeration and feature queries below.
         let mut devices = unsafe { instance.enumerate_physical_devices().ok()? };
@@ -1340,6 +1408,15 @@ impl Context {
             {
                 continue;
             }
+            if gpu_validation
+                && (core.vertex_pipeline_stores_and_atomics == vk::FALSE
+                    || core.fragment_stores_and_atomics == vk::FALSE
+                    || v12.vulkan_memory_model == vk::FALSE
+                    || v12.vulkan_memory_model_device_scope == vk::FALSE
+                    || v12.scalar_block_layout == vk::FALSE)
+            {
+                continue;
+            }
             let shader_features = ShaderFeatures {
                 subgroups: subgroups::SubgroupFeatures::new(
                     &subgroup_features,
@@ -1351,6 +1428,8 @@ impl Context {
                 shader_int16: core.shader_int16 != vk::FALSE,
             };
             let enabled = vk::PhysicalDeviceFeatures::default()
+                .vertex_pipeline_stores_and_atomics(gpu_validation)
+                .fragment_stores_and_atomics(gpu_validation)
                 .independent_blend(core.independent_blend != 0)
                 .sampler_anisotropy(core.sampler_anisotropy != 0)
                 .shader_int64(true)
@@ -1364,6 +1443,9 @@ impl Context {
             let mut enabled11 = vk::PhysicalDeviceVulkan11Features::default()
                 .storage_buffer16_bit_access(shader_features.storage_buffer16_bit_access);
             let mut enabled12 = vk::PhysicalDeviceVulkan12Features::default()
+                .vulkan_memory_model(gpu_validation)
+                .vulkan_memory_model_device_scope(gpu_validation)
+                .scalar_block_layout(gpu_validation)
                 .buffer_device_address(true)
                 .timeline_semaphore(true)
                 .storage_buffer8_bit_access(shader_features.storage_buffer8_bit_access)
@@ -1389,6 +1471,9 @@ impl Context {
             }
             if Self::supports_push(instance, pick) {
                 extensions.push(ash::khr::push_descriptor::NAME.as_ptr());
+            }
+            if has(ash::ext::depth_range_unrestricted::NAME) {
+                extensions.push(ash::ext::depth_range_unrestricted::NAME.as_ptr());
             }
             if libraries {
                 extensions.push(ash::ext::graphics_pipeline_library::NAME.as_ptr());
@@ -1441,6 +1526,9 @@ impl Drop for Context {
             let completion = self.completion.get_mut().unwrap_or_else(|p| p.into_inner());
             self.device.destroy_semaphore(completion.semaphore, None);
             self.device.destroy_device(None);
+            if let Some(validation) = self.validation.as_mut() {
+                validation.detach();
+            }
             self.instance.destroy_instance(None);
         }
     }
