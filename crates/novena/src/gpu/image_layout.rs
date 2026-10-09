@@ -1,4 +1,5 @@
-//! Explicit host interpretations of opaque texture fields. Provenance: 0031.
+//! Explicit host interpretations of opaque texture fields. Provenance: 0031; 0032.
+use super::image_enums::{validate_rules, EnumRule, Evidence};
 use crate::{
     api::TextureDescription,
     tiling::{BlockFormat, ImageKind, ImageShape, Layout, TileShape},
@@ -16,6 +17,9 @@ pub enum Storage {
 /// One complete flags/target/format tuple. No guest enum is implicit.
 #[derive(Clone, Copy)]
 pub struct ImageRule {
+    /// Flags, target and format interpretations, in that order.
+    pub evidence: [Evidence; 3],
+    pub rationale: [&'static str; 3],
     pub flags: u64,
     pub target: u64,
     pub format: u64,
@@ -27,6 +31,9 @@ pub struct ImageRule {
 #[derive(Clone, Default)]
 pub struct ImageContract {
     pub rules: Vec<ImageRule>,
+    /// Empty retains the legacy host identity choice. Nonempty requires every token.
+    pub swizzles: Vec<EnumRule<vk::ComponentSwizzle>>,
+    pub depth_stencil_modes: Vec<EnumRule<vk::ImageAspectFlags>>,
 }
 
 #[derive(Clone)]
@@ -44,12 +51,31 @@ pub(crate) struct ResolvedImage {
     pub descriptor: ImageDescriptor,
     pub packing: Layout,
     pub storage: Storage,
+    pub components: vk::ComponentMapping,
 }
 impl ImageContract {
     pub fn validate(&self) -> Result<(), String> {
+        validate_rules(&self.swizzles)?;
+        validate_rules(&self.depth_stencil_modes)?;
+        if self
+            .depth_stencil_modes
+            .iter()
+            .any(|r| !matches!(r.host.as_raw(), 2 | 4))
+        {
+            return Err("depth/stencil selection must name one aspect".into());
+        }
+        if self
+            .swizzles
+            .iter()
+            .any(|r| !(0..=6).contains(&r.host.as_raw()))
+        {
+            return Err("unsupported component swizzle".into());
+        }
         let mut keys = HashSet::new();
         for r in &self.rules {
-            if !keys.insert((r.flags, r.target, r.format)) || format_block(r.host_format).is_none()
+            if !keys.insert((r.flags, r.target, r.format))
+                || format_block(r.host_format).is_none()
+                || r.rationale.iter().any(|s| s.trim().is_empty())
             {
                 return Err("duplicate image rule or unsupported format geometry".into());
             }
@@ -66,17 +92,33 @@ impl ImageContract {
             .rules
             .iter()
             .find(|r| (r.flags, r.target, r.format) == (d.flags, d.target, d.format))?;
+        let aspects = format_aspects(r.host_format);
+        if aspects != vk::ImageAspectFlags::COLOR {
+            if self.depth_stencil_modes.is_empty() {
+                if d.depth_stencil_mode != 0 {
+                    return None;
+                }
+            } else if self
+                .depth_stencil_modes
+                .iter()
+                .find(|r| r.guest == d.depth_stencil_mode)?
+                .host
+                != aspects
+            {
+                return None;
+            }
+        }
         let width = u32::try_from(d.width).ok()?;
         let height = u32::try_from(d.height).ok()?;
         let count = u32::try_from(d.depth.max(1)).ok()?;
         let (depth, layers) = if r.kind == ImageKind::D3 {
             (count, 1)
-        } else if r.kind == ImageKind::D2 {
+        } else if matches!(r.kind, ImageKind::D1 | ImageKind::D2) {
             (1, 1)
         } else {
             (1, count)
         };
-        if r.kind == ImageKind::D2 && count != 1 {
+        if matches!(r.kind, ImageKind::D1 | ImageKind::D2) && count != 1 {
             return None;
         }
         let descriptor = ImageDescriptor {
@@ -106,7 +148,19 @@ impl ImageContract {
         {
             return None;
         }
+        let mut components = [vk::ComponentSwizzle::IDENTITY; 4];
+        if !self.swizzles.is_empty() {
+            for (component, token) in components.iter_mut().zip(d.swizzle) {
+                *component = self.swizzles.iter().find(|r| r.guest == token)?.host;
+            }
+        }
         Some(ResolvedImage {
+            components: vk::ComponentMapping {
+                r: components[0],
+                g: components[1],
+                b: components[2],
+                a: components[3],
+            },
             descriptor,
             packing,
             storage: r.storage,
@@ -118,7 +172,7 @@ impl ImageContract {
 pub fn format_block(format: vk::Format) -> Option<BlockFormat> {
     use vk::Format as F;
     let bytes = match format {
-        F::R8_UNORM | F::R8_SNORM | F::R8_UINT | F::R8_SINT | F::R8_SRGB => 1,
+        F::R8_UNORM | F::R8_SNORM | F::R8_UINT | F::R8_SINT | F::R8_SRGB | F::S8_UINT => 1,
         F::R8G8_UNORM
         | F::R8G8_SNORM
         | F::R8G8_UINT
@@ -128,7 +182,15 @@ pub fn format_block(format: vk::Format) -> Option<BlockFormat> {
         | F::R16_SNORM
         | F::R16_UINT
         | F::R16_SINT
-        | F::R16_SFLOAT => 2,
+        | F::R16_SFLOAT
+        | F::D16_UNORM
+        | F::R4G4B4A4_UNORM_PACK16
+        | F::B4G4R4A4_UNORM_PACK16
+        | F::R5G6B5_UNORM_PACK16
+        | F::B5G6R5_UNORM_PACK16
+        | F::R5G5B5A1_UNORM_PACK16
+        | F::B5G5R5A1_UNORM_PACK16
+        | F::A1R5G5B5_UNORM_PACK16 => 2,
         F::R8G8B8A8_UNORM
         | F::R8G8B8A8_SNORM
         | F::R8G8B8A8_UINT
@@ -146,7 +208,12 @@ pub fn format_block(format: vk::Format) -> Option<BlockFormat> {
         | F::R32_SFLOAT
         | F::D32_SFLOAT
         | F::A2B10G10R10_UNORM_PACK32
-        | F::A2R10G10B10_UNORM_PACK32 => 4,
+        | F::A2R10G10B10_UNORM_PACK32
+        | F::A2R10G10B10_UINT_PACK32
+        | F::A2B10G10R10_UINT_PACK32
+        | F::B10G11R11_UFLOAT_PACK32
+        | F::E5B9G9R9_UFLOAT_PACK32
+        | F::X8_D24_UNORM_PACK32 => 4,
         F::R16G16B16A16_UNORM
         | F::R16G16B16A16_SNORM
         | F::R16G16B16A16_UINT
@@ -214,6 +281,18 @@ pub fn format_block(format: vk::Format) -> Option<BlockFormat> {
     })
 }
 
+pub(crate) fn format_aspects(format: vk::Format) -> vk::ImageAspectFlags {
+    use vk::Format as F;
+    match format {
+        F::D16_UNORM | F::X8_D24_UNORM_PACK32 | F::D32_SFLOAT => vk::ImageAspectFlags::DEPTH,
+        F::S8_UINT => vk::ImageAspectFlags::STENCIL,
+        F::D16_UNORM_S8_UINT | F::D24_UNORM_S8_UINT | F::D32_SFLOAT_S8_UINT => {
+            vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL
+        }
+        _ => vk::ImageAspectFlags::COLOR,
+    }
+}
+
 /// A checked texel-space box in one image mip and array layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ImageRegion {
@@ -251,16 +330,19 @@ pub enum CopyOperation {
 pub type CopyDecoder = std::sync::Arc<dyn Fn([u64; 8]) -> Option<CopyOperation> + Send + Sync>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NumericClass {
+pub enum NumericClass {
     Float,
     Unsigned,
     Signed,
     Depth,
 }
-pub(crate) fn numeric_class(format: vk::Format) -> NumericClass {
+pub fn numeric_class(format: vk::Format) -> NumericClass {
     use vk::Format as F;
     match format {
-        F::R8_UINT
+        F::S8_UINT
+        | F::A2R10G10B10_UINT_PACK32
+        | F::A2B10G10R10_UINT_PACK32
+        | F::R8_UINT
         | F::R8G8_UINT
         | F::R8G8B8A8_UINT
         | F::R16_UINT
@@ -278,7 +360,12 @@ pub(crate) fn numeric_class(format: vk::Format) -> NumericClass {
         | F::R32_SINT
         | F::R32G32_SINT
         | F::R32G32B32A32_SINT => NumericClass::Signed,
-        F::D32_SFLOAT | F::D32_SFLOAT_S8_UINT => NumericClass::Depth,
+        F::D16_UNORM
+        | F::X8_D24_UNORM_PACK32
+        | F::D32_SFLOAT
+        | F::D16_UNORM_S8_UINT
+        | F::D24_UNORM_S8_UINT
+        | F::D32_SFLOAT_S8_UINT => NumericClass::Depth,
         _ => NumericClass::Float,
     }
 }
@@ -290,6 +377,8 @@ mod tests {
     #[test]
     fn opaque_builder_fields_need_an_exact_rule() {
         let rule = ImageRule {
+            evidence: [crate::gpu::image_enums::Evidence::Hypothesis; 3],
+            rationale: ["original synthetic fixture"; 3],
             flags: 17,
             target: 19,
             format: 23,
@@ -300,7 +389,10 @@ mod tests {
                 depth_log2: 0,
             }),
         };
-        let mut contract = ImageContract { rules: vec![rule] };
+        let mut contract = ImageContract {
+            rules: vec![rule],
+            ..Default::default()
+        };
         contract.validate().unwrap();
         let mut description = TextureDescription {
             flags: 17,

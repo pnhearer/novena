@@ -24,7 +24,7 @@ mod state_commands;
 use crate::functions::FunctionId;
 use crate::instance::{Instance, Registers, Status};
 #[cfg(feature = "vulkan")]
-pub(crate) use objects::SamplerDescription;
+pub use objects::SamplerDescription;
 pub use objects::{GpuAddress, GpuAddressError, Object, Objects, ShaderRecord, ShaderTranslation};
 
 /// A function's behaviour. Arguments arrive in `registers`; results go back

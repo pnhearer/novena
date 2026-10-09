@@ -2,7 +2,6 @@ use std::{env, fs, path::PathBuf, process::Command};
 
 pub fn run(test: &str) {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let root = crate_root.join("../..").canonicalize().unwrap();
     // The translator is a separate project: point NOVENA_SHADOWBOX_PATH at its
     // crates/shadowbox directory to run these checks; without it they skip.
     let Some(shadowbox) = env::var_os("NOVENA_SHADOWBOX_PATH").map(PathBuf::from) else {
@@ -16,11 +15,13 @@ pub fn run(test: &str) {
         );
     }
     let shadowbox = shadowbox.canonicalize().unwrap();
-    let directory = root.join("target/shadowbox-global-memory").join(test);
+    let directory = env::temp_dir()
+        .join(format!("translator-{}", std::process::id()))
+        .join(test);
     fs::create_dir_all(&directory).unwrap();
     let manifest = directory.join("Cargo.toml");
     // Keep path dependency resolution outside Novena's workspace. All dependencies
-    // belong only to this test package and all generated files stay under target.
+    // belong only to this test package. Generated files use configured scratch storage.
     fs::write(
         &manifest,
         format!(
@@ -69,7 +70,12 @@ shadowbox = {{ path = {shadowbox:?} }}
         .args(["test", "--manifest-path"])
         .arg(manifest)
         .arg("--target-dir")
-        .arg(root.join("target/shadowbox-global-memory/build"))
+        .arg(
+            PathBuf::from(
+                env::var_os("CARGO_TARGET_DIR").expect("CARGO_TARGET_DIR must be configured"),
+            )
+            .join("translator-tests"),
+        )
         .args([
             "--test",
             "global_memory",
@@ -81,5 +87,6 @@ shadowbox = {{ path = {shadowbox:?} }}
         ])
         .status()
         .expect("Cargo must run the isolated Shadowbox test");
+    fs::remove_dir_all(directory).unwrap();
     assert!(status.success(), "Shadowbox test failed: {status}");
 }

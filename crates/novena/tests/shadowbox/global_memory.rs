@@ -7,7 +7,7 @@ use novena::{
     gpu::{Context, GlobalMemory},
 };
 use shadowbox::{PUSH_GLOBAL_DELTA_OFFSET, PUSH_GLOBAL_DELTA_SIZE};
-use std::{ffi::CString, fs, path::PathBuf, process::Command, sync::Arc};
+use std::{ffi::CString, fs, process::Command, sync::Arc};
 
 const BYTES: usize = 128;
 const ALWAYS: u64 = 7 << 16;
@@ -325,9 +325,7 @@ fn synthetic_translations_match_novena_push_constants() {
 }
 
 fn validate(words: &[u32]) {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tmp")
-        .join(format!("novena-shadowbox-{}.spv", std::process::id()));
+    let path = std::env::temp_dir().join(format!("translated-{}.spv", std::process::id()));
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(
         &path,

@@ -765,13 +765,15 @@ impl State {
                     let resolved = backend.resolved_image(&d).ok_or(Status::Unimplemented)?;
                     let shape = resolved.descriptor.shape;
                     if d.pool == 0
-                        || d.swizzle != c.identity_swizzle
-                        || d.depth_stencil_mode != 0
+                        || (!backend.has_swizzle_contract() && d.swizzle != c.identity_swizzle)
                         || b.image_kind != Some(shape.kind)
                         || (shape.kind == crate::tiling::ImageKind::Cube
                             && b.arrayed != (shape.layers > 6))
-                        || crate::gpu::image_layout::numeric_class(resolved.descriptor.format)
-                            != crate::gpu::image_layout::NumericClass::Float
+                        || !matches!(
+                            crate::gpu::image_layout::numeric_class(resolved.descriptor.format),
+                            crate::gpu::image_layout::NumericClass::Float
+                                | crate::gpu::image_layout::NumericClass::Depth
+                        )
                     {
                         return Err(Status::Unimplemented);
                     }

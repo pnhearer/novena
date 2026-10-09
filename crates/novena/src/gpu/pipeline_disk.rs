@@ -232,13 +232,11 @@ mod tests {
     }
 
     fn root(name: &str) -> PathBuf {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/tmp")
-            .join(format!(
-                "disk-{name}-{}-{}",
-                std::process::id(),
-                TEMP_ID.fetch_add(1, Ordering::Relaxed)
-            ));
+        let root = std::env::temp_dir().join(format!(
+            "disk-{name}-{}-{}",
+            std::process::id(),
+            TEMP_ID.fetch_add(1, Ordering::Relaxed)
+        ));
         fs::create_dir_all(&root).unwrap();
         root
     }

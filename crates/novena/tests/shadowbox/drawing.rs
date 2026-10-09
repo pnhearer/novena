@@ -166,7 +166,7 @@ impl novena::ShaderTranslator for Translator {
         if output.requires_subgroup_size_32 {
             return Err("subgroup size 32 is not enabled".into());
         }
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tmp/draw.spv");
+        let path = std::env::temp_dir().join(format!("draw-{}.spv", std::process::id()));
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(
             &path,
@@ -502,8 +502,7 @@ fn draw_proof(indexed_draw: bool) {
         .as_ref()
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("tmp/graphics-cache-{}", std::process::id()))
+            std::env::temp_dir().join(format!("graphics-cache-{}", std::process::id()))
         });
     let identity = novena::gpu::pipelines::TranslationIdentity {
         version: "synthetic-triangle-1".into(),
@@ -1067,7 +1066,7 @@ impl novena::ShaderTranslator for SourceShaders {
 }
 
 fn compile_source(stage: &str, source: &str) -> Vec<u32> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tmp");
+    let dir = std::env::temp_dir().join(format!("draw-source-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let input = dir.join(format!("format.{stage}"));
     let output = dir.join(format!("format.{stage}.spv"));
@@ -1094,9 +1093,9 @@ fn compile_source(stage: &str, source: &str) -> Vec<u32> {
         "validate shader: {}",
         String::from_utf8_lossy(&result.stderr)
     );
-    fs::read(output)
-        .unwrap()
-        .as_chunks::<4>()
+    let bytes = fs::read(output).unwrap();
+    fs::remove_dir_all(dir).unwrap();
+    bytes.as_chunks::<4>()
         .0
         .iter()
         .map(|w| u32::from_le_bytes(*w))
@@ -2430,6 +2429,7 @@ fn texture_contract(set: u32) -> novena::gpu::textures::TextureContract {
     use ash::vk;
     use novena::gpu::{textures::TextureMapping, uniforms::UniformStage};
     novena::gpu::textures::TextureContract {
+        enums: None,
         bindings: vec![TextureMapping {
             stage: 5,
             index: 3,
@@ -2997,7 +2997,7 @@ fn multiple_target_blend_pixels() {
 #[ignore = "requires Vulkan, glslangValidator and spirv-val; never skips"]
 fn textured_uniform_banks_and_persistence() {
     use novena::gpu::uniforms::{UniformBankMapping, UniformBufferContract, UniformStage};
-    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tmp/textured-cache");
+    let cache = std::env::temp_dir().join(format!("textured-cache-{}", std::process::id()));
     if cache.exists() {
         fs::remove_dir_all(&cache).unwrap();
     }

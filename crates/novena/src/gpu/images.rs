@@ -1,5 +1,6 @@
-//! Render images and transfers to canonical arena bytes. Provenance: 0026 and 0028.
+//! Render images and transfers to canonical arena bytes. Provenance: 0026 and 0028; 0032.
 
+use super::image_layout::format_aspects;
 use super::{
     commands::Commands, find_memory_type, image_layout::ImageDescriptor,
     texture_transfer::Transfer, Context,
@@ -22,7 +23,7 @@ pub(super) struct Image {
     context: Arc<Context>,
     memory: vk::DeviceMemory,
     pub info: ImageInfo,
-    view: vk::ImageView,
+    views: HashMap<[i32; 4], vk::ImageView>,
     packing: Option<Layout>,
 }
 
@@ -77,10 +78,10 @@ impl Image {
             height: shape.height,
             depth: shape.depth,
         };
-        let ty = if shape.kind == ImageKind::D3 {
-            vk::ImageType::TYPE_3D
-        } else {
-            vk::ImageType::TYPE_2D
+        let ty = match shape.kind {
+            ImageKind::D1 | ImageKind::D1Array => vk::ImageType::TYPE_1D,
+            ImageKind::D3 => vk::ImageType::TYPE_3D,
+            _ => vk::ImageType::TYPE_2D,
         };
         let flags = if shape.kind == ImageKind::Cube {
             vk::ImageCreateFlags::CUBE_COMPATIBLE
@@ -99,10 +100,14 @@ impl Image {
         {
             return None;
         }
-        if matches!(
-            format,
-            vk::Format::D32_SFLOAT | vk::Format::D32_SFLOAT_S8_UINT
-        ) {
+        if !props
+            .optimal_tiling_features
+            .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE)
+        {
+            return None;
+        }
+        usage |= vk::ImageUsageFlags::SAMPLED;
+        if format_aspects(format) != vk::ImageAspectFlags::COLOR {
             if !props
                 .optimal_tiling_features
                 .contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
@@ -111,13 +116,6 @@ impl Image {
             }
             usage |= vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
         } else {
-            if !props
-                .optimal_tiling_features
-                .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE)
-            {
-                return None;
-            }
-            usage |= vk::ImageUsageFlags::SAMPLED;
             if props
                 .optimal_tiling_features
                 .contains(vk::FormatFeatureFlags::COLOR_ATTACHMENT)
@@ -182,7 +180,7 @@ impl Image {
         let mut result = Self {
             context: Arc::clone(context),
             memory: vk::DeviceMemory::null(),
-            view: vk::ImageView::null(),
+            views: HashMap::new(),
             packing,
             info: ImageInfo {
                 image,
@@ -220,30 +218,48 @@ impl Image {
     }
 
     pub fn view(&mut self) -> Option<vk::ImageView> {
-        if self.view == vk::ImageView::null() {
-            self.view = unsafe {
-                self.context
-                    .device
-                    .create_image_view(
-                        &vk::ImageViewCreateInfo::default()
-                            .image(self.info.image)
-                            .view_type(match self.info.shape.kind {
-                                ImageKind::D2 => vk::ImageViewType::TYPE_2D,
-                                ImageKind::D2Array => vk::ImageViewType::TYPE_2D_ARRAY,
-                                ImageKind::D3 => vk::ImageViewType::TYPE_3D,
-                                ImageKind::Cube if self.info.shape.layers == 6 => {
-                                    vk::ImageViewType::CUBE
-                                }
-                                ImageKind::Cube => vk::ImageViewType::CUBE_ARRAY,
-                            })
-                            .format(self.info.format)
-                            .subresource_range(image_range(self.info)),
-                        None,
-                    )
-                    .ok()?
-            };
+        self.view_with_components(vk::ComponentMapping::default())
+    }
+
+    pub fn view_with_components(
+        &mut self,
+        components: vk::ComponentMapping,
+    ) -> Option<vk::ImageView> {
+        let key = [
+            components.r.as_raw(),
+            components.g.as_raw(),
+            components.b.as_raw(),
+            components.a.as_raw(),
+        ];
+        if let Some(view) = self.views.get(&key) {
+            return Some(*view);
         }
-        Some(self.view)
+        let view = unsafe {
+            self.context
+                .device
+                .create_image_view(
+                    &vk::ImageViewCreateInfo::default()
+                        .image(self.info.image)
+                        .view_type(match self.info.shape.kind {
+                            ImageKind::D1 => vk::ImageViewType::TYPE_1D,
+                            ImageKind::D1Array => vk::ImageViewType::TYPE_1D_ARRAY,
+                            ImageKind::D2 => vk::ImageViewType::TYPE_2D,
+                            ImageKind::D2Array => vk::ImageViewType::TYPE_2D_ARRAY,
+                            ImageKind::D3 => vk::ImageViewType::TYPE_3D,
+                            ImageKind::Cube if self.info.shape.layers == 6 => {
+                                vk::ImageViewType::CUBE
+                            }
+                            ImageKind::Cube => vk::ImageViewType::CUBE_ARRAY,
+                        })
+                        .format(self.info.format)
+                        .components(components)
+                        .subresource_range(image_range(self.info)),
+                    None,
+                )
+                .ok()?
+        };
+        self.views.insert(key, view);
+        Some(view)
     }
 
     pub fn transition(&mut self, command: vk::CommandBuffer, layout: vk::ImageLayout) {
@@ -257,7 +273,9 @@ impl Drop for Image {
         unsafe {
             // Includes presentation copies and callers using the context directly.
             let _ = self.context.device.device_wait_idle();
-            self.context.device.destroy_image_view(self.view, None);
+            for view in self.views.values() {
+                self.context.device.destroy_image_view(*view, None);
+            }
             self.context.device.destroy_image(self.info.image, None);
             self.context.device.free_memory(self.memory, None);
         }
@@ -557,10 +575,18 @@ impl Images {
     }
 
     pub fn sampled(&mut self, key: u64) -> Option<vk::ImageView> {
+        self.sampled_with_components(key, vk::ComponentMapping::default())
+    }
+
+    pub fn sampled_with_components(
+        &mut self,
+        key: u64,
+        components: vk::ComponentMapping,
+    ) -> Option<vk::ImageView> {
         let (cmd, _) = self.commands.begin()?;
         let image = self.images.get_mut(&key)?;
         image.transition(cmd, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-        let view = image.view()?;
+        let view = image.view_with_components(components)?;
         self.commands.submit(false, None)?;
         self.commands.wait()?;
         Some(view)
@@ -999,11 +1025,7 @@ fn image_range(info: ImageInfo) -> vk::ImageSubresourceRange {
 
 pub(super) fn range(format: vk::Format) -> vk::ImageSubresourceRange {
     vk::ImageSubresourceRange::default()
-        .aspect_mask(if format == vk::Format::D32_SFLOAT_S8_UINT {
-            vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL
-        } else {
-            layers(format).aspect_mask
-        })
+        .aspect_mask(format_aspects(format))
         .level_count(1)
         .layer_count(1)
 }
@@ -1011,13 +1033,10 @@ pub(super) fn range(format: vk::Format) -> vk::ImageSubresourceRange {
 fn layers(format: vk::Format) -> vk::ImageSubresourceLayers {
     vk::ImageSubresourceLayers::default()
         .aspect_mask(
-            if matches!(
-                format,
-                vk::Format::D32_SFLOAT | vk::Format::D32_SFLOAT_S8_UINT
-            ) {
+            if format_aspects(format).contains(vk::ImageAspectFlags::DEPTH) {
                 vk::ImageAspectFlags::DEPTH
             } else {
-                vk::ImageAspectFlags::COLOR
+                format_aspects(format)
             },
         )
         .layer_count(1)

@@ -8,7 +8,15 @@ use novena::{
     },
     tiling::{ImageKind, ImageShape, Layout, TileShape},
 };
-use std::{ffi::CString, fs, path::PathBuf, process::Command};
+use std::{
+    ffi::CString,
+    fs,
+    path::PathBuf,
+    process::Command,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+static SHADER_ID: AtomicU64 = AtomicU64::new(0);
 
 fn packing(shape: ImageShape, format: vk::Format, height: u8, depth: u8) -> Layout {
     Layout::new(
@@ -55,21 +63,40 @@ fn assert_active(layout: &Layout, actual: &[u8], expected: &[u8]) {
     }
 }
 fn sample_shader(kind: ImageKind, layers: u32) -> Vec<u32> {
+    sample_shader_variant(kind, layers, 0, false)
+}
+fn sample_shader_variant(kind: ImageKind, layers: u32, class: u32, wide: bool) -> Vec<u32> {
+    compile_sample_shader(kind, layers, class, wide, &[])
+}
+fn compile_sample_shader(
+    kind: ImageKind,
+    layers: u32,
+    class: u32,
+    wide: bool,
+    extra: &[String],
+) -> Vec<u32> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let shape = match kind {
+        ImageKind::D1 => 5,
+        ImageKind::D1Array => 6,
         ImageKind::D2 => 0,
         ImageKind::D2Array => 1,
         ImageKind::D3 => 2,
         ImageKind::Cube if layers == 6 => 3,
         ImageKind::Cube => 4,
     };
-    let output = root
-        .join("../../target/tmp")
-        .join(format!("sample-{shape}-{}.spv", std::process::id()));
+    let output = std::env::temp_dir().join(format!(
+        "sample-{shape}-{class}-{wide}-{}-{}.spv",
+        std::process::id(),
+        SHADER_ID.fetch_add(1, Ordering::Relaxed)
+    ));
     fs::create_dir_all(output.parent().unwrap()).unwrap();
     let result = Command::new("glslangValidator")
         .args(["-V", "-g0", "--target-env", "vulkan1.2"])
         .arg(format!("-DSHAPE={shape}"))
+        .arg(format!("-DCLASS={class}"))
+        .arg(format!("-DWIDE={}", u32::from(wide)))
+        .args(extra)
         .arg("-o")
         .arg(&output)
         .arg(root.join("tests/shaders/sample_image.comp"))
@@ -97,7 +124,53 @@ fn sample_shader(kind: ImageKind, layers: u32) -> Vec<u32> {
         .collect()
 }
 fn sampled(backend: &mut Backend, key: u64, layout: &Layout) -> Vec<u8> {
-    let view = backend.sampled_image(key).expect("sampled view");
+    let words = sample_shader(layout.shape().kind, layout.shape().layers);
+    sampled_words(
+        backend,
+        key,
+        layout,
+        &words,
+        vk::ComponentMapping::default(),
+    )
+}
+fn sampled_words(
+    backend: &mut Backend,
+    key: u64,
+    layout: &Layout,
+    words: &[u32],
+    components: vk::ComponentMapping,
+) -> Vec<u8> {
+    sampled_state(backend, key, layout, words, components, None)
+}
+fn sampled_state(
+    backend: &mut Backend,
+    key: u64,
+    layout: &Layout,
+    words: &[u32],
+    components: vk::ComponentMapping,
+    state: Option<(
+        &novena::gpu::textures::SamplerDescription,
+        &novena::gpu::textures::TextureContract,
+    )>,
+) -> Vec<u8> {
+    let view = backend
+        .sampled_image_with_components(key, components)
+        .expect("sampled view");
+    let contract = novena::gpu::textures::TextureContract {
+        filters: vec![(0, vk::Filter::NEAREST)],
+        wraps: vec![(0, vk::SamplerAddressMode::CLAMP_TO_EDGE)],
+        lod: Some(vk::SamplerMipmapMode::NEAREST),
+        ..Default::default()
+    };
+    let default_description = novena::gpu::textures::SamplerDescription {
+        max_anisotropy: 1.0,
+        lod_clamp: [0.0, 32.0],
+        ..Default::default()
+    };
+    let (description, selected_contract) = state.unwrap_or((&default_description, &contract));
+    let sampler = backend
+        .mapped_sampler(0, 0, description, selected_contract)
+        .expect("mapped sampler");
     let context = backend.context();
     let device = &context.device;
     let mut output =
@@ -106,22 +179,8 @@ fn sampled(backend: &mut Backend, key: u64, layout: &Layout) -> Vec<u8> {
         .allocate_pool(1, 0x1000, layout.linear_size() as u64)
         .unwrap();
     let address = output.addresses().host(guest).unwrap();
-    let words = sample_shader(layout.shape().kind, layout.shape().layers);
     // All handles belong to this context and survive until the queue completes.
     unsafe {
-        let sampler = device
-            .create_sampler(
-                &vk::SamplerCreateInfo::default()
-                    .mag_filter(vk::Filter::NEAREST)
-                    .min_filter(vk::Filter::NEAREST)
-                    .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
-                    .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                    .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                    .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                    .max_lod(32.0),
-                None,
-            )
-            .unwrap();
         let bindings = [vk::DescriptorSetLayoutBinding::default()
             .binding(0)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
@@ -176,7 +235,7 @@ fn sampled(backend: &mut Backend, key: u64, layout: &Layout) -> Vec<u8> {
                 .image_info(&images)],
             &[],
         );
-        let module = context.create_global_shader_module(&words).unwrap();
+        let module = context.create_global_shader_module(words).unwrap();
         let entry = CString::new("main").unwrap();
         let pipeline = device
             .create_compute_pipelines(
@@ -283,7 +342,6 @@ fn sampled(backend: &mut Backend, key: u64, layout: &Layout) -> Vec<u8> {
         device.destroy_descriptor_pool(descriptors, None);
         device.destroy_pipeline_layout(pipeline_layout, None);
         device.destroy_descriptor_set_layout(set_layout, None);
-        device.destroy_sampler(sampler, None);
     }
     let mut bytes = vec![0; layout.linear_size()];
     output.read_pool(1, 0, &mut bytes).unwrap();
@@ -296,6 +354,20 @@ fn tiled_mips_sample_exactly_and_preserve_padding() {
     let mut backend = Backend::new(1.0).expect("required GPU");
     backend.global_memory = Some(GlobalMemory::new(backend.context(), 8 * 1024 * 1024).unwrap());
     let mut cases = Vec::new();
+    for (kind, layers) in [(ImageKind::D1, 1), (ImageKind::D1Array, 3)] {
+        cases.push((
+            ImageShape {
+                width: 37,
+                height: 1,
+                depth: 1,
+                layers,
+                levels: 6,
+                kind,
+            },
+            0,
+            0,
+        ));
+    }
     for h in [0, 1, 3, 5] {
         cases.push((
             ImageShape {
@@ -678,7 +750,11 @@ fn recorded_tiled_copies_and_blits_update_arena_bytes() {
     };
     instance
         .set_image_contract(ImageContract {
+            swizzles: Vec::new(),
+            depth_stencil_modes: Vec::new(),
             rules: vec![ImageRule {
+                evidence: [novena::gpu::image_enums::Evidence::Hypothesis; 3],
+                rationale: ["original synthetic fixture"; 3],
                 flags: 0x400,
                 target: 0x500,
                 format: 0x600,
@@ -933,4 +1009,520 @@ fn batched_transfers_replay_with_changed_bytes_and_preserve_guards() {
     }
     assert!(!backend.load_tiled_batch(&[]));
     assert!(!backend.load_tiled_batch(&[(100, 1, 4 * 1024 * 1024, &layouts[0])]));
+}
+
+fn catalogue_red_texel(format: vk::Format) -> Option<(Vec<u8>, [u32; 4])> {
+    use novena::gpu::image_layout::{numeric_class, NumericClass};
+    let raw = format.as_raw();
+    let float = matches!(
+        numeric_class(format),
+        NumericClass::Float | NumericClass::Depth
+    );
+    let one = if float { 1.0_f32.to_bits() } else { 1 };
+    let mut expected = [one, 0, 0, one];
+    let packed: Option<(u32, usize)> = match raw {
+        2 => Some((0xf000, 2)),
+        3 => Some((0x00f0, 2)),
+        4 => Some((0xf800, 2)),
+        5 => Some((0x001f, 2)),
+        6 => Some((0xf800, 2)),
+        7 => Some((0x003e, 2)),
+        8 => Some((0x7c00, 2)),
+        58 => Some((0x3ff << 20, 4)),
+        64 => Some((0x3ff, 4)),
+        62 => Some((1 << 20, 4)),
+        68 => Some((1, 4)),
+        122 => Some((15 << 6, 4)),
+        123 => Some(((16 << 27) | 256, 4)),
+        _ => None,
+    };
+    if let Some((value, bytes)) = packed {
+        if !matches!(raw, 4 | 5 | 122 | 123) {
+            expected[3] = 0;
+        }
+        return Some((value.to_le_bytes()[..bytes].to_vec(), expected));
+    }
+    let (components, bits, bgra) = match raw {
+        9..=15 | 127 => (1, 8, false),
+        16..=22 => (2, 8, false),
+        37..=43 => (4, 8, false),
+        44..=50 => (4, 8, true),
+        70..=76 | 124 => (1, 16, false),
+        77..=83 => (2, 16, false),
+        91..=97 => (4, 16, false),
+        98..=100 | 126 => (1, 32, false),
+        101..=103 => (2, 32, false),
+        107..=109 => (4, 32, false),
+        _ => return None,
+    };
+    let sf = matches!(raw, 76 | 83 | 97 | 100 | 103 | 109 | 126);
+    let sn = matches!(raw, 10 | 17 | 38 | 71 | 78 | 92);
+    let value = if sf {
+        if bits == 16 {
+            0x3c00
+        } else {
+            1.0_f32.to_bits()
+        }
+    } else if numeric_class(format) == NumericClass::Signed {
+        expected[0] = u32::MAX;
+        u32::MAX
+    } else if !float {
+        1
+    } else if sn {
+        (1_u32 << (bits - 1)) - 1
+    } else {
+        (1_u32 << bits) - 1
+    };
+    let mut texel = vec![0; components * bits / 8];
+    let at = if bgra { 2 * bits / 8 } else { 0 };
+    texel[at..at + bits / 8].copy_from_slice(&value.to_le_bytes()[..bits / 8]);
+    if components == 4 {
+        expected[3] = 0;
+    }
+    Some((texel, expected))
+}
+
+#[test]
+#[ignore = "requires a Vulkan device and shader tools; unavailable host formats are reported"]
+fn host_format_catalogue_samples_and_reads_back_exact_values() {
+    use novena::gpu::{
+        image_enums::transfer_formats,
+        image_layout::{numeric_class, NumericClass},
+    };
+    let mut backend = Backend::new(1.0).expect("required GPU");
+    let shape = ImageShape {
+        width: 4,
+        height: 4,
+        depth: 1,
+        layers: 1,
+        levels: 1,
+        kind: ImageKind::D2,
+    };
+    let output_layout = packing(shape, vk::Format::R32G32B32A32_UINT, 0, 0);
+    let shaders = [
+        sample_shader_variant(ImageKind::D2, 1, 0, true),
+        sample_shader_variant(ImageKind::D2, 1, 1, true),
+        sample_shader_variant(ImageKind::D2, 1, 2, true),
+    ];
+    let mut tested = 0;
+    let mut unavailable = 0;
+    for format in transfer_formats() {
+        let properties = unsafe {
+            backend
+                .context()
+                .instance
+                .get_physical_device_format_properties(backend.context().physical_device, format)
+        };
+        if !properties.optimal_tiling_features.contains(
+            vk::FormatFeatureFlags::SAMPLED_IMAGE
+                | vk::FormatFeatureFlags::TRANSFER_SRC
+                | vk::FormatFeatureFlags::TRANSFER_DST,
+        ) {
+            eprintln!("host format {} unavailable", format.as_raw());
+            unavailable += 1;
+            continue;
+        }
+        let key = format.as_raw() as u64 + 10000;
+        let layout = packing(shape, format, 0, 0);
+        let mut payload = vec![0; layout.linear_size()];
+        if format == vk::Format::BC7_UNORM_BLOCK || format == vk::Format::BC7_SRGB_BLOCK {
+            payload[0] = 0x40;
+        }
+        if format.as_raw() >= vk::Format::ASTC_4X4_UNORM_BLOCK.as_raw() {
+            for block in payload.as_chunks_mut::<16>().0 {
+                block[..8].copy_from_slice(&[0xfc, 0xfd, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+            }
+        }
+        assert!(
+            backend.ensure_image(key, &ImageDescriptor { shape, format }),
+            "create format {}",
+            format.as_raw()
+        );
+        assert!(
+            backend.upload_image(key, &payload),
+            "upload format {}",
+            format.as_raw()
+        );
+        let (_, _, readback) = backend.readback(key).unwrap();
+        assert_active(&layout, &readback, &payload);
+        let class = match numeric_class(format) {
+            NumericClass::Unsigned => 0,
+            NumericClass::Signed => 2,
+            NumericClass::Float | NumericClass::Depth => 1,
+        };
+        let one = if class == 1 { 1.0_f32.to_bits() } else { 1 };
+        let alpha_zero = matches!(format.as_raw(), 2 | 3 | 6 | 7 | 8 | 37..=43 | 44..=50 | 58..=69 | 91..=97 | 107..=109 | 135..=138 | 145..=146 | 157..=184);
+        let expected = [0, 0, 0, if alpha_zero { 0 } else { one }];
+        for component in [
+            vk::ComponentSwizzle::IDENTITY,
+            vk::ComponentSwizzle::ZERO,
+            vk::ComponentSwizzle::ONE,
+            vk::ComponentSwizzle::R,
+            vk::ComponentSwizzle::G,
+            vk::ComponentSwizzle::B,
+            vk::ComponentSwizzle::A,
+        ] {
+            let components = vk::ComponentMapping {
+                r: component,
+                g: component,
+                b: component,
+                a: component,
+            };
+            let bytes = sampled_words(
+                &mut backend,
+                key,
+                &output_layout,
+                &shaders[class],
+                components,
+            );
+            let selected = match component.as_raw() {
+                0 => expected,
+                1 => [0; 4],
+                2 => [one; 4],
+                c => [expected[(c - 3) as usize]; 4],
+            };
+            let pixel: Vec<_> = selected.iter().flat_map(|v| v.to_ne_bytes()).collect();
+            for actual in bytes.as_chunks::<16>().0 {
+                assert_eq!(
+                    actual.as_slice(),
+                    pixel,
+                    "sample format {} component {}",
+                    format.as_raw(),
+                    component.as_raw()
+                );
+            }
+        }
+        if let Some((texel, expected)) = catalogue_red_texel(format) {
+            let mut red = vec![0; layout.linear_size()];
+            for pixel in red[..layout.levels()[0].row_bytes * shape.height as usize]
+                .chunks_exact_mut(texel.len())
+            {
+                pixel.copy_from_slice(&texel);
+            }
+            assert!(backend.upload_image(key, &red));
+            assert_active(&layout, &backend.readback(key).unwrap().2, &red);
+            let actual = sampled_words(
+                &mut backend,
+                key,
+                &output_layout,
+                &shaders[class],
+                vk::ComponentMapping::default(),
+            );
+            let pixel: Vec<_> = expected.iter().flat_map(|v| v.to_ne_bytes()).collect();
+            for value in actual.as_chunks::<16>().0 {
+                assert_eq!(
+                    value.as_slice(),
+                    pixel,
+                    "nonzero sample format {}",
+                    format.as_raw()
+                );
+            }
+        }
+        backend.release_texture(key);
+        tested += 1;
+    }
+    eprintln!("host format catalogue: {tested} exact sampling/readback cases, {unavailable} unavailable formats");
+    assert!(tested > 60, "catalogue must exercise the native device");
+}
+
+#[test]
+#[ignore = "requires a Vulkan device and shader tools"]
+fn component_selection_distinguishes_every_source_channel() {
+    let mut backend = Backend::new(1.0).expect("required GPU");
+    let shape = ImageShape {
+        width: 1,
+        height: 1,
+        depth: 1,
+        layers: 1,
+        levels: 1,
+        kind: ImageKind::D2,
+    };
+    let format = vk::Format::R8G8B8A8_UINT;
+    assert!(backend.ensure_image(1, &ImageDescriptor { shape, format }));
+    let mut payload = vec![0; packing(shape, format, 0, 0).linear_size()];
+    payload[..4].copy_from_slice(&[9, 31, 77, 113]);
+    assert!(backend.upload_image(1, &payload));
+    let output = packing(shape, vk::Format::R32G32B32A32_UINT, 0, 0);
+    let words = sample_shader_variant(ImageKind::D2, 1, 0, true);
+    for (raw, expected) in [(1, 0_u32), (2, 1), (3, 9), (4, 31), (5, 77), (6, 113)] {
+        let c = vk::ComponentSwizzle::from_raw(raw);
+        let bytes = sampled_words(
+            &mut backend,
+            1,
+            &output,
+            &words,
+            vk::ComponentMapping {
+                r: c,
+                g: c,
+                b: c,
+                a: c,
+            },
+        );
+        assert_eq!(&bytes[..16], expected.to_ne_bytes().repeat(4));
+    }
+}
+
+#[test]
+#[ignore = "requires a Vulkan device and shader tools"]
+fn sampler_filters_wraps_borders_and_comparison_sample_exactly() {
+    use novena::gpu::{
+        image_enums::{EnumRule, Evidence},
+        textures::{MinFilter, SamplerDescription, SamplerEnums, TextureContract},
+    };
+    fn rule<T>(guest: u64, host: T) -> EnumRule<T> {
+        EnumRule {
+            guest,
+            host,
+            evidence: Evidence::Hypothesis,
+            rationale: "original sampler fixture",
+        }
+    }
+    let mut backend = Backend::new(1.0).expect("required GPU");
+    let shape = ImageShape {
+        width: 2,
+        height: 1,
+        depth: 1,
+        layers: 1,
+        levels: 1,
+        kind: ImageKind::D2,
+    };
+    let format = vk::Format::R32_SFLOAT;
+    assert!(backend.ensure_image(1, &ImageDescriptor { shape, format }));
+    let mut pixels = vec![0; packing(shape, format, 0, 0).linear_size()];
+    pixels[4..8].copy_from_slice(&1.0_f32.to_le_bytes());
+    assert!(backend.upload_image(1, &pixels));
+    let output_shape = ImageShape { width: 1, ..shape };
+    let output = packing(output_shape, vk::Format::R32G32B32A32_UINT, 0, 0);
+    let contract = TextureContract {
+        enums: Some(SamplerEnums {
+            min_filters: vec![
+                rule(
+                    11,
+                    MinFilter {
+                        texel: vk::Filter::NEAREST,
+                        mip: vk::SamplerMipmapMode::NEAREST,
+                    },
+                ),
+                rule(
+                    12,
+                    MinFilter {
+                        texel: vk::Filter::LINEAR,
+                        mip: vk::SamplerMipmapMode::LINEAR,
+                    },
+                ),
+            ],
+            mag_filters: vec![rule(11, vk::Filter::NEAREST), rule(12, vk::Filter::LINEAR)],
+            wraps: vec![
+                rule(20, vk::SamplerAddressMode::REPEAT),
+                rule(21, vk::SamplerAddressMode::MIRRORED_REPEAT),
+                rule(22, vk::SamplerAddressMode::CLAMP_TO_EDGE),
+                rule(23, vk::SamplerAddressMode::CLAMP_TO_BORDER),
+            ],
+            compare_modes: vec![rule(30, false), rule(31, true)],
+            compare_functions: (0..8)
+                .map(|i| rule(i as u64 + 32, vk::CompareOp::from_raw(i)))
+                .collect(),
+            anisotropy: true,
+            integer_border: false,
+        }),
+        lod: Some(vk::SamplerMipmapMode::NEAREST),
+        ..Default::default()
+    };
+    let mut state = SamplerDescription {
+        min_filter: 11,
+        mag_filter: 11,
+        wrap: [22; 3],
+        max_anisotropy: 1.0,
+        compare_mode: 30,
+        ..Default::default()
+    };
+    for (filter, wrap, border, coordinate, expected) in [
+        (11, 22, [0.0; 4], 0.5, 1.0_f32),
+        (12, 22, [0.0; 4], 0.5, 0.5),
+        (11, 20, [0.0; 4], 1.25, 0.0),
+        (11, 21, [0.0; 4], 1.25, 1.0),
+        (11, 22, [0.0; 4], -0.25, 0.0),
+        (11, 23, [1.0; 4], -0.25, 1.0),
+        (11, 23, [0.0, 0.0, 0.0, 1.0], -0.25, 0.0),
+    ] {
+        state.min_filter = filter;
+        state.mag_filter = filter;
+        state.wrap = [wrap; 3];
+        state.border_color = border;
+        let words = compile_sample_shader(
+            ImageKind::D2,
+            1,
+            1,
+            true,
+            &[
+                "-DPROBE=1".into(),
+                format!("-DPROBE_U={coordinate:.8}"),
+                "-DPROBE_V=0.5".into(),
+                "-DPROBE_LOD=0.0".into(),
+            ],
+        );
+        let bytes = sampled_state(
+            &mut backend,
+            1,
+            &output,
+            &words,
+            vk::ComponentMapping::default(),
+            Some((&state, &contract)),
+        );
+        assert_eq!(
+            u32::from_ne_bytes(bytes[..4].try_into().unwrap()),
+            expected.to_bits()
+        );
+    }
+    let depth_format = vk::Format::D32_SFLOAT;
+    assert!(backend.ensure_image(
+        2,
+        &ImageDescriptor {
+            shape: output_shape,
+            format: depth_format
+        }
+    ));
+    let mut depth = vec![0; packing(output_shape, depth_format, 0, 0).linear_size()];
+    depth[..4].copy_from_slice(&0.5_f32.to_le_bytes());
+    assert!(backend.upload_image(2, &depth));
+    state.min_filter = 11;
+    state.mag_filter = 11;
+    state.wrap = [22; 3];
+    state.border_color = [0.0; 4];
+    state.compare_mode = 31;
+    state.compare_func = 33;
+    for (reference, expected) in [(0.25, 1.0_f32), (0.75, 0.0)] {
+        let words = compile_sample_shader(
+            ImageKind::D2,
+            1,
+            1,
+            true,
+            &[
+                "-DPROBE=1".into(),
+                "-DPROBE_COMPARE=1".into(),
+                "-DPROBE_U=0.5".into(),
+                "-DPROBE_V=0.5".into(),
+                "-DPROBE_LOD=0.0".into(),
+                format!("-DPROBE_REF={reference:.8}"),
+            ],
+        );
+        let bytes = sampled_state(
+            &mut backend,
+            2,
+            &output,
+            &words,
+            vk::ComponentMapping::default(),
+            Some((&state, &contract)),
+        );
+        assert_eq!(
+            u32::from_ne_bytes(bytes[..4].try_into().unwrap()),
+            expected.to_bits()
+        );
+    }
+    for (raw, expected) in [
+        (0, 0.0_f32),
+        (1, 1.0),
+        (2, 0.0),
+        (3, 1.0),
+        (4, 0.0),
+        (5, 1.0),
+        (6, 0.0),
+        (7, 1.0),
+    ] {
+        state.compare_func = raw + 32;
+        let words = compile_sample_shader(
+            ImageKind::D2,
+            1,
+            1,
+            true,
+            &[
+                "-DPROBE=1".into(),
+                "-DPROBE_COMPARE=1".into(),
+                "-DPROBE_U=0.5".into(),
+                "-DPROBE_V=0.5".into(),
+                "-DPROBE_LOD=0.0".into(),
+                "-DPROBE_REF=0.25".into(),
+            ],
+        );
+        let bytes = sampled_state(
+            &mut backend,
+            2,
+            &output,
+            &words,
+            vk::ComponentMapping::default(),
+            Some((&state, &contract)),
+        );
+        assert_eq!(
+            u32::from_ne_bytes(bytes[..4].try_into().unwrap()),
+            expected.to_bits()
+        );
+    }
+    state.compare_mode = 30;
+    let mip_shape = ImageShape { levels: 2, ..shape };
+    let mip_layout = packing(mip_shape, format, 0, 0);
+    let mut mip_bytes = vec![0; mip_layout.linear_size()];
+    let at = mip_layout.levels()[1].linear_offset;
+    mip_bytes[at..at + 4].copy_from_slice(&1.0_f32.to_le_bytes());
+    assert!(backend.ensure_image(
+        3,
+        &ImageDescriptor {
+            shape: mip_shape,
+            format
+        }
+    ));
+    assert!(backend.upload_image(3, &mip_bytes));
+    state.lod_clamp = [0.0, 1.0];
+    state.min_filter = 12;
+    state.mag_filter = 12;
+    let words = compile_sample_shader(
+        ImageKind::D2,
+        1,
+        1,
+        true,
+        &[
+            "-DPROBE=1".into(),
+            "-DPROBE_U=0.5".into(),
+            "-DPROBE_V=0.5".into(),
+            "-DPROBE_LOD=0.5".into(),
+        ],
+    );
+    let bytes = sampled_state(
+        &mut backend,
+        3,
+        &output,
+        &words,
+        vk::ComponentMapping::default(),
+        Some((&state, &contract)),
+    );
+    assert_eq!(
+        u32::from_ne_bytes(bytes[..4].try_into().unwrap()),
+        0.5_f32.to_bits()
+    );
+    let limits = unsafe {
+        backend
+            .context()
+            .instance
+            .get_physical_device_properties(backend.context().physical_device)
+    }
+    .limits;
+    let features = unsafe {
+        backend
+            .context()
+            .instance
+            .get_physical_device_features(backend.context().physical_device)
+    };
+    for value in [1.0, 4.0, 8.0] {
+        state.max_anisotropy = value;
+        let expected = value <= limits.max_sampler_anisotropy
+            && (value == 1.0 || features.sampler_anisotropy != vk::FALSE);
+        assert_eq!(
+            backend.mapped_sampler(0, 1, &state, &contract).is_some(),
+            expected
+        );
+    }
+    state.max_anisotropy = f32::INFINITY;
+    assert!(backend.mapped_sampler(0, 1, &state, &contract).is_none());
+    state.max_anisotropy = 1.0;
+    state.min_filter = 99;
+    assert!(backend.mapped_sampler(0, 1, &state, &contract).is_none());
 }
