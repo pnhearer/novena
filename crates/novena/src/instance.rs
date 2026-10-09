@@ -14,18 +14,26 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+/// Host shader-stage identifier; registration uses the unknown stage until established.
 pub type ShaderStage = u32;
+/// Stage token used when observed shader records do not establish a stage.
 pub const SHADER_STAGE_UNKNOWN: ShaderStage = 0;
 
 #[derive(Clone, Copy)]
 pub(crate) struct PendingShader {
+    /// Registration index whose deferred shader bytes must be retried.
     pub record_index: usize,
+    /// Resolved program-memory shader address.
     pub address: u64,
+    /// Maximum readable shader bytes for the pending registration.
     pub limit: usize,
+    /// Number of failed deferred byte reads.
     pub failures: u8,
 }
 
+/// Thread-safe host hook for translating bounded shader bytes into SPIR-V.
 pub trait ShaderTranslator: Send + Sync {
+    /// Translate supplied shader bytes into SPIR-V words or a diagnostic.
     fn translate(&self, stage: ShaderStage, code: &[u8]) -> Result<Vec<u32>, String>;
 
     /// Return the exact runtime identity from the translator's public cache API.
@@ -74,12 +82,15 @@ pub trait ShaderTranslator: Send + Sync {
 pub struct Host {
     /// Passed back as the first argument of every callback.
     pub user: *mut c_void,
+    /// Copy a program-memory range into out; return zero on success, nonzero on failure.
     pub read_memory: Option<
         unsafe extern "C" fn(user: *mut c_void, address: u64, out: *mut u8, size: u64) -> i32,
     >,
+    /// Copy data into a program-memory range; return zero on success, nonzero on failure.
     pub write_memory: Option<
         unsafe extern "C" fn(user: *mut c_void, address: u64, data: *const u8, size: u64) -> i32,
     >,
+    /// Receive borrowed RGBA frame bytes; copy them before returning to retain the frame.
     pub present: Option<
         unsafe extern "C" fn(
             user: *mut c_void,
@@ -103,14 +114,19 @@ pub struct Host {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct HostVulkan {
+    /// Number of NUL-terminated names in extensions; native setup accepts one through 64.
     pub extension_count: u32,
+    /// Borrowed array of Vulkan instance extension names, including the surface extension.
     pub extensions: *const *const c_char,
+    /// Return a surface for the supplied instance and native handle; zero means failure.
+    /// The library owns and destroys the returned surface.
     pub create_surface: unsafe extern "C" fn(
         user: *mut c_void,
         instance: u64,
         window_object: u64,
         native_window: u64,
     ) -> u64,
+    /// Write the current drawable width and height; zero suspends presentation.
     pub drawable_size: unsafe extern "C" fn(
         user: *mut c_void,
         window_object: u64,
@@ -135,8 +151,11 @@ unsafe impl Sync for Host {}
 #[repr(C)]
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Registers {
+    /// Eight integer argument registers; the first two also carry results.
     pub x: [u64; 8],
+    /// Low 64 bits of eight floating-point argument registers; the first also carries a result.
     pub d: [u64; 8],
+    /// Program stack pointer for arguments beyond the register set.
     pub sp: u64,
 }
 
@@ -163,6 +182,7 @@ thread_local! {
     static PENDING: Cell<Option<(u32, CallSnapshot, Registers)>> = const { Cell::new(None) };
 }
 
+/// Host connection, object records, observation counters, and optional execution services.
 pub struct Instance {
     host: Option<Host>,
     /// novena's record of the program's objects.
@@ -323,6 +343,7 @@ impl Instance {
         true
     }
 
+    /// Return startup cache counters, or None if no startup cache is configured.
     pub fn startup_cache_stats(&self) -> Option<crate::startup_cache::StartupCacheStats> {
         self.startup_cache
             .lock()
@@ -331,6 +352,7 @@ impl Instance {
             .map(|c| c.stats())
     }
 
+    /// Drain accumulated startup cache diagnostics; return empty when unconfigured.
     pub fn take_startup_cache_diagnostics(&self) -> Vec<String> {
         self.startup_cache
             .lock()
@@ -470,6 +492,7 @@ impl Instance {
         Ok(())
     }
 
+    /// Return graphics request hit/miss counters, or None without a Vulkan backend.
     #[cfg(feature = "vulkan")]
     pub fn graphics_cache_stats(&self) -> Option<crate::gpu::pipelines::CacheStats> {
         self.gpu
@@ -511,6 +534,7 @@ impl Instance {
             .map(|backend| backend.graphics.pending())
     }
 
+    /// Return graphics disk-cache counters, or None without a Vulkan backend.
     #[cfg(feature = "vulkan")]
     pub fn graphics_persistence_stats(&self) -> Option<crate::gpu::pipelines::PersistenceStats> {
         self.gpu
@@ -551,6 +575,7 @@ impl Instance {
         )
     }
 
+    /// Replace the ordinary translation hook; configure startup caching exclusively instead.
     pub fn set_shader_translator(&self, translator: Option<Arc<dyn ShaderTranslator>>) {
         *self
             .shader_translator
@@ -558,6 +583,7 @@ impl Instance {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = translator;
     }
 
+    /// Return a shared copy of the current translation hook, if one is installed.
     pub fn shader_translator(&self) -> Option<Arc<dyn ShaderTranslator>> {
         self.shader_translator
             .lock()
@@ -565,6 +591,7 @@ impl Instance {
             .clone()
     }
 
+    /// Enable or disable translation during future shader registration.
     pub fn set_shader_translation_enabled(&self, enabled: bool) {
         self.shader_translation_enabled
             .store(enabled, Ordering::Relaxed);
@@ -841,6 +868,7 @@ impl Instance {
         out
     }
 
+    /// Return this instance's call count for the function id; unknown ids report zero.
     pub fn call_count(&self, function: FunctionId) -> u64 {
         self.calls
             .get(function.0 as usize)
@@ -996,6 +1024,7 @@ mod tests {
     struct FakeTranslator;
 
     impl ShaderTranslator for FakeTranslator {
+        /// Translate supplied shader bytes into SPIR-V words or a diagnostic.
         fn translate(&self, stage: ShaderStage, code: &[u8]) -> Result<Vec<u32>, String> {
             Ok(vec![stage, code.len() as u32])
         }

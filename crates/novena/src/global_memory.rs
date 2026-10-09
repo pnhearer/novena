@@ -3,19 +3,28 @@
 #[cfg(any(test, feature = "vulkan"))]
 use std::collections::BTreeMap;
 
+/// Base of the flat guest GPU address range. Provenance: 0022.
 pub const GUEST_BASE: u64 = 0x1_0000;
+/// Default flat arena size in bytes, equal to 1 GiB. Provenance: 0022.
 pub const ARENA_SIZE: u64 = 1024 * 1024 * 1024;
+/// Byte offset of the global address delta in push constants.
 pub const PUSH_GLOBAL_DELTA_OFFSET: u32 = 0;
+/// Size in bytes of the 64-bit global address delta.
 pub const PUSH_GLOBAL_DELTA_SIZE: u32 = 8;
 
+/// Checked mapping between one guest range and a host device-address range.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AddressMap {
+    /// Base guest GPU address.
     pub guest_base: u64,
+    /// Base host buffer device address.
     pub host_base: u64,
+    /// Length of the storage range in bytes.
     pub size: u64,
 }
 
 impl AddressMap {
+    /// Construct a mapping; reject zero bases, non-16-byte-aligned bases, empty or overflowing ranges.
     pub fn new(guest_base: u64, host_base: u64, size: u64) -> Option<Self> {
         if size == 0
             || guest_base == 0
@@ -34,24 +43,31 @@ impl AddressMap {
         })
     }
 
+    /// Wrapping host-minus-guest delta used by translated global-memory access.
     pub fn delta(self) -> u64 {
         self.host_base.wrapping_sub(self.guest_base)
     }
 
+    /// Return the guest address at a byte offset, or None outside the range.
     pub fn guest(self, offset: u64) -> Option<u64> {
         (offset < self.size).then(|| self.guest_base + offset)
     }
 
+    /// Resolve a guest address to a host device address, or None outside the range.
     pub fn host(self, guest: u64) -> Option<u64> {
         let offset = guest.checked_sub(self.guest_base)?;
         (offset < self.size).then(|| guest.wrapping_add(self.delta()))
     }
 }
 
+/// Allocated arena range and its original program storage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PoolAllocation {
+    /// Byte offset from the arena base.
     pub offset: u64,
+    /// Length of the storage range in bytes.
     pub size: u64,
+    /// Base address of host-managed program storage.
     pub storage: u64,
     block: u64,
 }
@@ -62,11 +78,13 @@ pub struct PoolAllocation {
 pub(crate) struct Allocator {
     free: BTreeMap<u64, u64>,
     blocks: BTreeMap<u64, u64>,
+    /// Current pool allocations keyed by program object address.
     pub pools: BTreeMap<u64, PoolAllocation>,
 }
 
 #[cfg(any(test, feature = "vulkan"))]
 impl Allocator {
+    /// Start with one free arena range of size bytes.
     pub fn new(size: u64) -> Self {
         Self {
             free: BTreeMap::from([(0, size)]),
@@ -75,6 +93,7 @@ impl Allocator {
         }
     }
 
+    /// Allocate or alias a checked 16-byte-aligned range; reject duplicates and partial overlaps.
     pub fn allocate(&mut self, key: u64, storage: u64, size: u64) -> Option<PoolAllocation> {
         if size == 0 || self.pools.contains_key(&key) {
             return None;
@@ -123,6 +142,7 @@ impl Allocator {
         Some(pool)
     }
 
+    /// Release the keyed pool and free its backing block after its last alias.
     pub fn release(&mut self, key: u64) -> bool {
         let Some(pool) = self.pools.remove(&key) else {
             return false;

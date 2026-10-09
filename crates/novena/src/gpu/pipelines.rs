@@ -16,9 +16,13 @@ pub use super::pipeline_disk::TranslationIdentity;
 /// One resource declaration in the translated SPIR-V, including descriptor arrays.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct DescriptorBinding {
+    /// Descriptor set number in the translated module.
     pub set: u32,
+    /// Descriptor binding number in the module.
     pub binding: u32,
+    /// Public Vulkan descriptor type reflected from SPIR-V.
     pub descriptor_type: vk::DescriptorType,
+    /// Number of descriptors in the reflected binding.
     pub count: u32,
 }
 
@@ -235,7 +239,9 @@ pub struct ComputePipelines {
 /// It does not report whether the driver avoided compilation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PersistenceStats {
+    /// Whether a matching persisted Vulkan driver cache loaded successfully.
     pub driver_cache_loaded: bool,
+    /// Translations reused from persisted output.
     pub translation_hits: u64,
 }
 
@@ -435,6 +441,7 @@ impl Drop for DriverCache {
 }
 
 impl ComputePipelines {
+    /// Create an in-memory cache or worker service; report setup failure as an error.
     pub fn new(
         context: &Arc<Context>,
         translator: Arc<dyn ShaderTranslator>,
@@ -486,10 +493,12 @@ impl ComputePipelines {
         Ok(pipeline)
     }
 
+    /// Return cumulative in-memory cache hit and miss counts.
     pub fn stats(&self) -> CacheStats {
         self.stats
     }
 
+    /// Return cumulative disk-cache loading and reuse counters.
     pub fn persistence_stats(&self) -> PersistenceStats {
         self.compiler.driver.persistence_stats()
     }
@@ -509,6 +518,7 @@ pub struct AsyncComputePipelines {
     pool: AsyncPipelines<Vec<u8>, ComputePipeline>,
 }
 impl AsyncComputePipelines {
+    /// Create an in-memory cache or worker service; report setup failure as an error.
     pub fn new(
         cache: ComputePipelines,
         worker_count: usize,
@@ -525,15 +535,19 @@ impl AsyncComputePipelines {
         )?;
         Ok(Self { compiler, pool })
     }
+    /// Queue an owned program or reuse its request; report queue-full or stopped workers.
     pub fn request(&mut self, program: &[u8]) -> Result<PipelineRequest, RequestError> {
         self.pool.request(program.to_vec())
     }
+    /// Forget a failed request so its next request can compile again.
     pub fn retry_failed(&mut self, program: &[u8]) -> bool {
         self.pool.retry_failed(&program.to_vec())
     }
+    /// Return cumulative in-memory cache hit and miss counts.
     pub fn stats(&self) -> CacheStats {
         self.pool.stats
     }
+    /// Return cumulative disk-cache loading and reuse counters.
     pub fn persistence_stats(&self) -> PersistenceStats {
         self.compiler.driver.persistence_stats()
     }
@@ -707,9 +721,11 @@ impl ComputePipeline {
         Ok(result)
     }
 
+    /// Borrow the descriptor bindings reflected from the compute module.
     pub fn bindings(&self) -> &[DescriptorBinding] {
         &self.bindings
     }
+    /// Borrow descriptor set layouts owned by this pipeline.
     pub fn set_layouts(&self) -> &[vk::DescriptorSetLayout] {
         &self.set_layouts
     }

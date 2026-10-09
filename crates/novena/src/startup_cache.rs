@@ -24,30 +24,44 @@ static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 /// identity and reports absent required state with None. No guest enums are inferred.
 #[derive(Clone, Debug, Default, Hash, PartialEq, Eq)]
 pub struct TranslationContext {
+    /// Translator target generation included in the cache identity.
     pub generation: u8,
+    /// Whether translation may assume a zero global-address delta.
     pub global_delta_zero: bool,
+    /// Optional explicit geometry input state used by the translator.
     pub geometry_input: Option<u8>,
+    /// Optional explicit tessellation state used by the translator.
     pub tessellation: Option<[u8; 3]>,
 }
 
+/// Owned translated module, cache identity, and execution requirements.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TranslatedShader {
+    /// Exact translator cache identity as lowercase hexadecimal.
     pub key: String,
+    /// Translated SPIR-V module words.
     pub words: Vec<u32>,
+    /// Whether execution requires subgroup size 32, currently rejected by graphics.
     pub requires_subgroup_size_32: bool,
 }
 
+/// Host-owned persistence directory, translation inputs, and bounded worker settings.
 #[derive(Clone, Debug)]
 pub struct StartupCacheConfig {
     /// A private host-owned directory. The index is loaded during construction.
     pub directory: PathBuf,
+    /// Translation inputs included in the cache identity.
     pub context: TranslationContext,
+    /// Number of owned compilation workers.
     pub workers: usize,
+    /// Maximum number of waiting jobs in the bounded channel.
     pub queue_capacity: usize,
+    /// Explicit graphics recipes to preload in addition to saved recipes.
     #[cfg(feature = "vulkan")]
     pub pipelines: Vec<PipelineRecipe>,
 }
 impl StartupCacheConfig {
+    /// Create a default translation context with two workers and capacity 64.
     pub fn new(directory: PathBuf) -> Self {
         Self {
             directory,
@@ -60,17 +74,28 @@ impl StartupCacheConfig {
     }
 }
 
+/// Cumulative startup loading, translation, and scheduling counters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StartupCacheStats {
+    /// Validated shader records loaded into the startup index.
     pub loaded: u64,
+    /// Counted registration lookups with a completed in-memory entry.
     pub hits: u64,
+    /// Counted registration lookups without a completed in-memory entry.
     pub misses: u64,
+    /// Registrations whose translator key required unavailable state.
     pub state_missing: u64,
+    /// Successful worker translations.
     pub translated: u64,
+    /// Summed worker translation time in nanoseconds, including failures.
     pub translation_nanoseconds: u64,
+    /// Requests rejected because the bounded queue was full.
     pub queue_full: u64,
+    /// Invalid cache records encountered while loading.
     pub invalid: u64,
+    /// Saved or explicit graphics recipes queued for compilation.
     pub pipelines_queued: u64,
+    /// Queued or compiling translation requests at the time of the snapshot.
     pub pending: u64,
 }
 
@@ -79,10 +104,15 @@ pub struct StartupCacheStats {
 #[cfg(feature = "vulkan")]
 #[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PipelineRecipe {
+    /// Exact cache identities of the stages used by this pipeline.
     pub keys: Vec<String>,
+    /// Complete vertex input layout for the graphics pipeline.
     pub input: crate::gpu::graphics::VertexInput,
+    /// Primitive assembly selected for this graphics pipeline.
     pub topology: crate::gpu::graphics::PrimitiveTopology,
+    /// Complete interpreted graphics pipeline state.
     pub state: crate::gpu::graphics::DrawPipelineState,
+    /// Whether uniform banks use storage buffers instead of uniform buffers.
     pub storage: bool,
 }
 

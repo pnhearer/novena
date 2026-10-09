@@ -10,84 +10,139 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+/// Owned command and argument snapshots produced by recording.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RecordedCommand {
+    /// Select retained color and depth texture keys with opaque view arguments.
     SetRenderTargets {
+        /// Color texture object keys in attachment order.
         colors: Vec<u64>,
+        /// Depth value or depth texture key, according to the enclosing command.
         depth: u64,
+        /// Opaque color and depth view arguments.
         views: [u64; 2],
     },
+    /// Select the program object key.
     BindProgram(u64),
+    /// Retain one known or opaque state object binding.
     BindState {
+        /// State or binding category identified by the function family.
         kind: &'static str,
+        /// Snapshot of retained setters for a known state object.
         settings: Option<Vec<(&'static str, [u64; 6])>>,
     },
+    /// Clear selected channels of one current color target.
     ClearColor {
+        /// Color attachment or binding index supplied by the caller.
         index: u32,
+        /// Four floating-point clear components.
         color: [f32; 4],
+        /// Raw color channel write mask.
         mask: u32,
     },
+    /// Retain depth and stencil clear values and write masks.
     ClearDepthStencil {
+        /// Depth value or depth texture key, according to the enclosing command.
         depth: f32,
+        /// Raw depth write-enable argument.
         depth_write: u32,
+        /// Stencil clear value.
         stencil: u32,
+        /// Stencil bits selected for clearing.
         stencil_mask: u32,
     },
+    /// Retain a buffer GPU address and destination texture key.
     CopyBufferToTexture {
+        /// Source buffer GPU address.
         buffer: u64,
+        /// Destination texture object key.
         texture: u64,
     },
+    /// Retain texture keys and all eight raw copy registers.
     CopyTextureToTexture {
+        /// Source texture object key.
         source: u64,
+        /// Destination texture object key.
         destination: u64,
+        /// All eight integer argument registers retained for host decoding.
         arguments: [u64; 8],
     },
+    /// Retain command key, origin, width, and height as raw integers.
     SetViewport([u64; 5]),
+    /// Retain command key, origin, width, and height as raw integers.
     SetScissor([u64; 5]),
+    /// Retain the command key and two floating-point register bit patterns.
     SetDepthRange([u64; 3]),
+    /// Retain non-indexed primitive, first vertex, and vertex count.
     DrawArrays {
+        /// Raw primitive topology token.
         primitive: u32,
+        /// First vertex in the selected stream.
         first: u32,
+        /// Vertex, index, or state count supplied by the caller.
         count: u32,
     },
+    /// Retain non-indexed instanced geometry arguments without general execution support.
     DrawArraysInstanced {
+        /// Raw primitive topology token.
         primitive: u32,
+        /// First vertex in the selected stream.
         first: u32,
+        /// Vertex, index, or state count supplied by the caller.
         count: u32,
+        /// First instance identifier retained from the call.
         base_instance: u32,
+        /// Instance count retained from the call.
         instances: u32,
     },
+    /// Retain indexed geometry and signed base-vertex adjustment.
     DrawElementsBaseVertex {
+        /// Raw primitive topology token.
         primitive: u32,
+        /// Raw index element format token.
         index_type: u32,
+        /// Vertex, index, or state count supplied by the caller.
         count: u32,
+        /// GPU address of the first index element.
         indices: u64,
+        /// Signed adjustment added to each index.
         base_vertex: i32,
     },
     /// State retained without execution. Provenance: note 0026.
     State(StateCommand),
+    /// Retain an unsupported command without assigning argument meanings.
     Raw {
+        /// Function table id of the raw command.
         function: u32,
+        /// Eight raw integer argument registers.
         registers: [u64; 8],
     },
 }
 
+/// Setter names paired with six retained integer argument registers.
 pub type StateSettings = Vec<(&'static str, [u64; 6])>;
 
 /// Recording fields from signatures 0010 and 0011. Values stay opaque and wide;
 /// this representation does not assign enumeration meanings or integer widths.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StateCommand {
+    /// Retain one known or opaque state object binding.
     BindState {
+        /// State or binding category identified by the function family.
         kind: &'static str,
+        /// Raw address supplied by the caller; no pointer layout is inferred.
         address: u64,
         /// Snapshot of settings known through earlier setter calls. An unknown
         /// object stays unknown; its program-memory layout is never guessed.
         settings: Option<Vec<(&'static str, [u64; 6])>>,
     },
+    /// Retain counted state bindings without guessing object spacing.
     BindStates {
+        /// State or binding category identified by the function family.
         kind: &'static str,
+        /// Vertex, index, or state count supplied by the caller.
         count: u64,
+        /// Raw address supplied by the caller; no pointer layout is inferred.
         address: u64,
         /// Only the object at the supplied base address is known. No element
         /// stride or pointer-array layout is inferred for subsequent elements.
@@ -96,85 +151,138 @@ pub enum StateCommand {
         /// This does not establish a program-memory layout. Provenance 0028.
         experiment_settings: Option<Vec<StateSettings>>,
     },
+    /// Select the descriptor pool object key.
     SetDescriptorPool {
+        /// True selects the sampler pool; false selects the texture pool.
         sampler: bool,
+        /// Descriptor pool object key.
         pool: u64,
     },
+    /// Retain an opaque sampler reference for a recorded stage and slot.
     BindSamplerReference {
+        /// Raw recorded shader stage token.
         stage: u64,
+        /// Color attachment or binding index supplied by the caller.
         index: u64,
         /// May be a handle or a pointer. Neither interpretation is decoded.
         reference: u64,
     },
+    /// Retain synchronization object, condition, and flag values.
     FenceSync {
+        /// Synchronization object key.
         sync: u64,
+        /// Raw synchronization condition token.
         condition: u64,
+        /// Raw synchronization flag bits.
         flags: u64,
     },
+    /// Retain an opaque culling-data save range.
     SaveZCullData {
+        /// Raw address supplied by the caller; no pointer layout is inferred.
         address: u64,
+        /// Recorded range length in bytes.
         size: u64,
     },
+    /// Retain an opaque culling-data restore range.
     RestoreZCullData {
+        /// Raw address supplied by the caller; no pointer layout is inferred.
         address: u64,
+        /// Recorded range length in bytes.
         size: u64,
     },
+    /// Retain a face-specific stencil setter argument.
     Stencil {
+        /// Stencil setter suffix identified by the recording handler.
         setting: &'static str,
+        /// Raw face-selection token.
         faces: u64,
+        /// Raw retained value for the enclosing command.
         value: u64,
     },
     /// Opt-in float-order hypothesis. See provenance 0028.
     PolygonOffset([u64; 3]),
+    /// Retain the raw barrier mask.
     Barrier(u64),
+    /// Retain the raw tiled-cache action mask.
     TiledCacheAction(u64),
+    /// Retain a uniform-buffer GPU address and byte size.
     BindUniformBuffer {
+        /// Raw recorded shader stage token.
         stage: u64,
+        /// Color attachment or binding index supplied by the caller.
         index: u64,
+        /// Raw address supplied by the caller; no pointer layout is inferred.
         address: u64,
+        /// Recorded range length in bytes.
         size: u64,
     },
+    /// Retain a vertex stream GPU address and byte size.
     BindVertexBuffer {
+        /// Color attachment or binding index supplied by the caller.
         index: u64,
+        /// Raw address supplied by the caller; no pointer layout is inferred.
         address: u64,
+        /// Recorded range length in bytes.
         size: u64,
     },
+    /// Retain a texture or sampler handle binding.
     BindHandle {
+        /// State or binding category identified by the function family.
         kind: &'static str,
+        /// Raw recorded shader stage token.
         stage: u64,
+        /// Color attachment or binding index supplied by the caller.
         index: u64,
+        /// Raw texture or sampler handle.
         handle: u64,
     },
+    /// Retain the GPU address, byte size, and clear value.
     ClearBuffer {
+        /// Raw address supplied by the caller; no pointer layout is inferred.
         address: u64,
+        /// Recorded range length in bytes.
         size: u64,
+        /// Raw retained value for the enclosing command.
         value: u64,
     },
+    /// Retain three raw workgroup counts without general command execution.
     DispatchCompute([u64; 3]),
 }
 
+/// Retained CPU image with tightly packed four-byte base-level texels.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TextureImage {
+    /// Width in texels.
     pub width: u32,
+    /// Height in texels.
     pub height: u32,
+    /// Depth in texels.
     pub depth: u32,
+    /// Opaque base-level four-byte texels in tightly packed order.
     pub pixels: Vec<u8>,
 }
 
+/// Shader registration values retained without decoding private layouts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShaderRecord {
+    /// Program address of the observed shader record.
     pub record_address: u64,
+    /// The two GPU addresses retained from the record.
     pub gpu_addresses: [u64; 2],
+    /// Eight words retained from the record for bounded observation.
     pub raw_words: [u64; 8],
 }
 
+/// Owned translation result, request, or failure for one registration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShaderTranslation {
     /// An owned result, so obsolete completion cannot replace a newer program.
     Cached(crate::startup_cache::TranslationRequest<crate::startup_cache::TranslatedShader>),
     /// Owned bytes awaiting bounded queue space. Draws retry without guest reads.
     Deferred(Vec<u8>, crate::startup_cache::TranslationContext),
+    /// Completed translated SPIR-V module.
     Spirv(Vec<u32>),
+    /// Translation failed with this diagnostic.
     Error(String),
 }
 
@@ -182,107 +290,181 @@ pub enum ShaderTranslation {
 /// tables; unknown enumerations are kept as the integers the program passed.
 #[derive(Debug, Clone, Default)]
 pub enum Object {
+    /// No object state has been established at this key.
     #[default]
     Unknown,
+    /// Device builder settings retained from observed setter calls.
     DeviceBuilder {
+        /// Raw flags retained from the caller; no enum meaning is implied.
         flags: u64,
     },
+    /// Initialized device state and raw mode settings.
     Device {
+        /// Raw flags retained from the caller; no enum meaning is implied.
         flags: u64,
+        /// Raw depth-mode token.
         depth_mode: u64,
+        /// Raw window-origin token.
         window_origin_mode: u64,
     },
+    /// Queue builder settings retained from observed setter calls.
     QueueBuilder {
+        /// Device object key supplied by the host.
         device: u64,
+        /// Requested control-memory size in bytes.
         control_memory_size: u64,
+        /// Raw command flush threshold.
         command_flush_threshold: u64,
     },
+    /// Initialized queue and its device key.
     Queue {
+        /// Device object key supplied by the host.
         device: u64,
     },
+    /// Window builder state with native handle and texture keys.
     WindowBuilder {
+        /// Device object key supplied by the host.
         device: u64,
+        /// Opaque native window handle supplied by the host.
         native_window: u64,
+        /// Texture object keys attached to the window.
         textures: Vec<u64>,
     },
+    /// Presentation state for an initialized window.
     Window {
+        /// Device object key supplied by the host.
         device: u64,
+        /// Texture object keys attached to the window.
         textures: Vec<u64>,
+        /// Zero requests unpaced presentation; positive values request FIFO.
         present_interval: u32,
         /// Index of the texture the next acquire hands out.
         next_texture: u32,
     },
+    /// Synchronization object and its device key.
     Sync {
+        /// Device object key supplied by the host.
         device: u64,
     },
+    /// Event storage selected by the builder.
     EventBuilder {
+        /// Memory-pool object key.
         pool: u64,
+        /// Byte offset within the containing storage.
         offset: u64,
     },
+    /// Event value and its program-memory storage.
     Event {
+        /// The retained event value.
         value: u32,
         /// Program address of the event's storage word, which the program
         /// may read directly instead of calling EventGetValue.
         storage: u64,
     },
+    /// Pool builder settings, including host storage range.
     MemoryPoolBuilder {
+        /// Device object key supplied by the host.
         device: u64,
+        /// Raw flags retained from the caller; no enum meaning is implied.
         flags: u64,
+        /// Base address of host-managed program storage.
         storage: u64,
+        /// Length of the storage range in bytes.
         size: u64,
     },
+    /// Registered pool and its assigned or observed GPU address.
     MemoryPool {
+        /// Device object key supplied by the host.
         device: u64,
+        /// Raw flags retained from the caller; no enum meaning is implied.
         flags: u64,
+        /// Base address of host-managed program storage.
         storage: u64,
+        /// Length of the storage range in bytes.
         size: u64,
+        /// Assigned guest GPU base, if allocation succeeded.
         gpu_address: Option<u64>,
         /// Original driver return used only to resolve observation reads.
         observed_gpu_address: Option<u64>,
     },
+    /// Texture description retained from builder calls.
     TextureBuilder(TextureDescription),
+    /// Texture description and shared optional CPU image.
     Texture {
+        /// Snapshot of builder settings used to initialize the resource.
         description: TextureDescription,
+        /// Shared CPU image storage, populated by supported execution paths.
         image: Arc<Mutex<Option<TextureImage>>>,
     },
+    /// Recorded mip and layer selection.
     TextureView {
+        /// First mip level selected by the view.
         base_level: u32,
+        /// Number of mip levels, including the base level.
         levels: u32,
+        /// First array layer selected by the view.
         base_layer: u32,
+        /// Number of array layers; cube faces count as layers.
         layers: u32,
     },
+    /// Registered texture descriptors keyed by registration id.
     TexturePool {
+        /// Memory-pool object key backing descriptor storage.
         memory: u64,
+        /// Byte offset within the containing storage.
         offset: u64,
+        /// Number of elements in this range.
         count: u64,
+        /// Objects registered through known calls; descriptor bytes are not guessed.
         registered: HashMap<u32, (u64, u64)>,
     },
+    /// Registered sampler descriptors keyed by registration id.
     SamplerPool {
+        /// Memory-pool object key backing descriptor storage.
         memory: u64,
+        /// Byte offset within the containing storage.
         offset: u64,
+        /// Number of elements in this range.
         count: u64,
+        /// Objects registered through known calls; descriptor bytes are not guessed.
         registered: HashMap<u32, u64>,
     },
+    /// Sampler settings retained from builder calls.
     SamplerBuilder(SamplerDescription),
+    /// Initialized sampler settings.
     Sampler(SamplerDescription),
+    /// Shader records and owned translation results for a program.
     Program {
+        /// Device object key supplied by the host.
         device: u64,
+        /// Shader records retained during registration.
         shader_records: Vec<ShaderRecord>,
+        /// Translation requests or results in registration order.
         shader_translations: Vec<ShaderTranslation>,
     },
     /// A state object. Its fields are not interpreted yet; the program's
     /// calls are kept as (function, arguments) so they are not lost.
     State {
+        /// State object category identified by setter calls.
         kind: &'static str,
+        /// Setter names and retained raw arguments for known state objects.
         settings: Vec<(&'static str, [u64; 6])>,
     },
+    /// Current recording and saved command lists keyed by returned handles.
     CommandBuffer {
+        /// Device object key supplied by the host.
         device: u64,
+        /// Registered command-memory tuples of pool, offset, and byte size.
         command_memory: Vec<(u64, u64, u64)>,
+        /// Registered control-memory address and byte size pairs.
         control_memory: Vec<(u64, u64)>,
+        /// Whether a recording is currently open.
         recording: bool,
+        /// Number of completed recordings used to allocate handles.
         recordings: u64,
+        /// Commands in the current recording.
         commands: Vec<RecordedCommand>,
+        /// Saved command lists keyed by recording handle.
         recording_handles: HashMap<u64, Vec<RecordedCommand>>,
     },
 }
@@ -301,55 +483,92 @@ impl PartialEq for Object {
 /// What the program told a texture builder, carried over to the texture.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TextureDescription {
+    /// Device object key.
     pub device: u64,
+    /// Raw builder flags.
     pub flags: u64,
+    /// Raw builder target token.
     pub target: u64,
+    /// Raw builder format token.
     pub format: u64,
+    /// Raw requested mip count.
     pub levels: u64,
+    /// Width in texels.
     pub width: u64,
+    /// Height in texels.
     pub height: u64,
+    /// Depth in texels.
     pub depth: u64,
+    /// Requested row stride in bytes; zero selects tightly packed storage.
     pub stride: u64,
+    /// Four raw component selection tokens.
     pub swizzle: [u64; 4],
+    /// Raw depth/stencil interpretation token.
     pub depth_stencil_mode: u64,
+    /// Memory-pool object key backing storage.
     pub pool: u64,
+    /// Byte offset within the memory pool.
     pub pool_offset: u64,
 }
 
+/// Sampler builder values carried into an initialized sampler.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SamplerDescription {
+    /// Device object key.
     pub device: u64,
+    /// Raw minification filter token.
     pub min_filter: u64,
+    /// Raw magnification filter token.
     pub mag_filter: u64,
+    /// Raw wrap tokens for the three texture axes.
     pub wrap: [u64; 3],
+    /// Requested anisotropy as retained from the floating-point register.
     pub max_anisotropy: f32,
+    /// Raw comparison-enable token.
     pub compare_mode: u64,
+    /// Raw comparison-function token.
     pub compare_func: u64,
+    /// Four retained floating-point border components.
     pub border_color: [f32; 4],
+    /// Retained floating-point LOD bias.
     pub lod_bias: f32,
+    /// Retained minimum and maximum LOD.
     pub lod_clamp: [f32; 2],
 }
 
+/// Thread-safe object table keyed by program object address.
 #[derive(Default)]
 pub struct Objects {
     map: Mutex<HashMap<u64, Object>>,
 }
 
+/// Resolved GPU address and its corresponding host-managed storage range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GpuAddress {
+    /// Memory-pool object key.
     pub pool: u64,
+    /// Byte offset within the containing storage.
     pub offset: u64,
+    /// Bytes remaining from this offset to the end of the pool.
     pub remaining: u64,
+    /// Resolved address in host-managed program memory.
     pub program_address: u64,
 }
 
+/// Failure to map a GPU address into registered pool storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GpuAddressError {
+    /// No registered pool contains the address.
     UnknownAddress,
-    OutsidePool { pool: u64 },
+    /// The address cannot resolve to a valid byte within the pool.
+    OutsidePool {
+        /// Pool object key whose range rejected the address.
+        pool: u64,
+    },
 }
 
 impl Objects {
+    /// Construct an empty object table.
     pub fn new() -> Self {
         Self::default()
     }
@@ -366,10 +585,12 @@ impl Objects {
         self.lock().insert(address, object);
     }
 
+    /// Return a cloned object record, or None if the key is absent.
     pub fn get(&self, address: u64) -> Option<Object> {
         self.lock().get(&address).cloned()
     }
 
+    /// Remove and return an object record, or None if the key is absent.
     pub fn remove(&self, address: u64) -> Option<Object> {
         self.lock().remove(&address)
     }
@@ -387,10 +608,12 @@ impl Objects {
         }
     }
 
+    /// Number of retained object records.
     pub fn len(&self) -> usize {
         self.lock().len()
     }
 
+    /// Whether the object table contains no records.
     pub fn is_empty(&self) -> bool {
         self.lock().is_empty()
     }

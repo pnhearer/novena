@@ -10,23 +10,31 @@ use std::{collections::HashMap, sync::Arc};
 
 #[derive(Clone, Copy)]
 pub(super) struct ImageInfo {
+    /// Owned Vulkan image handle.
     pub image: vk::Image,
+    /// Base-level image extent in texels.
     pub extent: vk::Extent3D,
+    /// Public Vulkan format of the image.
     pub format: vk::Format,
+    /// Tracked Vulkan image layout at recording time.
     pub layout: vk::ImageLayout,
+    /// Typed dimensions, layers, and mip levels.
     pub shape: ImageShape,
+    /// Storage size in bytes.
     pub size: u64,
 }
 
 pub(super) struct Image {
     context: Arc<Context>,
     memory: vk::DeviceMemory,
+    /// Image handle and tracked transfer metadata.
     pub info: ImageInfo,
     view: vk::ImageView,
     packing: Option<Layout>,
 }
 
 impl Image {
+    /// Create reusable execution resources; return None if Vulkan setup fails.
     pub fn new(
         context: &Arc<Context>,
         width: u32,
@@ -58,6 +66,7 @@ impl Image {
         Some(image)
     }
 
+    /// Allocate a typed image after checking native format support.
     pub fn with_descriptor(context: &Arc<Context>, descriptor: &ImageDescriptor) -> Option<Self> {
         let shape = descriptor.shape;
         let format = descriptor.format;
@@ -219,6 +228,7 @@ impl Image {
         Some(result)
     }
 
+    /// Create or reuse the whole-resource sampled image view.
     pub fn view(&mut self) -> Option<vk::ImageView> {
         if self.view == vk::ImageView::null() {
             self.view = unsafe {
@@ -246,6 +256,7 @@ impl Image {
         Some(self.view)
     }
 
+    /// Record a barrier to the requested layout and update tracked layout.
     pub fn transition(&mut self, command: vk::CommandBuffer, layout: vk::ImageLayout) {
         transition(&self.context.device, command, self.info, layout);
         self.info.layout = layout;
@@ -267,6 +278,7 @@ impl Drop for Image {
 pub(super) struct Buffer {
     context: Arc<Context>,
     memory: vk::DeviceMemory,
+    /// Owned mapped staging buffer handle.
     pub buffer: vk::Buffer,
     size: u64,
     mapped: *mut u8,
@@ -276,6 +288,7 @@ pub(super) struct Buffer {
 unsafe impl Send for Buffer {}
 
 impl Buffer {
+    /// Create reusable execution resources; return None if Vulkan setup fails.
     pub fn new(context: &Arc<Context>, size: u64) -> Option<Self> {
         let buffer = unsafe {
             context
@@ -331,6 +344,7 @@ impl Buffer {
         Some(result)
     }
 
+    /// Copy bytes into mapped staging storage; return None for an oversized range.
     pub fn write(&self, bytes: &[u8]) -> Option<()> {
         if bytes.len() as u64 > self.size {
             return None;
@@ -340,6 +354,7 @@ impl Buffer {
         }
         Some(())
     }
+    /// Return size bytes copied from mapped staging storage.
     pub fn read(&self, size: usize) -> Option<Vec<u8>> {
         if size as u64 > self.size {
             return None;
@@ -371,6 +386,7 @@ pub(super) struct Images {
 }
 
 impl Images {
+    /// Create reusable execution resources; return None if Vulkan setup fails.
     pub fn new(context: &Arc<Context>) -> Option<Self> {
         Some(Self {
             context: Arc::clone(context),
@@ -382,10 +398,12 @@ impl Images {
         })
     }
 
+    /// Wait for retained command submissions to complete; return None on failure.
     pub fn wait(&self) -> Option<()> {
         self.commands.wait()
     }
 
+    /// Create or reuse a compatible color or depth image for this key.
     pub fn ensure(&mut self, key: u64, width: u64, height: u64, depth: bool) -> bool {
         self.ensure_format(
             key,
@@ -399,6 +417,7 @@ impl Images {
         )
     }
 
+    /// Create or reuse an image with explicit format and dimensions.
     pub fn ensure_format(&mut self, key: u64, width: u64, height: u64, format: vk::Format) -> bool {
         let Ok(width) = u32::try_from(width.max(1)) else {
             return false;
@@ -418,6 +437,7 @@ impl Images {
         true
     }
 
+    /// Invalidate transfer recordings before pooling or destroying the removed image.
     pub fn remove(&mut self, key: u64) {
         if let Some(image) = self.images.remove(&key) {
             // Destroying a referenced object invalidates executable recordings.
@@ -428,6 +448,7 @@ impl Images {
         }
     }
 
+    /// Create or reuse a typed image; fail if its native format is unsupported.
     pub fn ensure_descriptor(&mut self, key: u64, descriptor: &ImageDescriptor) -> bool {
         if let Some(image) = self.images.get(&key) {
             return image.info.shape == descriptor.shape
@@ -458,6 +479,7 @@ impl Images {
         Some(())
     }
 
+    /// Convert and transfer one image between arena and tiled storage.
     pub fn tiled_transfer(
         &mut self,
         key: u64,
@@ -468,6 +490,7 @@ impl Images {
         self.tiled_batch(&[(key, address, packing)], load)
     }
 
+    /// Transfer up to 256 images using shared scratch and one submission.
     pub fn tiled_batch(&mut self, resources: &[(u64, u64, &Layout)], load: bool) -> Option<()> {
         if resources.is_empty() || resources.len() > 256 {
             return None;
@@ -556,6 +579,7 @@ impl Images {
         self.commands.submit(false, None)
     }
 
+    /// Transition the image for shader reads and return its whole-resource view.
     pub fn sampled(&mut self, key: u64) -> Option<vk::ImageView> {
         let (cmd, _) = self.commands.begin()?;
         let image = self.images.get_mut(&key)?;
@@ -566,6 +590,7 @@ impl Images {
         Some(view)
     }
 
+    /// Clear selected channels of a color image and complete the transfer.
     pub fn clear_color(&mut self, key: u64, color: [f32; 4], mask: u32) -> Option<()> {
         if mask & 15 == 0 {
             return Some(());
@@ -601,6 +626,7 @@ impl Images {
         self.commands.submit(false, None)
     }
 
+    /// Record and complete a bounded draw into the selected images.
     pub fn draw(
         &mut self,
         keys: &[u64],
@@ -671,6 +697,7 @@ impl Images {
         result
     }
 
+    /// Clear a depth image and complete the transfer.
     pub fn clear_depth(&mut self, key: u64, depth: f32) -> Option<()> {
         if self.images.get(&key)?.info.format != vk::Format::D32_SFLOAT {
             return None;
@@ -690,6 +717,7 @@ impl Images {
         self.commands.submit(false, None)
     }
 
+    /// Make an image transfer-readable and return its tracked metadata.
     pub fn source(&mut self, key: u64) -> Option<ImageInfo> {
         let (cmd, _) = self.commands.begin()?;
         let image = self.images.get_mut(&key)?;
@@ -699,6 +727,7 @@ impl Images {
         Some(info)
     }
 
+    /// Copy packed-linear bytes between a checked arena buffer range and an image.
     pub fn arena_transfer(
         &mut self,
         key: u64,
@@ -745,6 +774,7 @@ impl Images {
         self.commands.submit(false, None)
     }
 
+    /// Upload packed-linear bytes into the existing image.
     pub fn upload(&mut self, key: u64, bytes: &[u8]) -> Option<()> {
         let info = self.images.get(&key)?.info;
         if bytes.len() as u64 != info.size {
@@ -758,6 +788,7 @@ impl Images {
         self.commands.wait()
     }
 
+    /// Copy all mip levels and array layers between compatible images.
     pub fn copy(&mut self, destination: u64, source: u64) -> Option<()> {
         if destination == source {
             return Some(());
@@ -814,6 +845,7 @@ impl Images {
         self.commands.submit(false, None)
     }
 
+    /// Copy checked compatible image regions and complete the transfer.
     pub fn copy_region(
         &mut self,
         destination: u64,
@@ -858,6 +890,7 @@ impl Images {
         )
     }
 
+    /// Blit checked compatible image regions with the chosen filter.
     pub fn blit_region(
         &mut self,
         destination: u64,
@@ -941,6 +974,7 @@ impl Images {
         self.commands.submit(false, None)
     }
 
+    /// Read the keyed image into tightly packed RGBA bytes and dimensions.
     pub fn readback(&mut self, key: u64) -> Option<(u32, u32, Vec<u8>)> {
         let info = self.images.get(&key)?.info;
         self.staging(info.size)?;
@@ -954,6 +988,7 @@ impl Images {
         ))
     }
 
+    /// Copy every mip and layer into packed-linear host bytes.
     pub fn read_image(&mut self, image: &mut Image) -> Option<Vec<u8>> {
         self.staging(image.info.size)?;
         let staging = self.staging.as_ref()?;
@@ -974,6 +1009,7 @@ impl Images {
         staging.read(image.info.size as usize)
     }
 
+    /// Scale and convert the source into an offscreen color target.
     pub fn blit_offscreen(&mut self, source: ImageInfo, target: &mut Image) -> Option<()> {
         if !can_blit(&self.context, source.format, target.info.format) {
             return None;

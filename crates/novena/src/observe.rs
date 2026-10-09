@@ -682,6 +682,7 @@ impl FunctionShape {
         }
     }
 
+    /// Number of calls sampled for this function, capped by the observation limit.
     pub fn sampled_calls(&self) -> u64 {
         self.sampled_calls
     }

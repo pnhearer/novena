@@ -88,6 +88,7 @@ pub(crate) fn signal_event(instance: &Instance, event: u64, new_value: u32) {
     }
 }
 
+/// Return the handler for a supported name in this command family.
 pub fn handler(name: &str) -> Option<Handler> {
     Some(match name {
         "nvnQueueBuilderSetDefaults" => |instance, _, registers| {

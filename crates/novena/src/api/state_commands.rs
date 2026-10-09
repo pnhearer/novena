@@ -46,6 +46,7 @@ pub(super) const TEXTURE_NAMES: &[&str] = &[
     "nvnCommandBufferSetSamplerPool",
 ];
 
+/// Return the handler for a supported name in this command family.
 pub fn handler(name: &str) -> Option<Handler> {
     (NAMES.contains(&name) || TEXTURE_NAMES.contains(&name)).then_some(record_state)
 }

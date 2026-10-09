@@ -17,11 +17,17 @@ use std::collections::HashMap;
 type Settings = StateSettings;
 
 pub(super) struct Request<'a> {
+    /// Color texture object keys in attachment order.
     pub targets: &'a [u64],
+    /// Depth/stencil texture key, or zero without an attachment.
     pub depth: u64,
+    /// Opaque color and depth view arguments; the bounded draw requires zero.
     pub views: [u64; 2],
+    /// Raw primitive token interpreted only through a host contract.
     pub primitive: u32,
+    /// Array or indexed geometry selection.
     pub vertices: Vertices,
+    /// Number of vertices or indices in the draw.
     pub count: u32,
 }
 
@@ -84,6 +90,7 @@ pub(super) struct State {
 }
 
 impl State {
+    /// Update retained draw state from a recorded command.
     pub fn record(&mut self, command: RecordedCommand) {
         match command {
             RecordedCommand::State(StateCommand::SetDescriptorPool { sampler, pool }) => {
@@ -321,6 +328,7 @@ impl State {
         Ok(state)
     }
 
+    /// Execute one bounded draw using explicit host contracts; report unsupported state.
     pub fn execute(
         &self,
         instance: &Instance,

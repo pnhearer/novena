@@ -88,17 +88,30 @@ Clean room. Behaviour is worked out from what can be observed lawfully: the call
 
 If you have had access to any proprietary development kit or confidential material that relates to this area, please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening anything.
 
-## Building
+## Getting started
 
+The default build runs without a GPU. A host owns program memory, creates an
+instance, resolves names, and forwards calls through registers. The library
+records objects and commands and executes the supported operations. Vulkan
+execution and shader translation are opt-in. Unsupported calls remain visible
+through status values and the census.
+
+```sh
+cargo build --workspace
+cargo test --workspace
 ```
-cargo build
-cargo test
-examples/run-host.sh
-```
 
-Rust stable and a C compiler are enough. The CPU implementation is the default. To compile the optional Vulkan backend, use `cargo build --features vulkan`. Vulkan is optional at runtime too: when no loader or device is available, novena keeps using its CPU path. The last command builds a small host in C against `include/novena.h`, runs it and prints the census it wrote.
+Start with the [newcomer guide](docs/guide/README.md):
 
-Release archives also include a CMake package and a pkg-config file. See docs/consuming.md for consumption details.
+- [Build and test](docs/guide/building.md), including required GPU checks and an external translator.
+- [Run the examples](docs/guide/examples.md), a cleared window and a synthetic textured triangle.
+- [Follow the architecture](docs/guide/architecture.md), from recording through arena memory, pipelines, textures, and presentation.
+- [Configure startup shader caching](docs/guide/startup-cache.md), with identity, worker, persistence, and diagnostic contracts.
+
+The examples use original data. The guide links each execution path to its
+source and provenance notes. The C boundary is described by
+[include/novena.h](include/novena.h). Existing host integration details are in
+[docs/host-interface.md](docs/host-interface.md).
 
 ## License
 

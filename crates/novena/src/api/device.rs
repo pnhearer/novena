@@ -28,6 +28,7 @@ fn parse_hex(text: &str) -> Option<u64> {
     u64::from_str_radix(text.trim_start_matches("0x"), 16).ok()
 }
 
+/// Return the handler for a supported name in this command family.
 pub fn handler(name: &str) -> Option<Handler> {
     Some(match name {
         "nvnDeviceBuilderSetDefaults" => |instance, _, registers| {

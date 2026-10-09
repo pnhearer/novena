@@ -21,51 +21,82 @@ const SECTOR_OFFSETS: [[usize; 4]; 8] = [
     [208, 240, 464, 496],
 ];
 
+/// Image dimensions and array organization supported by checked packing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageKind {
+    /// One two-dimensional image with depth and layer count one.
     D2,
+    /// Array of two-dimensional images with depth one.
     D2Array,
+    /// One three-dimensional image with layer count one.
     D3,
+    /// Square cube faces in layers; the layer count is divisible by six.
     Cube,
 }
 
+/// Base texel dimensions, layers, and complete or partial mip chain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ImageShape {
+    /// Width in texels.
     pub width: u32,
+    /// Height in texels.
     pub height: u32,
+    /// Depth in texels.
     pub depth: u32,
+    /// Number of array layers; cube faces count as layers.
     pub layers: u32,
+    /// Borrow mip layouts in increasing level order.
     pub levels: u32,
+    /// Image dimension and layer organization.
     pub kind: ImageKind,
 }
 
+/// Opaque format-block geometry used for packing without decoding payloads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockFormat {
+    /// Width of one format block in texels.
     pub width: u8,
+    /// Height of one format block in texels.
     pub height: u8,
+    /// Bytes per opaque format block, supported for sizes 1, 2, 4, 8, and 16.
     pub bytes: u8,
 }
 
+/// Block-linear tile exponents in units of GOBs, each limited to zero through five.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TileShape {
+    /// Base-two exponent of the tile height in eight-row GOBs.
     pub height_log2: u8,
+    /// Base-two exponent of the tile depth in GOBs.
     pub depth_log2: u8,
 }
 
+/// Checked storage geometry for one mip level within an array layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LevelLayout {
+    /// Width, height, and depth of this mip in texels.
     pub extent: [u32; 3],
+    /// Mip dimensions rounded up to whole format blocks.
     pub blocks: [u32; 3],
+    /// Active format-block bytes in one row.
     pub row_bytes: usize,
+    /// Effective tile after mip-dependent clamping.
     pub tile: TileShape,
+    /// Byte offset of this mip within one tiled array layer.
     pub tiled_offset: usize,
+    /// Total tiled storage size in bytes, including padding.
     pub tiled_size: usize,
+    /// Bytes between tiled block rows.
     pub tiled_row_stride: usize,
+    /// Bytes between tiled depth slabs.
     pub tiled_depth_stride: usize,
+    /// Byte offset of this mip within one packed-linear layer.
     pub linear_offset: usize,
+    /// Total packed-linear storage size in bytes, including padding.
     pub linear_size: usize,
 }
 
+/// Checked mip offsets, layer strides, and sizes for linear and tiled storage.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Layout {
     shape: ImageShape,
@@ -77,15 +108,33 @@ pub struct Layout {
     linear_size: usize,
 }
 
+/// Invalid image geometry, arithmetic overflow, or insufficient conversion storage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutError {
+    /// A dimension, layer count, or mip count is zero.
     ZeroDimension,
+    /// Dimensions or layer counts do not match the selected image kind.
     InvalidShape,
+    /// Format block geometry or element size is unsupported.
     InvalidFormat,
+    /// A tile exponent exceeds five.
     InvalidTile,
+    /// Offset or size arithmetic cannot be represented.
     Overflow,
-    SourceSize { expected: usize, actual: usize },
-    DestinationSize { expected: usize, actual: usize },
+    /// The source buffer is smaller than the required representation.
+    SourceSize {
+        /// Minimum required byte length.
+        expected: usize,
+        /// Actual supplied byte length.
+        actual: usize,
+    },
+    /// The destination buffer is smaller than the required representation.
+    DestinationSize {
+        /// Minimum required byte length.
+        expected: usize,
+        /// Actual supplied byte length.
+        actual: usize,
+    },
 }
 
 impl fmt::Display for LayoutError {
@@ -114,6 +163,7 @@ impl fmt::Display for LayoutError {
 impl Error for LayoutError {}
 
 impl Layout {
+    /// Compute checked packing; reject invalid shape, block geometry, tile exponents, or overflow.
     pub fn new(
         shape: ImageShape,
         format: BlockFormat,
@@ -217,34 +267,42 @@ impl Layout {
         })
     }
 
+    /// Return the base image shape used to construct this layout.
     pub fn shape(&self) -> ImageShape {
         self.shape
     }
 
+    /// Return the opaque format-block geometry.
     pub fn format(&self) -> BlockFormat {
         self.format
     }
 
+    /// Borrow mip layouts in increasing level order.
     pub fn levels(&self) -> &[LevelLayout] {
         &self.levels
     }
 
+    /// Byte distance between consecutive tiled array layers.
     pub fn array_stride(&self) -> usize {
         self.array_stride
     }
 
+    /// Byte distance between consecutive packed-linear array layers.
     pub fn linear_layer_stride(&self) -> usize {
         self.linear_layer_stride
     }
 
+    /// Total tiled storage size in bytes, including padding.
     pub fn tiled_size(&self) -> usize {
         self.tiled_size
     }
 
+    /// Total packed-linear storage size in bytes, including padding.
     pub fn linear_size(&self) -> usize {
         self.linear_size
     }
 
+    /// Resolve layer, mip, block coordinates, and byte-in-block to a checked tiled offset.
     pub fn tiled_byte_offset(
         &self,
         level: u32,
@@ -287,6 +345,7 @@ impl Layout {
             .checked_add(sector_offset(x % GOB_WIDTH, y % GOB_HEIGHT))
     }
 
+    /// Resolve layer, mip, block coordinates, and byte-in-block to a checked linear offset.
     pub fn linear_byte_offset(
         &self,
         level: u32,
@@ -315,16 +374,19 @@ impl Layout {
             .checked_add(x_byte as usize)
     }
 
+    /// Copy active bytes from tiled to linear storage; preserve destination padding.
     pub fn decode(&self, tiled: &[u8], linear: &mut [u8]) -> Result<(), LayoutError> {
         self.check_buffers(tiled, linear, true)?;
         self.convert_serial(tiled, linear, true)
     }
 
+    /// Copy active bytes from linear to tiled storage; preserve destination padding.
     pub fn encode(&self, linear: &[u8], tiled: &mut [u8]) -> Result<(), LayoutError> {
         self.check_buffers(linear, tiled, false)?;
         self.convert_serial(linear, tiled, false)
     }
 
+    /// Decode disjoint ranges with at most the requested worker count; small images run serially.
     pub fn decode_parallel(
         &self,
         tiled: &[u8],
@@ -335,6 +397,7 @@ impl Layout {
         self.convert_parallel(tiled, linear, true, threads)
     }
 
+    /// Encode disjoint ranges with at most the requested worker count; small images run serially.
     pub fn encode_parallel(
         &self,
         linear: &[u8],

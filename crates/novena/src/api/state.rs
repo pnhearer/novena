@@ -31,6 +31,7 @@ fn kind_and_setting(name: &str) -> Option<(&'static str, &str)> {
     Some((kind, setting))
 }
 
+/// Return the handler for a supported name in this command family.
 pub fn handler(name: &str) -> Option<Handler> {
     let (_, setting) = kind_and_setting(name)?;
     Some(if setting == "Defaults" {

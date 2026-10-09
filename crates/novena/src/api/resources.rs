@@ -530,6 +530,7 @@ fn storage_size(description: &TextureDescription) -> u64 {
 /// The largest alignment the real implementation was seen to ask for.
 const STORAGE_ALIGNMENT: u64 = 0x10000;
 
+/// Return the handler for a supported name in this command family.
 pub fn handler(name: &str) -> Option<Handler> {
     Some(match name {
         "nvnTextureBuilderSetDefaults" => |instance, _, registers| {

@@ -16,24 +16,34 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 /// one sample and all color channels. Duplicate tokens are rejected at use.
 #[derive(Clone, Debug)]
 pub struct FirstDrawContract {
+    /// Explicit mapping from caller tokens to supported primitive topologies.
     pub topologies: Vec<(u32, PrimitiveTopology)>,
+    /// Explicit mapping from caller tokens to vertex formats.
     pub attribute_formats: Vec<(u64, VertexFormat)>,
     /// Host-selected object spacing for counted bindings. None supports count one only.
     pub attribute_state_stride: Option<u64>,
+    /// Host-selected object spacing for counted stream state; None permits count one.
     pub stream_state_stride: Option<u64>,
     /// Distinct host-selected tokens for tightly packed unsigned index elements.
     pub index_u16: u32,
+    /// Host token for tightly packed unsigned 32-bit indices.
     pub index_u32: u32,
+    /// Host token that disables culling.
     pub cull_none: u64,
+    /// Host token for the supported four-byte color format.
     pub rgba8: u64,
+    /// Host token for a two-dimensional render target.
     pub target_2d: u64,
+    /// Raw swizzle values accepted as identity for the first draw path.
     pub identity_swizzle: [u64; 4],
+    /// Optional explicit interpretation of depth, stencil, and raster state.
     pub depth_raster: Option<DepthRasterContract>,
 }
 
 /// Host-selected tokens, not guest enum claims. See provenance 0028.
 #[derive(Clone, Copy, Debug)]
 pub struct DepthRasterContract {
+    /// Host token for the supported depth/stencil format.
     pub d32s8: u64,
     /// Never, less, equal, less-or-equal, greater, not-equal, greater-or-equal, always.
     pub compare: [u64; 8],
@@ -54,13 +64,21 @@ pub struct DepthRasterContract {
 #[derive(
     Clone, Copy, Debug, Default, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize,
 )]
+/// One face's interpreted Vulkan stencil state.
 pub struct StencilState {
+    /// Raw Vulkan stencil operation when the stencil test fails.
     pub fail: i32,
+    /// Raw Vulkan stencil operation when the depth test fails.
     pub depth_fail: i32,
+    /// Raw Vulkan stencil operation when both tests pass.
     pub pass: i32,
+    /// Raw Vulkan stencil comparison operation.
     pub compare: i32,
+    /// Mask applied before stencil comparison.
     pub mask: u32,
+    /// Mask of components or bits that may be written.
     pub write_mask: u32,
+    /// Stencil reference value.
     pub reference: u32,
 }
 impl StencilState {
@@ -80,7 +98,9 @@ impl StencilState {
 /// Factor and operation integers are public Vulkan values, not guest enums.
 #[derive(Clone)]
 pub struct BlendContract {
+    /// Explicit mapping from caller tokens to Vulkan blend factors.
     pub factors: Vec<(u64, vk::BlendFactor)>,
+    /// Explicit mapping from caller tokens to Vulkan blend operations.
     pub operations: Vec<(u64, vk::BlendOp)>,
     /// Indices in the four arguments: source color, destination color, source alpha, destination alpha.
     pub function_order: [usize; 4],
@@ -117,11 +137,16 @@ impl BlendContract {
     }
 }
 
+/// Interpreted blending and write mask for one color attachment.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ColorAttachmentState {
+    /// Whether this operation is enabled.
     pub enable: bool,
+    /// Source color, destination color, source alpha, and destination alpha factors.
     pub factors: [i32; 4],
+    /// Color and alpha blend operations as raw Vulkan values.
     pub operations: [i32; 2],
+    /// Mask of components or bits that may be written.
     pub write_mask: u32,
 }
 impl Default for ColorAttachmentState {
@@ -156,24 +181,38 @@ impl ColorAttachmentState {
 pub struct DrawPipelineState {
     /// Zero preserves the original single-target retry contract. Otherwise 1 through 8.
     pub color_count: u32,
+    /// Per-attachment blend and channel-mask state.
     pub colors: [ColorAttachmentState; 8],
+    /// Whether the pipeline includes a depth/stencil attachment.
     pub attachment: bool,
+    /// Whether depth comparison is enabled.
     pub depth_test: bool,
+    /// Whether passing fragments write depth.
     pub depth_write: bool,
+    /// Raw Vulkan depth comparison operation.
     pub depth_compare: i32,
+    /// Whether stencil testing is enabled.
     pub stencil_test: bool,
+    /// Front and back face stencil states.
     pub stencil: [StencilState; 2],
+    /// Raw Vulkan cull-mode flags.
     pub cull: u32,
+    /// Raw Vulkan polygon mode.
     pub polygon: i32,
+    /// Whether clockwise winding defines the front face.
     pub clockwise: bool,
     /// Slope, constant, clamp as finite f32 bits.
     pub bias: [u32; 3],
 }
 
+/// Primitive assembly supported by the bounded draw path.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PrimitiveTopology {
+    /// Each group of three vertices forms an independent triangle.
     TriangleList,
+    /// Each vertex after the first two completes another triangle.
     TriangleStrip,
+    /// The first vertex joins each successive pair to form a triangle.
     TriangleFan,
 }
 
@@ -190,17 +229,29 @@ impl PrimitiveTopology {
 /// Float-converting vertex formats from public Vulkan documentation, provenance 0028.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum VertexFormat {
+    /// One 32-bit floating-point component.
     Float,
+    /// Two 32-bit floating-point components.
     Float2,
+    /// Three 32-bit floating-point components.
     Float3,
+    /// Four 32-bit floating-point components.
     Float4,
+    /// Two 16-bit floating-point components.
     Half2,
+    /// Four 16-bit floating-point components.
     Half4,
+    /// Four unsigned 8-bit components normalized to zero through one.
     Unorm8x4,
+    /// Four signed 8-bit components normalized to minus one through one.
     Snorm8x4,
+    /// Two unsigned 16-bit components normalized to zero through one.
     Unorm16x2,
+    /// Four unsigned 16-bit components normalized to zero through one.
     Unorm16x4,
+    /// Two signed 16-bit components normalized to minus one through one.
     Snorm16x2,
+    /// Four signed 16-bit components normalized to minus one through one.
     Snorm16x4,
 }
 
@@ -241,22 +292,32 @@ pub(crate) fn mapped<T: Copy, K: PartialEq>(table: &[(K, T)], token: K) -> Optio
     matches.next().is_none().then_some(result)
 }
 
+/// Complete vertex binding and attribute layout used in a graphics cache key.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct VertexInput {
+    /// Vertex streams in binding order.
     pub bindings: Vec<VertexBinding>,
+    /// Vertex attributes in location order.
     pub attributes: Vec<VertexAttribute>,
 }
 
+/// One per-vertex stream binding.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct VertexBinding {
+    /// Zero-based vertex stream binding number.
     pub binding: u32,
+    /// Distance between successive elements in bytes.
     pub stride: u32,
 }
 
+/// One attribute; its position in the attribute list determines its location.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct VertexAttribute {
+    /// Zero-based vertex stream binding number.
     pub binding: u32,
+    /// Component storage format decoded by Vulkan.
     pub format: VertexFormat,
+    /// Byte offset of this attribute within each vertex.
     pub offset: u32,
 }
 
@@ -276,9 +337,11 @@ pub(crate) struct GraphicsPipelines {
     pool: AsyncPipelines<Key, GraphicsPipeline>,
 }
 impl GraphicsPipelines {
+    /// Create reusable execution resources; return None if Vulkan setup fails.
     pub fn new(context: &Arc<Context>) -> Option<Self> {
         Self::build(context, None, 2, 64).ok()
     }
+    /// Create bounded graphics workers using private host-owned persistence.
     pub fn persistent(
         context: &Arc<Context>,
         directory: &Path,
@@ -364,6 +427,7 @@ impl GraphicsPipelines {
         }
     }
 
+    /// Forget a failed graphics request so a later request can compile again.
     pub fn retry_failed(
         &mut self,
         stages: &[Vec<u32>],
@@ -380,18 +444,23 @@ impl GraphicsPipelines {
             self.uses_storage(storage),
         )?))
     }
+    /// Whether the host requested storage banks or device uniform limits require them.
     pub fn uses_storage(&self, requested: bool) -> bool {
         requested || self.requires_storage
     }
+    /// Return cumulative request reuse and insertion counters.
     pub fn stats(&self) -> CacheStats {
         self.pool.stats
     }
+    /// Number of queued or compiling graphics requests.
     pub fn pending(&self) -> usize {
         self.pool.pending()
     }
+    /// Return persistent cache loading and reuse counters.
     pub fn persistence_stats(&self) -> PersistenceStats {
         self.driver.persistence_stats()
     }
+    /// Drain accumulated compilation and persistence diagnostics.
     pub fn take_diagnostics(&self) -> Vec<String> {
         self.driver.take_diagnostics()
     }
@@ -456,11 +525,17 @@ impl Key {
 }
 
 pub(crate) struct Draw {
+    /// Vertex binding number, buffer handle, and byte offset tuples.
     pub buffers: Vec<(u32, vk::Buffer, u64)>,
+    /// Dynamic Vulkan viewport in pixel coordinates.
     pub viewport: vk::Viewport,
+    /// Dynamic Vulkan scissor in pixel coordinates.
     pub scissor: vk::Rect2D,
+    /// Array or indexed draw selection.
     pub vertices: DrawVertices,
+    /// Number of vertices or indices in the draw.
     pub count: u32,
+    /// Owned descriptor sets and backing uniform resources for this draw.
     pub descriptors: DrawDescriptors,
 }
 
@@ -565,12 +640,16 @@ fn float_interface(words: &[u32], storage: u32) -> Result<Vec<(u32, u32)>, Strin
 
 pub(crate) struct GraphicsPipeline {
     context: Arc<Context>,
+    /// Compatible render pass owned by the graphics pipeline.
     pub render_pass: vk::RenderPass,
     pipeline: vk::Pipeline,
     layout: vk::PipelineLayout,
     set_layouts: Vec<vk::DescriptorSetLayout>,
+    /// Reflected uniform banks required by the translated stages.
     pub banks: Vec<Bank>,
+    /// Reflected sampled image and sampler bindings required by the stages.
     pub textures: Vec<super::textures::Binding>,
+    /// Whether banks use storage buffers.
     pub storage: bool,
 }
 
@@ -972,6 +1051,7 @@ impl GraphicsPipeline {
         }
     }
 
+    /// Allocate and populate descriptors for reflected banks and sampled resources.
     pub fn descriptors(
         &self,
         buffers: &[vk::DescriptorBufferInfo],

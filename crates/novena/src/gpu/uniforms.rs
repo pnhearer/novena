@@ -8,7 +8,9 @@ pub(crate) const BANK_SIZE: u64 = 4096 * 16;
 /// A translated graphics stage, independent of recorded stage tokens.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum UniformStage {
+    /// Vertex shader stage.
     Vertex,
+    /// Fragment shader stage.
     Fragment,
 }
 impl UniformStage {
@@ -36,15 +38,20 @@ impl UniformStage {
 /// Guest stage meanings and binding-to-bank mappings remain unobserved.
 #[derive(Clone, Copy, Debug)]
 pub struct UniformBankMapping {
+    /// Raw stage token supplied by the caller.
     pub stage: u64,
+    /// Raw binding index supplied by the caller.
     pub index: u64,
+    /// Translated shader stage receiving the bank.
     pub target: UniformStage,
+    /// Uniform bank number in the translated module.
     pub bank: u32,
 }
 
 /// Opt-in bank mapping for the bounded draw experiment. No implicit mapping exists.
 #[derive(Clone, Debug, Default)]
 pub struct UniformBufferContract {
+    /// Explicit mappings used to connect recorded slots to host resources.
     pub bindings: Vec<UniformBankMapping>,
     /// Use read-only storage buffers even when 64 KiB uniform blocks fit.
     /// Otherwise the backend selects storage only when the device limit requires it.
@@ -68,7 +75,9 @@ impl UniformBufferContract {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Bank {
+    /// Translated shader stage.
     pub stage: UniformStage,
+    /// Uniform bank number in the translated module.
     pub bank: u32,
 }
 

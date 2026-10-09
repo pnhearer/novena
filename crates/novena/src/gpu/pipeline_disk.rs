@@ -16,7 +16,9 @@ static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 /// Include generation, options and translator version in these strings.
 #[derive(Clone, Debug)]
 pub struct TranslationIdentity {
+    /// Translator implementation version used to invalidate persisted output.
     pub version: String,
+    /// Identity of every translator option that can affect generated output.
     pub configuration: String,
 }
 

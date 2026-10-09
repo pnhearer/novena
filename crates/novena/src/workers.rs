@@ -1,7 +1,10 @@
 //! Bounded owned pipeline requests. Evidence: provenance 0026 and 0027.
+/// Cumulative request reuse and insertion counters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CacheStats {
+    /// Requests that reused an existing entry.
     pub hits: u64,
+    /// Requests that created a new entry.
     pub misses: u64,
 }
 use std::{
@@ -15,9 +18,13 @@ use std::{
 
 /// A frame polls this state and skips the draw unless Ready is returned.
 pub enum PipelineStatus<P> {
+    /// The owned job is waiting for a worker.
     Queued,
+    /// A worker is compiling the owned job.
     Compiling,
+    /// Compilation completed and the shared result is available.
     Ready(Arc<P>),
+    /// Compilation failed; the diagnostic stays available until explicit retry.
     Failed(String),
 }
 
@@ -37,6 +44,7 @@ impl<P> Clone for PipelineRequest<P> {
 }
 
 impl<P> PipelineRequest<P> {
+    /// Create an already completed request retaining the supplied shared result.
     pub fn ready(value: Arc<P>) -> Self {
         Self(Arc::new(RequestState {
             phase: AtomicU8::new(2),
@@ -44,6 +52,7 @@ impl<P> PipelineRequest<P> {
         }))
     }
 
+    /// Return the current phase without waiting for compilation.
     pub fn poll(&self) -> PipelineStatus<P> {
         match self.0.phase.load(Ordering::Acquire) {
             0 => PipelineStatus::Queued,
@@ -59,9 +68,12 @@ impl<P> PipelineRequest<P> {
     }
 }
 
+/// Failure to enqueue a new owned compilation request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RequestError {
+    /// The bounded job channel has no available slot.
     QueueFull,
+    /// The worker channel has disconnected.
     Stopped,
 }
 

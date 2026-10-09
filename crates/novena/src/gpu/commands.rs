@@ -8,12 +8,19 @@ const FRAMES: usize = 2;
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct TransferKey {
+    /// Image handle included in the cached transfer identity.
     pub image: u64,
+    /// Scratch buffer handle included in the cached transfer identity.
     pub scratch: u64,
+    /// Arena buffer device address for this transfer.
     pub address: u64,
+    /// Scratch buffer device address for this transfer.
     pub scratch_address: u64,
+    /// Tracked Vulkan image layout at recording time.
     pub layout: i32,
+    /// True copies arena storage to the image; false copies it back.
     pub load: bool,
+    /// Checked byte packing for the image storage.
     pub packing: crate::tiling::Layout,
 }
 
@@ -35,6 +42,7 @@ pub(super) struct Commands {
 }
 
 impl Commands {
+    /// Create reusable execution resources; return None if Vulkan setup fails.
     pub fn new(context: &Arc<Context>) -> Option<Self> {
         let mut commands = Self {
             context: Arc::clone(context),
@@ -91,6 +99,7 @@ impl Commands {
         Some(commands)
     }
 
+    /// Wait and discard cached recordings before their resources change.
     pub fn invalidate_cached(&mut self) {
         for frame in &mut self.frames {
             frame.cached = None;
@@ -99,10 +108,12 @@ impl Commands {
         self.reusing = false;
     }
 
+    /// Begin a fresh command recording and return its reusable completion semaphore.
     pub fn begin(&mut self) -> Option<(vk::CommandBuffer, vk::Semaphore)> {
         self.begin_with_flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
     }
 
+    /// Select a transfer recording by complete identity; report whether it already exists.
     pub fn begin_cached(&mut self, key: Vec<TransferKey>) -> Option<(vk::CommandBuffer, bool)> {
         if self.failed {
             return None;
@@ -153,6 +164,7 @@ impl Commands {
         Some((frame.command, frame.acquire))
     }
 
+    /// Submit the selected command; optionally wait and signal the supplied semaphore.
     pub fn submit(&mut self, wait: bool, signal: Option<vk::Semaphore>) -> Option<()> {
         let frame = &self.frames[self.next];
         let device = &self.context.device;
@@ -187,6 +199,7 @@ impl Commands {
         Some(())
     }
 
+    /// Wait for retained command submissions to complete; return None on failure.
     pub fn wait(&self) -> Option<()> {
         if self.failed {
             return None;

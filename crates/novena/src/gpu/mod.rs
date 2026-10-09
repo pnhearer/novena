@@ -24,11 +24,16 @@ use present::Window;
 pub mod pipelines;
 pub use memory::GlobalMemory;
 
+/// Optional device capabilities available to translated global-memory modules.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ShaderFeatures {
+    /// Whether storage-buffer 8-bit access is enabled.
     pub storage_buffer8_bit_access: bool,
+    /// Whether storage-buffer 16-bit access is enabled.
     pub storage_buffer16_bit_access: bool,
+    /// Whether 8-bit shader integer arithmetic is enabled.
     pub shader_int8: bool,
+    /// Whether 16-bit shader integer arithmetic is enabled.
     pub shader_int16: bool,
 }
 
@@ -71,17 +76,26 @@ impl ShaderFeatures {
 /// A device and its one graphics queue. Failure is represented as `None` so a
 /// host without Vulkan keeps using the CPU executor.
 pub struct Context {
+    /// Loaded Vulkan entry points.
     pub entry: Entry,
+    /// Owned Vulkan instance; the context destroys it on drop.
     pub instance: Instance,
+    /// Physical device selected for execution.
     pub physical_device: vk::PhysicalDevice,
+    /// Owned logical device; the context destroys it on drop.
     pub device: Device,
+    /// Graphics queue selected for submission.
     pub queue: vk::Queue,
+    /// Queue family index of the graphics queue.
     pub queue_family: u32,
+    /// Optional narrow storage and integer capabilities enabled on the device.
     pub shader_features: ShaderFeatures,
+    /// Indices of families for which the device created queues.
     pub queue_families: Vec<u32>,
     swapchain: bool,
 }
 
+/// Vulkan images, presentation, pipelines, and lazily allocated arena storage.
 pub struct Backend {
     pub(crate) first_draw: Option<graphics::FirstDrawContract>,
     pub(crate) texture_contract: textures::TextureContract,
@@ -96,12 +110,14 @@ pub struct Backend {
     images: Images,
     bindings: HashMap<u64, (u64, u64, usize)>,
     tiled: HashMap<u64, crate::tiling::Layout>,
+    /// Flat mapped arena, present after the first successful pool allocation.
     pub global_memory: Option<GlobalMemory>,
     context: Arc<Context>,
     scale: f32,
 }
 
 impl Backend {
+    /// Create a backend with output scale at least one; return None on setup failure.
     pub fn new(scale: f32) -> Option<Self> {
         Self::from_context(Arc::new(Context::new()?), scale)
     }
@@ -163,6 +179,7 @@ impl Backend {
         Self::from_context(context, host.render_scale)
     }
 
+    /// Allocate a pool in the lazy arena and return its guest GPU base, or None.
     pub fn allocate_pool(&mut self, key: u64, storage: u64, size: u64) -> Option<u64> {
         if self.global_memory.is_none() {
             self.global_memory = Some(GlobalMemory::new(
@@ -175,6 +192,7 @@ impl Backend {
             .allocate_pool(key, storage, size)
     }
 
+    /// Release a pool and its dependent textures; return whether it existed.
     pub fn release_pool(&mut self, key: u64) -> bool {
         let textures: Vec<_> = self
             .bindings
@@ -206,6 +224,7 @@ impl Backend {
         })
     }
 
+    /// Install validated image rules before any arena image bindings exist.
     pub fn set_image_contract(&mut self, contract: image_layout::ImageContract) -> bool {
         if contract.validate().is_err() || !self.bindings.is_empty() {
             return false;
@@ -214,10 +233,12 @@ impl Backend {
         true
     }
 
+    /// Return the shared execution context owned by this backend.
     pub fn context(&self) -> &Arc<Context> {
         &self.context
     }
 
+    /// Create or reuse a color or depth image for the key; return false on failure.
     pub fn ensure(&mut self, key: u64, width: u64, height: u64, depth: bool) -> bool {
         self.images.ensure(key, width, height, depth)
     }
@@ -396,6 +417,7 @@ impl Backend {
         self.images.sampled(key)
     }
 
+    /// Upload a whole typed image in packed-linear order; return false on failure.
     pub fn upload_image(&mut self, key: u64, bytes: &[u8]) -> bool {
         self.images.upload(key, bytes).is_some()
     }
@@ -411,6 +433,7 @@ impl Backend {
         self.transfer_tiled(key, pool, offset, packing, true)
             .is_some()
     }
+    /// Write an image into tiled arena storage; return false for invalid ranges or transfers.
     pub fn store_tiled(
         &mut self,
         key: u64,
@@ -428,6 +451,7 @@ impl Backend {
     ) -> bool {
         self.transfer_tiled_batch(resources, true).is_some()
     }
+    /// Store up to 256 image transfers with shared scratch and submission.
     pub fn store_tiled_batch(
         &mut self,
         resources: &[(u64, u64, u64, &crate::tiling::Layout)],
@@ -486,12 +510,14 @@ impl Backend {
         self.images.wait().is_some()
     }
 
+    /// Remove the image and arena binding for a texture key.
     pub fn release_texture(&mut self, key: u64) {
         self.images.remove(key);
         self.bindings.remove(&key);
         self.tiled.remove(&key);
     }
 
+    /// Clear selected RGBA channels; mask bits zero through three select channels.
     pub fn clear_color(&mut self, key: u64, color: [f32; 4], mask: u32) -> bool {
         (|| {
             self.sync_texture(key, true)?;
@@ -501,6 +527,7 @@ impl Backend {
         .is_some()
     }
 
+    /// Clear a depth image; the current depth-only path does not use stencil.
     pub fn clear_depth(&mut self, key: u64, depth: f32, stencil: u32) -> bool {
         if stencil != 0 {
             return false;
@@ -542,11 +569,13 @@ impl Backend {
         Some(())
     }
 
+    /// Return unscaled RGBA image bytes and dimensions, or None on failure.
     pub fn readback(&mut self, key: u64) -> Option<(u32, u32, Vec<u8>)> {
         self.sync_texture(key, true)?;
         self.images.readback(key)
     }
 
+    /// Upload tightly packed four-byte color texels into the keyed image.
     pub fn upload(&mut self, key: u64, data: &[u8], width: u64, height: u64) -> bool {
         (|| {
             if !self.ensure(key, width, height, false) {
@@ -576,6 +605,7 @@ impl Backend {
         .is_some()
     }
 
+    /// Copy equal-format image regions; return false for unsupported or invalid regions.
     pub fn copy_region(
         &mut self,
         destination: u64,
@@ -591,6 +621,7 @@ impl Backend {
         })()
         .is_some()
     }
+    /// Blit compatible image regions with the selected filter; return false on failure.
     pub fn blit_region(
         &mut self,
         destination: u64,
@@ -609,6 +640,7 @@ impl Backend {
         .is_some()
     }
 
+    /// Copy a whole image between existing compatible images; return false on failure.
     pub fn copy(&mut self, destination: u64, source: u64) -> bool {
         (|| {
             self.sync_texture(source, true)?;
