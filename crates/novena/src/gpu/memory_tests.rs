@@ -408,7 +408,7 @@ fn storage_bindings_and_query_reports_download_bounded_ranges() {
     let info = memory.storage_buffer_info(1, 4096, 4).unwrap();
     let mut execution = crate::gpu::operations::Execution::new(&memory.context).unwrap();
     execution
-        .dispatch(&memory, &compute_shader("#version 450\nlayout(local_size_x=1) in; layout(set=0,binding=0,std430) buffer Data { uint value; } data; void main() { data.value += 1; }\n"), &[(0, 0, info)], [1, 1, 1], None)
+        .dispatch(&memory, &compute_shader("#version 450\nlayout(local_size_x=1) in; layout(set=0,binding=0,std430) buffer Data { uint value; } data; void main() { data.value += 1; }\n"), false, &[(0, 0, info)], [1, 1, 1], None)
         .unwrap();
     let mut outputs = Vec::new();
     assert!(memory.download(|address, bytes| {
@@ -478,6 +478,7 @@ fn readonly_storage_bindings_produce_no_writeback() {
         .dispatch(
             &memory,
             &words,
+            false,
             &[(0, 0, source), (0, 1, destination)],
             [1, 1, 1],
             None,
