@@ -28,3 +28,7 @@ range, and render-target fields are decoded in the recording list.
 [Signatures 0010](0010-remaining-command-state.md) adds explicit records for
 firm state fields. Vertex state bindings retain counted snapshots with explicit
 host object spacing. Unresolved calls still retain raw registers.
+
+2026-10-09: [Provenance 0037](../provenance/0037-command-execution.md) documents
+opt-in execution of the retained instancing order and public Vulkan-style
+indirect records. Neither choice recovers an unobserved guest layout.

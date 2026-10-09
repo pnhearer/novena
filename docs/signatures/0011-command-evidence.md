@@ -329,3 +329,7 @@ The links preserve all three runs rather than selecting a matching sample.
 | SyncWait | [block](../shapes/0001-program-a-startup.txt#L2442-L2461) | [block](../shapes/0002-program-a-startup-pointees.txt#L9040-L9128) | [block](../shapes/0003-program-a-startup-answers.txt#L9055-L9142) |
 | QueueWaitSync | [block](../shapes/0001-program-a-startup.txt#L2142-L2161) | [block](../shapes/0002-program-a-startup-pointees.txt#L7736-L7832) | [block](../shapes/0003-program-a-startup-answers.txt#L7750-L7846) |
 | WindowAcquireTexture | [block](../shapes/0001-program-a-startup.txt#L3182-L3201) | [block](../shapes/0002-program-a-startup-pointees.txt#L11799-L11903) | [block](../shapes/0003-program-a-startup-answers.txt#L11799-L11903) |
+
+2026-10-09: [Provenance 0037](../provenance/0037-command-execution.md) adds
+deferred opaque texture-clear recording and an opt-in host decoder. The six
+shape observations still do not establish the clear record layout.

@@ -1446,7 +1446,10 @@ void main() { color = shade * 0.25 + 0.5; }
     submit(&f.instance, &f.state, Status::BadArgument);
     record(0x80, 256, 0x800, false);
     submit(&f.instance, &f.state, Status::Unimplemented);
-    call(&f.instance, "nvnVertexStreamStateSetDivisor", &[68, 1]);
+    let divisor_name = functions::all()
+        .find(|(_, name)| name.get(3..) == Some("VertexStreamStateSetDivisor"))
+        .unwrap().1;
+    call(&f.instance, divisor_name, &[68, 2]);
     record(0x80, 256, 0x800, true);
     submit(&f.instance, &f.state, Status::Unimplemented);
     call(&f.instance, "nvnVertexStreamStateSetDivisor", &[68, 0]);

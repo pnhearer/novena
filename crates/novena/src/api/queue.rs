@@ -134,6 +134,8 @@ pub(crate) fn execute(
             let mut target_views = [0, 0];
             #[cfg(feature = "vulkan")]
             let mut draw_state = super::drawing::State::default();
+            #[cfg(feature = "vulkan")]
+            let mut operation_state = super::operations::State::default();
             let mut commands = commands;
             for command in commands.drain(..) {
                 #[cfg(feature = "vulkan")]
@@ -152,6 +154,34 @@ pub(crate) fn execute(
                         if backend.finish_draws().is_none() {
                             return Status::InternalError;
                         }
+                    }
+                }
+                #[cfg(feature = "vulkan")]
+                if let Some(backend) = gpu.as_mut() {
+                    if let Some(result) = operation_state.execute(
+                        &command,
+                        instance,
+                        backend,
+                        &mut draw_state,
+                        super::operations::Targets {
+                            colors: &targets,
+                            depth: depth_target,
+                            views: target_views,
+                        },
+                    ) {
+                        if let Err(status) = result {
+                            return status;
+                        }
+                        continue;
+                    }
+                    if !operation_state.enabled
+                        && matches!(
+                            command,
+                            RecordedCommand::DrawArrays { .. }
+                                | RecordedCommand::DrawElementsBaseVertex { .. }
+                        )
+                    {
+                        continue;
                     }
                 }
                 match command {
@@ -376,6 +406,7 @@ pub(crate) fn execute(
                                     depth: depth_target,
                                     views: target_views,
                                     primitive,
+                                    geometry: crate::gpu::operations::Geometry::default(),
                                     vertices: super::drawing::Vertices::Arrays { first },
                                     count,
                                 },
@@ -404,6 +435,7 @@ pub(crate) fn execute(
                                     depth: depth_target,
                                     views: target_views,
                                     primitive,
+                                    geometry: crate::gpu::operations::Geometry::default(),
                                     count,
                                     vertices: super::drawing::Vertices::Elements {
                                         index_type,
@@ -426,7 +458,8 @@ pub(crate) fn execute(
                         );
                         return Status::Unimplemented;
                     }
-                    RecordedCommand::DrawArraysInstanced { .. } => return Status::Unimplemented,
+                    RecordedCommand::Operation { .. }
+                    | RecordedCommand::DrawArraysInstanced { .. } => return Status::Unimplemented,
                     command @ (RecordedCommand::SetViewport(_)
                     | RecordedCommand::SetScissor(_)
                     | RecordedCommand::SetDepthRange(_)

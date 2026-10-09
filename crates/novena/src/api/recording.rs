@@ -70,17 +70,6 @@ pub fn handler(name: &str) -> Option<Handler> {
             signal_event(instance, registers.x[1], if value == 0 { 1 } else { value });
             Status::Ok
         },
-        // ReportCounter writes a report to graphics memory. The report's
-        // layout is not observed; sixteen bytes with a non-zero timestamp
-        // in the second word is novena's guess at what a reader waits for.
-        "nvnCommandBufferReportCounter" => |instance, _, registers| {
-            let report = instance.next_counter_report();
-            let mut bytes = [0u8; 16];
-            bytes[..8].copy_from_slice(&0u64.to_le_bytes());
-            bytes[8..].copy_from_slice(&report.to_le_bytes());
-            instance.write_memory(registers.x[2], &bytes);
-            Status::Ok
-        },
         "nvnCommandBufferBeginRecording" => |instance, _, registers| {
             if !instance.objects.begin_recording(registers.x[0]) {
                 return Status::BadArgument;

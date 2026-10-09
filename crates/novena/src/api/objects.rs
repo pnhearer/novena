@@ -13,6 +13,13 @@ use std::sync::{Arc, Mutex, MutexGuard};
 /// Owned command and argument snapshots produced by recording.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RecordedCommand {
+    /// Deferred command hypotheses. See provenance 0037.
+    Operation {
+        /// Unprefixed command family.
+        kind: &'static str,
+        /// Full-width arguments, excluding the command object.
+        arguments: [u64; 7],
+    },
     /// Select retained color and depth texture keys with opaque view arguments.
     SetRenderTargets {
         /// Color texture object keys in attachment order.

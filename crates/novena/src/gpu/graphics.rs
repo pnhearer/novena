@@ -179,6 +179,9 @@ impl ColorAttachmentState {
     Clone, Copy, Debug, Default, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize,
 )]
 pub struct DrawPipelineState {
+    /// Binding bits selecting one element per instance.
+    #[serde(default)]
+    pub instance_bindings: u32,
     /// Zero preserves the original single-target retry contract. Otherwise 1 through 8.
     pub color_count: u32,
     /// Per-attachment blend and channel-mask state.
@@ -747,7 +750,8 @@ impl GraphicsPipeline {
             return Err("too many vertex attributes".into());
         }
         for binding in &key.input.bindings {
-            if binding.binding >= limits.max_vertex_input_bindings
+            if binding.binding >= 32
+                || binding.binding >= limits.max_vertex_input_bindings
                 || binding.stride > limits.max_vertex_input_binding_stride
             {
                 return Err("vertex binding exceeds device limits".into());
@@ -1038,7 +1042,11 @@ impl GraphicsPipeline {
                 vk::VertexInputBindingDescription::default()
                     .binding(b.binding)
                     .stride(b.stride)
-                    .input_rate(vk::VertexInputRate::VERTEX)
+                    .input_rate(if key.state.instance_bindings & (1 << b.binding) != 0 {
+                        vk::VertexInputRate::INSTANCE
+                    } else {
+                        vk::VertexInputRate::VERTEX
+                    })
             })
             .collect();
         let attributes: Vec<_> = key
@@ -1339,10 +1347,23 @@ impl GraphicsPipeline {
         vertices: DrawVertices,
         count: u32,
         bind_index: bool,
+        geometry: super::operations::Geometry,
     ) {
         let device = &self.context.device;
         match vertices {
-            DrawVertices::Arrays { first } => device.cmd_draw(command, count, 1, first, 0),
+            DrawVertices::Arrays { first } => {
+                if let Some((buffer, offset)) = geometry.indirect {
+                    device.cmd_draw_indirect(command, buffer, offset, 1, 16);
+                } else {
+                    device.cmd_draw(
+                        command,
+                        count,
+                        geometry.instances,
+                        first,
+                        geometry.first_instance,
+                    );
+                }
+            }
             DrawVertices::Elements {
                 buffer,
                 offset,
@@ -1350,9 +1371,25 @@ impl GraphicsPipeline {
                 base_vertex,
             } => {
                 if bind_index {
-                    device.cmd_bind_index_buffer(command, buffer, offset, index_type);
+                    device.cmd_bind_index_buffer(
+                        command,
+                        buffer,
+                        offset - geometry.index_skip,
+                        index_type,
+                    );
                 }
-                device.cmd_draw_indexed(command, count, 1, 0, base_vertex, 0);
+                if let Some((buffer, offset)) = geometry.indirect {
+                    device.cmd_draw_indexed_indirect(command, buffer, offset, 1, 20);
+                } else {
+                    device.cmd_draw_indexed(
+                        command,
+                        count,
+                        geometry.instances,
+                        0,
+                        base_vertex,
+                        geometry.first_instance,
+                    );
+                }
             }
         }
     }
@@ -1387,7 +1424,8 @@ struct DescriptorCache {
     ids: HashMap<DescriptorKey, usize>,
     entries: Vec<Arc<DrawDescriptors>>,
 }
-pub(super) struct PendingDraw {
+pub(crate) struct PendingDraw {
+    pub geometry: super::operations::Geometry,
     pub pipeline: Arc<GraphicsPipeline>,
     pub state: Arc<Draw>,
     pub vertices: DrawVertices,

@@ -192,7 +192,6 @@ pub struct InstanceState {
     handlers: Vec<Option<Handler>>,
     /// A rising count that stands in for the graphics processor's clock in
     /// counter reports.
-    counter_reports: AtomicU64,
     requested: Vec<AtomicBool>,
     calls: Vec<AtomicU64>,
     shapes: Vec<Mutex<FunctionShape>>,
@@ -245,7 +244,6 @@ impl InstanceState {
             handlers: functions::all()
                 .map(|(_, name)| api::handler(name))
                 .collect(),
-            counter_reports: AtomicU64::new(1),
             requested: (0..count).map(|_| AtomicBool::new(false)).collect(),
             calls: (0..count).map(|_| AtomicU64::new(0)).collect(),
             shapes: (0..count).map(|_| Mutex::default()).collect(),
@@ -409,6 +407,26 @@ impl InstanceState {
     /// The host this instance was created with.
     pub fn host(&self) -> Option<&Host> {
         self.host.as_ref()
+    }
+
+    /// Select explicit command hypotheses. See provenance 0037.
+    #[cfg(feature = "vulkan")]
+    pub fn set_command_contract(
+        &self,
+        contract: Option<crate::gpu::operations::CommandContract>,
+    ) -> bool {
+        if contract.as_ref().is_some_and(|c| !c.valid()) {
+            return false;
+        }
+        let mut gpu = self.gpu.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(backend) = gpu.as_mut() else {
+            return false;
+        };
+        if backend.finish_draws().is_none() {
+            return false;
+        }
+        backend.command_contract = contract;
+        true
     }
 
     /// Enable the bounded first draw experiment with explicit host enum choices.
@@ -759,10 +777,6 @@ impl InstanceState {
                 None
             }
         }
-    }
-
-    pub(crate) fn next_counter_report(&self) -> u64 {
-        self.counter_reports.fetch_add(1, Ordering::Relaxed) << 10
     }
 
     /// Read program memory through the host. False when there is no host,
