@@ -58,11 +58,11 @@ fn fill_linear(layout: &Layout) -> Vec<u8> {
         for (level_index, level) in layout.levels().iter().enumerate() {
             for z in 0..level.blocks[2] {
                 for y in 0..level.blocks[1] {
-                    for x in 0..level.row_bytes {
-                        let at = layout
-                            .linear_byte_offset(level_index as u32, layer, x as u32, y, z)
-                            .unwrap();
-                        bytes[at] = (at as u8).wrapping_mul(37).wrapping_add(11);
+                    let at = layout
+                        .linear_byte_offset(level_index as u32, layer, 0, y, z)
+                        .unwrap();
+                    for (x, byte) in bytes[at..at + level.row_bytes].iter_mut().enumerate() {
+                        *byte = ((at + x) as u8).wrapping_mul(37).wrapping_add(11);
                     }
                 }
             }
@@ -81,18 +81,31 @@ fn useful_bytes(layout: &Layout) -> usize {
 }
 
 fn loops_for(bytes: usize) -> usize {
-    (512 * 1024 * 1024usize / bytes.max(1)).clamp(8, 20_000)
+    std::env::var("TEXTURE_BENCH_LOOPS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| (512 * 1024 * 1024usize / bytes.max(1)).clamp(8, 20_000))
 }
 
 fn measure(mut run: impl FnMut(), loops: usize) -> Duration {
     for _ in 0..3 {
         run();
     }
-    let start = Instant::now();
-    for _ in 0..loops {
-        run();
+    let samples = std::env::var("TEXTURE_BENCH_SAMPLES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3usize)
+        .max(1);
+    let mut times = Vec::with_capacity(samples);
+    for _ in 0..samples {
+        let start = Instant::now();
+        for _ in 0..loops {
+            run();
+        }
+        times.push(start.elapsed());
     }
-    start.elapsed()
+    times.sort_unstable();
+    times[times.len() / 2]
 }
 
 fn rate(bytes: usize, loops: usize, duration: Duration) -> f64 {
@@ -168,81 +181,90 @@ fn main() {
             },
         },
     ];
-    let workers = std::thread::available_parallelism().map_or(1, usize::from);
+    let workers = std::env::var("TEXTURE_BENCH_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from));
     println!("case useful_bytes loops memcpy_ms memcpy_gbps encode_ms encode_gbps decode_ms decode_gbps parallel_encode_ms parallel_encode_gbps parallel_decode_ms parallel_decode_gbps workers");
-    for case in cases {
-        let layout = Layout::new(
-            case.shape,
-            BlockFormat {
-                width: 1,
-                height: 1,
-                bytes: 4,
-            },
-            TileShape {
-                height_log2: 4,
-                depth_log2: 3,
-            },
-        )
-        .unwrap();
-        let pattern = fill_linear(&layout);
-        for (alignment, aligned) in [("normal16", false), ("aligned64", true)] {
-            let mut linear = AlignedBytes::new(layout.linear_size(), 0x5a, aligned);
-            linear.copy_from_slice(&pattern);
-            let mut tiled = AlignedBytes::new(layout.tiled_size(), 0xc3, aligned);
-            layout.encode(&linear, &mut tiled).unwrap();
-            let mut decoded = AlignedBytes::new(layout.linear_size(), 0x5a, aligned);
-            layout.decode(&tiled, &mut decoded).unwrap();
-            assert_eq!(&*decoded, &*linear);
-            black_box(
-                decoded
-                    .iter()
-                    .fold(0u8, |sum, byte| sum.wrapping_add(*byte)),
-            );
-            let useful = useful_bytes(&layout);
-            let loops = loops_for(useful);
-            let mut copied = vec![0; linear.len()];
-            let memcpy = measure(|| copied.copy_from_slice(black_box(&linear)), loops);
-            let serial_encode = measure(
-                || {
-                    layout
-                        .encode(black_box(&linear), black_box(&mut tiled))
-                        .unwrap();
+    let filter = std::env::args().nth(1).unwrap_or_default();
+    for bytes in [1, 2, 4, 8, 16] {
+        for case in &cases {
+            if !format!("{}-b{}", case.name, bytes).contains(&filter) {
+                continue;
+            }
+            let layout = Layout::new(
+                case.shape,
+                BlockFormat {
+                    width: 1,
+                    height: 1,
+                    bytes,
                 },
-                loops,
-            );
-            let serial_decode = measure(
-                || {
-                    layout
-                        .decode(black_box(&tiled), black_box(&mut decoded))
-                        .unwrap();
+                TileShape {
+                    height_log2: 4,
+                    depth_log2: 3,
                 },
-                loops,
-            );
-            let parallel_encode = measure(
-                || {
-                    layout
-                        .encode_parallel(black_box(&linear), black_box(&mut tiled), workers)
-                        .unwrap();
-                },
-                loops,
-            );
-            let parallel_decode = measure(
-                || {
-                    layout
-                        .decode_parallel(black_box(&tiled), black_box(&mut decoded), workers)
-                        .unwrap();
-                },
-                loops,
-            );
-            black_box(tiled.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
-            black_box(
-                decoded
-                    .iter()
-                    .fold(0u8, |sum, byte| sum.wrapping_add(*byte)),
-            );
-            println!(
-                "{}-{} {} {} {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} {}",
+            )
+            .unwrap();
+            let pattern = fill_linear(&layout);
+            for (alignment, aligned) in [("normal16", false), ("aligned64", true)] {
+                let mut linear = AlignedBytes::new(layout.linear_size(), 0x5a, aligned);
+                linear.copy_from_slice(&pattern);
+                let mut tiled = AlignedBytes::new(layout.tiled_size(), 0xc3, aligned);
+                layout.encode(&linear, &mut tiled).unwrap();
+                let mut decoded = AlignedBytes::new(layout.linear_size(), 0x5a, aligned);
+                layout.decode(&tiled, &mut decoded).unwrap();
+                assert_eq!(&*decoded, &*linear);
+                black_box(
+                    decoded
+                        .iter()
+                        .fold(0u8, |sum, byte| sum.wrapping_add(*byte)),
+                );
+                let useful = useful_bytes(&layout);
+                let loops = loops_for(useful);
+                let mut copied = vec![0; linear.len()];
+                let memcpy = measure(|| copied.copy_from_slice(black_box(&linear)), loops);
+                let serial_encode = measure(
+                    || {
+                        layout
+                            .encode(black_box(&linear), black_box(&mut tiled))
+                            .unwrap();
+                    },
+                    loops,
+                );
+                let serial_decode = measure(
+                    || {
+                        layout
+                            .decode(black_box(&tiled), black_box(&mut decoded))
+                            .unwrap();
+                    },
+                    loops,
+                );
+                let parallel_encode = measure(
+                    || {
+                        layout
+                            .encode_parallel(black_box(&linear), black_box(&mut tiled), workers)
+                            .unwrap();
+                    },
+                    loops,
+                );
+                let parallel_decode = measure(
+                    || {
+                        layout
+                            .decode_parallel(black_box(&tiled), black_box(&mut decoded), workers)
+                            .unwrap();
+                    },
+                    loops,
+                );
+                black_box(tiled.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+                black_box(
+                    decoded
+                        .iter()
+                        .fold(0u8, |sum, byte| sum.wrapping_add(*byte)),
+                );
+                println!(
+                "{}-b{}-{} {} {} {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} {:.3} {}",
                 case.name,
+                bytes,
                 alignment,
                 useful,
                 loops,
@@ -258,6 +280,7 @@ fn main() {
                 rate(useful, loops, parallel_decode),
                 workers
             );
+            }
         }
     }
 }

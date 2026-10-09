@@ -551,24 +551,55 @@ impl Images {
         if self.transfer.is_none() {
             self.transfer = Some(Transfer::new(&self.context)?);
         }
-        let required = resources.iter().map(|r| r.2.linear_size()).max()?;
+        // Reordering is valid only for unique images and disjoint arena ranges.
+        let grouped = resources.iter().all(|r| r.2.linear_size() <= 256 * 1024)
+            && resources
+                .iter()
+                .enumerate()
+                .all(|(i, &(key, address, layout))| {
+                    resources[..i].iter().all(|&(other, start, packing)| {
+                        key != other
+                            && (address >= start + packing.tiled_size() as u64
+                                || start >= address + layout.tiled_size() as u64)
+                    })
+                });
+        let mut offsets = Vec::with_capacity(resources.len());
+        let mut span = 0usize;
+        for &(_, _, packing) in resources {
+            offsets.push(if grouped { span } else { 0 });
+            let size = packing.linear_size().checked_add(255)? & !255;
+            span = if grouped {
+                span.checked_add(size)?
+            } else {
+                span.max(size)
+            };
+        }
+        let required = span.checked_mul(self.commands.slots())?;
         if self.transfer.as_ref()?.capacity() < required {
             self.commands.wait()?;
             self.commands.invalidate_cached();
         }
         self.transfer.as_mut()?.ensure_capacity(required)?;
+        // Keep the slot stride fixed until allocation growth waits for every fence.
+        let ring_stride = self.transfer.as_ref()?.capacity() / self.commands.slots();
+        let ring_base = ring_stride.checked_mul(self.commands.slot())?;
+        for offset in &mut offsets {
+            *offset = offset.checked_add(ring_base)?;
+        }
         let transfer = self.transfer.as_ref()?;
         let cache = resources
             .iter()
-            .map(|&(key, address, packing)| {
+            .zip(&offsets)
+            .map(|(&(key, address, packing), &offset)| {
                 let image = &self.images[&key];
                 super::commands::TransferKey {
                     image: image.info.image.as_raw(),
                     scratch: transfer.buffer().as_raw(),
                     address,
-                    scratch_address: transfer.address(),
+                    scratch_address: transfer.address() + offset as u64,
                     layout: image.info.layout.as_raw(),
                     load,
+                    conversion: true,
                     packing: packing.clone(),
                 }
             })
@@ -578,11 +609,17 @@ impl Images {
             return self.commands.submit(false, None);
         }
         let transfer = self.transfer.as_ref()?;
-        for &(key, address, packing) in resources {
-            let image = self.images.get_mut(&key)?;
+        buffer_barrier(&self.context.device, cmd);
+        if grouped && load {
+            for (&(_, address, packing), &offset) in resources.iter().zip(&offsets) {
+                transfer.record_disjoint(cmd, address, packing, true, offset)?;
+            }
             buffer_barrier(&self.context.device, cmd);
-            if load {
-                transfer.record(cmd, address, packing, true)?;
+        }
+        for (&(key, address, packing), &offset) in resources.iter().zip(&offsets) {
+            let image = self.images.get_mut(&key)?;
+            if !grouped && load {
+                transfer.record_at(cmd, address, packing, true, offset)?;
             }
             image.transition(
                 cmd,
@@ -592,7 +629,7 @@ impl Images {
                     vk::ImageLayout::TRANSFER_SRC_OPTIMAL
                 },
             );
-            let regions = buffer_regions(image.info, image.packing.as_ref(), 0);
+            let regions = buffer_regions(image.info, image.packing.as_ref(), offset as u64);
             unsafe {
                 if load {
                     self.context.device.cmd_copy_buffer_to_image(
@@ -612,12 +649,108 @@ impl Images {
                     );
                 }
             }
-            if !load {
+            if !grouped {
                 buffer_barrier(&self.context.device, cmd);
-                transfer.record(cmd, address, packing, false)?;
+                if !load {
+                    transfer.record_at(cmd, address, packing, false, offset)?;
+                }
+            }
+        }
+        buffer_barrier(&self.context.device, cmd);
+        if grouped && !load {
+            for (&(_, address, packing), &offset) in resources.iter().zip(&offsets) {
+                transfer.record_disjoint(cmd, address, packing, false, offset)?;
             }
             buffer_barrier(&self.context.device, cmd);
         }
+        self.commands.submit(false, None)
+    }
+
+    pub fn linear_batch(
+        &mut self,
+        resources: &[(u64, vk::Buffer, u64, &Layout)],
+        load: bool,
+    ) -> Option<()> {
+        if resources.is_empty() || resources.len() > 256 {
+            return None;
+        }
+        let mut cache = Vec::with_capacity(resources.len());
+        for &(key, buffer, offset, supplied) in resources {
+            let image = self.images.get(&key)?;
+            let packing = image.packing.as_ref()?;
+            if image.info.shape != supplied.shape() || packing.format() != supplied.format() {
+                return None;
+            }
+            let alignment = u64::from(packing.format().bytes).max(4);
+            if buffer == vk::Buffer::null() || !offset.is_multiple_of(alignment) {
+                return None;
+            }
+            offset.checked_add(packing.linear_size() as u64)?;
+            cache.push(super::commands::TransferKey {
+                image: image.info.image.as_raw(),
+                scratch: buffer.as_raw(),
+                address: offset,
+                scratch_address: 0,
+                layout: image.info.layout.as_raw(),
+                load,
+                conversion: false,
+                packing: packing.clone(),
+            });
+        }
+        let ordered = resources
+            .iter()
+            .enumerate()
+            .any(|(i, &(key, buffer, offset, packing))| {
+                resources[..i]
+                    .iter()
+                    .any(|&(other_key, other, start, layout)| {
+                        key == other_key
+                            || (!load
+                                && buffer == other
+                                && offset < start + layout.linear_size() as u64
+                                && start < offset + packing.linear_size() as u64)
+                    })
+            });
+        let (cmd, reused) = self.commands.begin_cached(cache)?;
+        if reused {
+            return self.commands.submit(false, None);
+        }
+        buffer_barrier(&self.context.device, cmd);
+        for &(key, buffer, offset, _) in resources {
+            let image = self.images.get_mut(&key)?;
+            image.transition(
+                cmd,
+                if load {
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL
+                } else {
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL
+                },
+            );
+            let regions = buffer_regions(image.info, image.packing.as_ref(), offset);
+            unsafe {
+                if load {
+                    self.context.device.cmd_copy_buffer_to_image(
+                        cmd,
+                        buffer,
+                        image.info.image,
+                        image.info.layout,
+                        &regions,
+                    );
+                } else {
+                    self.context.device.cmd_copy_image_to_buffer(
+                        cmd,
+                        image.info.image,
+                        image.info.layout,
+                        buffer,
+                        &regions,
+                    );
+                }
+            }
+            if ordered {
+                buffer_barrier(&self.context.device, cmd);
+            }
+        }
+        buffer_barrier(&self.context.device, cmd);
         self.commands.submit(false, None)
     }
 

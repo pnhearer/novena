@@ -20,6 +20,7 @@ pub(super) struct TransferKey {
     pub layout: i32,
     /// True copies arena storage to the image; false copies it back.
     pub load: bool,
+    pub conversion: bool,
     /// Checked byte packing for the image storage.
     pub packing: crate::tiling::Layout,
 }
@@ -97,6 +98,14 @@ impl Commands {
             };
         }
         Some(commands)
+    }
+
+    pub fn slot(&self) -> usize {
+        self.next
+    }
+
+    pub fn slots(&self) -> usize {
+        self.frames.len()
     }
 
     /// Wait and discard cached recordings before their resources change.

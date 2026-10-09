@@ -261,34 +261,76 @@ impl Transfer {
         layout: &Layout,
         load: bool,
     ) -> Option<()> {
+        self.record_at(command, arena_address, layout, load, 0)
+    }
+
+    /// Records into a checked staging range. The caller owns queue ordering.
+    pub fn record_at(
+        &self,
+        command: vk::CommandBuffer,
+        arena_address: u64,
+        layout: &Layout,
+        load: bool,
+        offset: usize,
+    ) -> Option<()> {
+        self.record_range(command, arena_address, layout, load, offset, true)
+    }
+
+    /// Disjoint dispatches share dependencies supplied by the batch recorder.
+    pub(super) fn record_disjoint(
+        &self,
+        command: vk::CommandBuffer,
+        arena_address: u64,
+        layout: &Layout,
+        load: bool,
+        offset: usize,
+    ) -> Option<()> {
+        self.record_range(command, arena_address, layout, load, offset, false)
+    }
+
+    fn record_range(
+        &self,
+        command: vk::CommandBuffer,
+        arena_address: u64,
+        layout: &Layout,
+        load: bool,
+        offset: usize,
+        synchronize: bool,
+    ) -> Option<()> {
         let scratch = self.scratch.as_ref()?;
         if arena_address == 0
             || !arena_address.is_multiple_of(4)
-            || layout.linear_size() > scratch.capacity
+            || !offset.is_multiple_of(16)
+            || offset.checked_add(layout.linear_size())? > scratch.capacity
             || self.max_groups == 0
         {
             return None;
         }
+        let linear_address = scratch.address.checked_add(u64::try_from(offset).ok()?)?;
         let arena_end = arena_address.checked_add(u64::try_from(layout.tiled_size()).ok()?)?;
-        let scratch_end = scratch
-            .address
-            .checked_add(u64::try_from(layout.linear_size()).ok()?)?;
-        if arena_address < scratch_end && scratch.address < arena_end {
+        let scratch_end = linear_address.checked_add(u64::try_from(layout.linear_size()).ok()?)?;
+        if arena_address < scratch_end && linear_address < arena_end {
             return None;
         }
         let device = &self.context.device;
         unsafe {
-            device.cmd_pipeline_barrier(
-                command,
-                vk::PipelineStageFlags::ALL_COMMANDS | vk::PipelineStageFlags::HOST,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(),
-                &[vk::MemoryBarrier::default()
-                    .src_access_mask(vk::AccessFlags::MEMORY_WRITE | vk::AccessFlags::HOST_WRITE)
-                    .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)],
-                &[],
-                &[],
-            );
+            if synchronize {
+                device.cmd_pipeline_barrier(
+                    command,
+                    vk::PipelineStageFlags::ALL_COMMANDS | vk::PipelineStageFlags::HOST,
+                    vk::PipelineStageFlags::COMPUTE_SHADER,
+                    vk::DependencyFlags::empty(),
+                    &[vk::MemoryBarrier::default()
+                        .src_access_mask(
+                            vk::AccessFlags::MEMORY_WRITE | vk::AccessFlags::HOST_WRITE,
+                        )
+                        .dst_access_mask(
+                            vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
+                        )],
+                    &[],
+                    &[],
+                );
+            }
             device.cmd_bind_pipeline(command, vk::PipelineBindPoint::COMPUTE, self.pipeline);
         }
         for layer in 0..layout.shape().layers {
@@ -314,8 +356,7 @@ impl Transfer {
                 }
                 let mut parameters = Parameters {
                     tiled_address: arena_address.checked_add(u64::try_from(tiled_offset).ok()?)?,
-                    linear_address: scratch
-                        .address
+                    linear_address: linear_address
                         .checked_add(u64::try_from(linear_offset).ok()?)?,
                     row_bytes: u64::try_from(level.row_bytes).ok()?,
                     tiled_size: u64::try_from(level.tiled_size).ok()?,
@@ -358,22 +399,24 @@ impl Transfer {
                 }
             }
         }
-        unsafe {
-            device.cmd_pipeline_barrier(
-                command,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::ALL_COMMANDS | vk::PipelineStageFlags::HOST,
-                vk::DependencyFlags::empty(),
-                &[vk::MemoryBarrier::default()
-                    .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                    .dst_access_mask(
-                        vk::AccessFlags::MEMORY_READ
-                            | vk::AccessFlags::MEMORY_WRITE
-                            | vk::AccessFlags::HOST_READ,
-                    )],
-                &[],
-                &[],
-            );
+        if synchronize {
+            unsafe {
+                device.cmd_pipeline_barrier(
+                    command,
+                    vk::PipelineStageFlags::COMPUTE_SHADER,
+                    vk::PipelineStageFlags::ALL_COMMANDS | vk::PipelineStageFlags::HOST,
+                    vk::DependencyFlags::empty(),
+                    &[vk::MemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                        .dst_access_mask(
+                            vk::AccessFlags::MEMORY_READ
+                                | vk::AccessFlags::MEMORY_WRITE
+                                | vk::AccessFlags::HOST_READ,
+                        )],
+                    &[],
+                    &[],
+                );
+            }
         }
         Some(())
     }
