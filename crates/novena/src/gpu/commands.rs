@@ -31,17 +31,19 @@ struct Frame {
     completion: u64,
     acquire: vk::Semaphore,
     cached: Option<Vec<TransferKey>>,
+    receipt: Option<(super::command_workers::Completion, u64)>,
 }
 
 pub(super) struct Commands {
     context: Arc<Context>,
     frames: Vec<Frame>,
     next: usize,
-    timeline: vk::Semaphore,
+    timeline: Option<Arc<super::command_workers::Timeline>>,
     submitted: u64,
-    failed: bool,
+    capture: Option<super::recording_device::Capture>,
     reusing: bool,
     pending: Option<Vec<TransferKey>>,
+    acknowledge: bool,
 }
 
 impl Commands {
@@ -50,25 +52,25 @@ impl Commands {
         Self::with_capacity(context, FRAMES)
     }
 
+    pub fn with_submission_ack(context: &Arc<Context>) -> Option<Self> {
+        let mut commands = Self::with_capacity(context, 1)?;
+        commands.acknowledge = true;
+        Some(commands)
+    }
+
     pub fn with_capacity(context: &Arc<Context>, capacity: usize) -> Option<Self> {
         let mut commands = Self {
             context: Arc::clone(context),
             frames: Vec::new(),
             next: 0,
-            timeline: vk::Semaphore::null(),
+            timeline: None,
             submitted: 0,
-            failed: false,
+            capture: None,
             reusing: false,
             pending: None,
+            acknowledge: false,
         };
-        let mut ty =
-            vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
-        commands.timeline = unsafe {
-            context
-                .device
-                .create_semaphore(&vk::SemaphoreCreateInfo::default().push_next(&mut ty), None)
-                .ok()?
-        };
+        commands.timeline = Some(super::command_workers::Timeline::new(&context.device)?);
         for _ in 0..capacity {
             let device = &context.device;
             // Own each partially created frame before the next fallible call.
@@ -87,6 +89,7 @@ impl Commands {
                 completion: 0,
                 acquire: vk::Semaphore::null(),
                 cached: None,
+                receipt: None,
             });
             let frame = commands.frames.last_mut()?;
             frame.command = unsafe {
@@ -127,17 +130,24 @@ impl Commands {
 
     /// Begin a fresh command recording and return its reusable completion semaphore.
     pub fn begin(&mut self) -> Option<(vk::CommandBuffer, vk::Semaphore)> {
-        self.begin_with_flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+        self.capture.take();
+        self.reusing = false;
+        self.pending = None;
+        let frame = &self.frames[self.next];
+        self.wait_value(frame.completion)?;
+        self.frames[self.next].cached = None;
+        let capture = super::recording_device::Capture::new();
+        let command = capture.command();
+        self.capture = Some(capture);
+        Some((command, self.frames[self.next].acquire))
     }
 
     /// Select a transfer recording by complete identity; report whether it already exists.
     pub fn begin_cached(&mut self, key: Vec<TransferKey>) -> Option<(vk::CommandBuffer, bool)> {
-        if self.failed {
-            return None;
-        }
         let frame = &self.frames[self.next];
         if frame.cached.as_ref() == Some(&key) {
             self.wait_value(frame.completion)?;
+            self.capture.take();
             self.reusing = true;
             self.pending = None;
             return Some((frame.command, true));
@@ -147,16 +157,17 @@ impl Commands {
         Some((command, false))
     }
 
+    pub fn begin_direct(&mut self) -> Option<(vk::CommandBuffer, vk::Semaphore)> {
+        self.begin_with_flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+    }
     fn begin_with_flags(
         &mut self,
         flags: vk::CommandBufferUsageFlags,
     ) -> Option<(vk::CommandBuffer, vk::Semaphore)> {
+        self.capture.take();
         self.reusing = false;
         self.pending = None;
         self.frames[self.next].cached = None;
-        if self.failed {
-            return None;
-        }
         let frame = &self.frames[self.next];
         let device = &self.context.device;
         self.wait_value(frame.completion)?;
@@ -176,46 +187,35 @@ impl Commands {
 
     /// Submit the selected command; optionally wait and signal the supplied semaphore.
     pub fn submit(&mut self, wait: bool, signal: Option<vk::Semaphore>) -> Option<()> {
-        let frame = &self.frames[self.next];
-        let device = &self.context.device;
-        let buffers = [frame.command];
-        let waits = [frame.acquire];
-        let stages = [vk::PipelineStageFlags::TRANSFER];
         let value = self.submitted.checked_add(1)?;
-        let signals = [self.timeline, signal.unwrap_or(vk::Semaphore::null())];
-        let values = [value, 0];
-        let count = 1 + usize::from(signal.is_some());
-        let wait_values = [0];
-        let mut timeline =
-            vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&values[..count]);
-        if wait {
-            timeline = timeline.wait_semaphore_values(&wait_values);
-        }
-        let mut submit = vk::SubmitInfo::default()
-            .command_buffers(&buffers)
-            .signal_semaphores(&signals[..count])
-            .push_next(&mut timeline);
-        if wait {
-            submit = submit.wait_semaphores(&waits).wait_dst_stage_mask(&stages);
-        }
-        unsafe {
+        let frame = &mut self.frames[self.next];
+        let operations = self.capture.take().map(|capture| capture.finish());
+        let receipt = if let Some(operations) = operations {
+            self.context.command_workers.enqueue_timeline(
+                operations,
+                wait.then_some(frame.acquire),
+                signal,
+                Some((self.timeline.as_ref()?.clone(), value)),
+            )
+        } else {
             if !self.reusing {
-                device.end_command_buffer(frame.command).ok()?;
+                unsafe {
+                    self.context.device.end_command_buffer(frame.command).ok()?;
+                }
             }
-            if device
-                .queue_submit(self.context.queue, &[submit], vk::Fence::null())
-                .is_err()
-            {
-                // A failed submission has no completion value to wait for.
-                self.failed = true;
-                return None;
+            if let Some(key) = self.pending.take() {
+                frame.cached = Some(key);
             }
-        }
+            self.context.command_workers.direct(
+                frame.command,
+                wait.then_some(frame.acquire),
+                signal,
+                (self.timeline.as_ref()?.clone(), value),
+            )
+        };
+        frame.receipt = Some(receipt);
         self.submitted = value;
-        self.frames[self.next].completion = value;
-        if let Some(key) = self.pending.take() {
-            self.frames[self.next].cached = Some(key);
-        }
+        frame.completion = value;
         self.next = (self.next + 1) % self.frames.len();
         Some(())
     }
@@ -230,34 +230,75 @@ impl Commands {
     }
 
     pub fn ready(&self, value: u64) -> Option<bool> {
-        unsafe {
+        let complete = unsafe {
             self.context
                 .device
-                .get_semaphore_counter_value(self.timeline)
-                .ok()
-                .map(|v| v >= value)
+                .get_semaphore_counter_value(self.timeline.as_ref()?.semaphore())
+                .ok()?
+                >= value
+        };
+        if !complete {
+            self.context.command_workers.flush_direct();
+            if let Some(receipt) = self
+                .frames
+                .iter()
+                .find(|f| f.completion == value)
+                .and_then(|f| f.receipt.as_ref())
+            {
+                receipt.0.ready()?;
+            }
         }
+        if complete {
+            if let Some((_, position)) = self
+                .frames
+                .iter()
+                .find(|f| f.completion == value)
+                .and_then(|f| f.receipt.as_ref())
+            {
+                self.context.command_workers.retire(*position);
+            }
+        }
+        Some(complete)
     }
 
     pub fn wait_value(&self, value: u64) -> Option<()> {
-        if self.failed {
-            return None;
-        }
-        if value == 0 {
+        if value == 0 || self.ready(value)? {
             return Some(());
         }
-        let semaphores = [self.timeline];
+        if self.acknowledge {
+            while !self.timeline.as_ref()?.wait_posted(value) {
+                self.context.command_workers.healthy()?;
+            }
+        }
+        let semaphores = [self.timeline.as_ref()?.semaphore()];
         let values = [value];
-        unsafe {
-            self.context
-                .device
-                .wait_semaphores(
-                    &vk::SemaphoreWaitInfo::default()
-                        .semaphores(&semaphores)
-                        .values(&values),
-                    u64::MAX,
-                )
-                .ok()
+        let info = vk::SemaphoreWaitInfo::default()
+            .semaphores(&semaphores)
+            .values(&values);
+        loop {
+            if let Some(receipt) = self
+                .frames
+                .iter()
+                .find(|f| f.completion == value)
+                .and_then(|f| f.receipt.as_ref())
+            {
+                receipt.0.ready()?;
+            }
+            match unsafe { self.context.device.wait_semaphores(&info, 100_000_000) } {
+                Ok(()) => {
+                    if let Some((_, position)) = self
+                        .frames
+                        .iter()
+                        .find(|f| f.completion == value)
+                        .and_then(|f| f.receipt.as_ref())
+                    {
+                        self.context.command_workers.retire(*position);
+                    }
+                    return Some(());
+                }
+                Err(vk::Result::TIMEOUT) => {}
+                Err(_) => return None,
+            }
         }
     }
 }
@@ -265,9 +306,13 @@ impl Commands {
 impl Drop for Commands {
     fn drop(&mut self) {
         let _ = self.wait();
+        if let Some(timeline) = self.timeline.take() {
+            self.context.command_workers.forget_timeline(&timeline);
+            drop(timeline);
+        }
         unsafe {
             let device = &self.context.device;
-            device.destroy_semaphore(self.timeline, None);
+
             for frame in &self.frames {
                 device.destroy_semaphore(frame.acquire, None);
                 device.destroy_command_pool(frame.pool, None);

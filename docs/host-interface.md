@@ -67,7 +67,22 @@ Results come back in `x[0]`, `x[1]` and `d[0]`.
 
 Many arguments are pointers into the program's memory. novena never dereferences them directly, because the program may not share the host's address space. It calls the host's `read_memory` and `write_memory` callbacks. A host whose program does share its address space can implement them as plain copies.
 
-The callbacks can be called from any thread on which the program calls the graphics API.
+Memory callbacks may run on guest threads or on the library's execution thread.
+The host context and callbacks must remain valid until instance destruction
+returns. Queued submissions drain before that return. A callback must not wait
+for completion on its own instance. A call that would drain its own execution
+thread returns an internal error.
+
+Guest submission copies the handle array and claims the finished recordings
+before returning. Interpretation and host memory transfers run in submission
+order. Memory used by submitted commands must stay valid and must not be
+modified until completion. Explicit finish, presentation, and resource changes
+drain earlier work. Completion reports the first pending execution error.
+Validation errors clear after that report; driver failures remain fatal.
+A submitted recording is consumed once. Independent command buffers record
+without a shared recording mutex. A recording may move between threads when
+the caller transfers ownership. Simultaneous calls on the same buffer fail
+immediately rather than waiting for its current owner.
 
 ## What happens today
 

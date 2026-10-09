@@ -5,7 +5,7 @@ use crate::global_memory::{
     AddressMap, Allocator, GUEST_BASE, PUSH_GLOBAL_DELTA_OFFSET, PUSH_GLOBAL_DELTA_SIZE,
 };
 use ash::{vk, Device};
-use std::sync::Arc;
+use std::{cell::Cell, sync::Arc};
 
 /// One buffer and one stable device address for every live guest pool.
 /// Methods require exclusive access, including across queue submission and readback.
@@ -17,6 +17,7 @@ pub struct GlobalMemory {
     mapped: usize,
     addresses: AddressMap,
     allocator: Allocator,
+    revision: Cell<Option<u64>>,
 }
 
 impl GlobalMemory {
@@ -59,9 +60,11 @@ impl GlobalMemory {
             })
             .collect();
         candidates.sort_by_key(|&ty| {
-            !properties.memory_types[ty as usize]
-                .property_flags
-                .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+            let flags = properties.memory_types[ty as usize].property_flags;
+            (
+                !flags.contains(vk::MemoryPropertyFlags::HOST_CACHED),
+                !flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL),
+            )
         });
         let mut flags =
             vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
@@ -115,7 +118,17 @@ impl GlobalMemory {
             mapped: mapped as usize,
             addresses,
             allocator: Allocator::new(size),
+            revision: Cell::new(Some(1)),
         })
+    }
+
+    pub(crate) fn revision(&self) -> Option<u64> {
+        self.revision.get()
+    }
+
+    pub(crate) fn mark_written(&self) {
+        self.revision
+            .set(self.revision.get().and_then(|value| value.checked_add(1)));
     }
 
     /// Return the checked guest-to-device address mapping for the arena.
@@ -223,6 +236,7 @@ impl GlobalMemory {
                     .is_some_and(|end| end <= pool.storage + pool.size)
         });
         let pool = self.allocator.allocate(key, storage, size)?;
+        self.mark_written();
         if !aliased {
             let reserved = (size + 15) & !15;
             // SAFETY: this new block is within the buffer. New or recycled bytes
@@ -249,6 +263,7 @@ impl GlobalMemory {
         if self.context.wait_queue().is_none() {
             return false;
         }
+        self.mark_written();
         self.allocator.release(key)
     }
 
@@ -270,6 +285,7 @@ impl GlobalMemory {
         // flush, and exclusive access prevents simultaneous host or queue writes.
         unsafe {
             self.context.wait_queue()?;
+            self.mark_written();
             std::ptr::copy_nonoverlapping(
                 bytes.as_ptr(),
                 (self.mapped as *mut u8).add(offset as usize),
@@ -310,6 +326,7 @@ impl GlobalMemory {
         if self.context.wait_queue().is_none() {
             return false;
         }
+        self.mark_written();
         let mut bytes = vec![0; 64 * 1024];
         for (key, pool) in pools {
             let mut offset = 0;
@@ -386,7 +403,7 @@ impl GlobalMemory {
         layout: vk::PipelineLayout,
         stages: vk::ShaderStageFlags,
     ) {
-        self.device.cmd_push_constants(
+        super::recording_device::RecordingDevice::new(&self.device).cmd_push_constants(
             command,
             layout,
             stages,

@@ -312,7 +312,7 @@ impl Transfer {
         if arena_address < scratch_end && linear_address < arena_end {
             return None;
         }
-        let device = &self.context.device;
+        let device = &self.context.recorder();
         unsafe {
             if synchronize {
                 device.cmd_pipeline_barrier(

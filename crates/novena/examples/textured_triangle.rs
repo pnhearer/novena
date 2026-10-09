@@ -179,7 +179,7 @@ fn main() {
 
     // The first submission can skip a draw while its pipeline compiles.
     let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
+    let draw_frame = || {
         call(&instance, "CommandBufferBeginRecording", &[7]);
         call(
             &instance,
@@ -220,6 +220,10 @@ fn main() {
         let handle = call(&instance, "CommandBufferEndRecording", &[7]);
         put(&memory, 0x300, &handle.to_le_bytes());
         call(&instance, "QueueSubmitCommands", &[0, 1, 0x300]);
+        call(&instance, "TextureGetLevels", &[4]);
+    };
+    loop {
+        draw_frame();
         let pixels = memory.0.lock().unwrap()[0x2000..0x6000].to_vec();
         if pixels
             .as_chunks::<4>()
@@ -264,7 +268,7 @@ fn main() {
         }
         memory.1.lock().unwrap().samples.clear();
         for frame in 0..batch {
-            call(&instance, "QueueSubmitCommands", &[0, 1, 0x300]);
+            draw_frame();
             if mode == novena::PresentationMode::Mailbox {
                 memory.1.lock().unwrap().pending.clear();
             }
@@ -278,6 +282,16 @@ fn main() {
     }
     if frames != 0 {
         let measurement = memory.1.lock().unwrap();
+        let delivered = if mode == novena::PresentationMode::Mailbox {
+            if tick == 0 {
+                1
+            } else {
+                frames.div_ceil(tick)
+            }
+        } else {
+            frames
+        };
+        assert_eq!(measurement.samples.len(), delivered);
         let n = measurement.samples.len() as f64;
         let mean = measurement.samples.iter().sum::<f64>() / n;
         let variance = measurement

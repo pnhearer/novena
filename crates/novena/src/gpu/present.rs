@@ -290,7 +290,7 @@ impl Window {
             let result = (|| {
                 let target = chain.images[index as usize];
                 record_present(
-                    &self.context.device,
+                    &self.context.recorder(),
                     cmd,
                     source,
                     target,
@@ -300,8 +300,6 @@ impl Window {
                 commands.submit(true, Some(ready))?;
                 chain.images[index as usize].layout = vk::ImageLayout::PRESENT_SRC_KHR;
                 let waits = [ready];
-                let chains = [chain.handle];
-                let indices = [index];
                 chain.in_flight.retain(|&prior| prior != index as usize);
                 let fences = [chain.retired[index as usize]];
                 if chain.presented[index as usize] {
@@ -314,13 +312,14 @@ impl Window {
                     }
                     chain.presented[index as usize] = false;
                 }
-                let mut retirement = vk::SwapchainPresentFenceInfoEXT::default().fences(&fences);
-                let present = vk::PresentInfoKHR::default()
-                    .push_next(&mut retirement)
-                    .wait_semaphores(&waits)
-                    .swapchains(&chains)
-                    .image_indices(&indices);
-                match unsafe { chain.loader.queue_present(self.present_queue, &present) } {
+                match self.context.command_workers.present(
+                    self.present_queue,
+                    &chain.loader,
+                    chain.handle,
+                    index,
+                    &waits,
+                    fences[0],
+                ) {
                     Ok(outdated) => {
                         chain.presented[index as usize] = true;
                         chain.in_flight.push_back(index as usize);

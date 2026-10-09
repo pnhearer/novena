@@ -207,8 +207,12 @@ fn submit(instance: &Instance, state: &State, expected: Status) {
     r.x[..3].copy_from_slice(&[0, 1, 0x300]);
     assert_eq!(
         instance.call(functions::lookup("nvnQueueSubmitCommands").unwrap(), &mut r),
-        expected
+        Status::Ok
     );
+    let finish = functions::all().find(|(_, name)| name.ends_with("QueueFinish")).unwrap().0;
+    r.x[0] = 0;
+    assert_eq!(instance.call(finish, &mut r), expected);
+
 }
 
 fn wait_for_graphics(instance: &Instance) {

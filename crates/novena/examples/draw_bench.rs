@@ -287,6 +287,7 @@ fn scene(frames: usize, draws_per_frame: usize, indexed: bool, fail_tail: bool) 
         let handle = call(&instance, "CommandBufferEndRecording", &[7]);
         put(&memory, 0x300, &handle.to_le_bytes());
         call(&instance, "QueueSubmitCommands", &[0, 1, 0x300]);
+        call(&instance, "QueueFinish", &[0]);
         let pixels = memory.0.lock().unwrap()[0x2000..0x6000].to_vec();
         if pixels
             .as_chunks::<4>()
@@ -427,18 +428,22 @@ fn scene(frames: usize, draws_per_frame: usize, indexed: bool, fail_tail: bool) 
         novena::draw_metrics::take();
         novena::draw_metrics::take_counts();
         let allocation_start = ALLOCATIONS.load(std::sync::atomic::Ordering::Relaxed);
-        let cpu = cpu_time();
+        let cpu = process_cpu_time();
         let mut submit = novena::Registers::default();
         submit.x[..3].copy_from_slice(&[0, 1, 0x300]);
         assert_eq!(
             instance.call(ids["QueueSubmitCommands"], &mut submit),
+            novena::Status::Ok
+        );
+        assert_eq!(
+            instance.call(ids["QueueFinish"], &mut novena::Registers::default()),
             if fail_tail {
                 novena::Status::BadArgument
             } else {
                 novena::Status::Ok
             }
         );
-        let submitted_cpu = cpu_time() - cpu;
+        let submitted_cpu = process_cpu_time() - cpu;
         let submitted_allocs =
             ALLOCATIONS.load(std::sync::atomic::Ordering::Relaxed) - allocation_start;
         let spans = novena::draw_metrics::take();
@@ -555,6 +560,15 @@ struct Timespec {
 unsafe extern "C" {
     fn clock_gettime(clock: i32, time: *mut Timespec) -> i32;
 }
+fn process_cpu_time() -> u64 {
+    let mut time = Timespec {
+        seconds: 0,
+        nanos: 0,
+    };
+    assert_eq!(unsafe { clock_gettime(2, &mut time) }, 0);
+    time.seconds as u64 * 1_000_000_000 + time.nanos as u64
+}
+
 fn cpu_time() -> u64 {
     let mut time = Timespec {
         seconds: 0,

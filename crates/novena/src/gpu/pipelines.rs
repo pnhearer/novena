@@ -764,7 +764,7 @@ impl ComputePipeline {
         {
             return Err("workgroup count limit exceeded".into());
         }
-        let device = &self.context.device;
+        let device = &self.context.recorder();
         device.cmd_bind_pipeline(command, vk::PipelineBindPoint::COMPUTE, self.pipeline);
         if !sets.is_empty() {
             device.cmd_bind_descriptor_sets(
@@ -777,6 +777,7 @@ impl ComputePipeline {
             );
         }
         memory.push_delta(command, self.layout, vk::ShaderStageFlags::COMPUTE);
+        memory.mark_written();
         device.cmd_dispatch(command, groups[0], groups[1], groups[2]);
         device.cmd_pipeline_barrier(
             command,

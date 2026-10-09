@@ -2,7 +2,7 @@
 
 use super::{
     commands::Commands,
-    images::{buffer_barrier, can_blit, record_present, Buffer, Image, ImageInfo},
+    images::{buffer_barrier, can_blit, record_present, transition, Buffer, Image, ImageInfo},
     Context,
 };
 use ash::vk;
@@ -46,33 +46,35 @@ impl Readbacks {
         if !can_blit(&self.context, source.format, vk::Format::R8G8B8A8_UNORM) {
             return None;
         }
-        self.slots
-            .resize_with(self.slots.len().max(index + 1), || None);
-        if !self.slots[index].as_ref().is_some_and(|s| {
-            s.target.info.extent.width == width && s.target.info.extent.height == height
-        }) {
-            let target = Image::new(&self.context, width, height, vk::Format::R8G8B8A8_UNORM)?;
-            let buffer = Buffer::new(&self.context, target.info.size)?;
-            self.slots[index] = Some(Slot {
-                commands: Commands::with_capacity(&self.context, 1)?,
-                target,
-                buffer,
-            });
-        }
+        self.ensure_slot(index, width, height)?;
         let slot = self.slots[index].as_mut()?;
-        let (cmd, _) = slot.commands.begin()?;
-        record_present(
-            &self.context.device,
-            cmd,
-            source,
-            slot.target.info,
-            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-        );
-        slot.target.info.layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
-        unsafe {
-            self.context.device.cmd_copy_image_to_buffer(
+        let (cmd, _) = slot.commands.begin_direct()?;
+        let copy = if source.format == slot.target.info.format
+            && source.extent == slot.target.info.extent
+            && source.shape.kind == crate::tiling::ImageKind::D2
+        {
+            transition(
+                &self.context.recorder(),
                 cmd,
-                slot.target.info.image,
+                source,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            );
+            source
+        } else {
+            record_present(
+                &self.context.recorder(),
+                cmd,
+                source,
+                slot.target.info,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            );
+            slot.target.info.layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
+            slot.target.info
+        };
+        unsafe {
+            self.context.recorder().cmd_copy_image_to_buffer(
+                cmd,
+                copy.image,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 slot.buffer.buffer,
                 &[vk::BufferImageCopy::default()
@@ -81,11 +83,58 @@ impl Readbacks {
                             .aspect_mask(vk::ImageAspectFlags::COLOR)
                             .layer_count(1),
                     )
-                    .image_extent(slot.target.info.extent)],
+                    .image_extent(copy.extent)],
             );
         }
-        buffer_barrier(&self.context.device, cmd);
-        slot.commands.submit(false, None)
+        buffer_barrier(&self.context.recorder(), cmd);
+        slot.commands.submit(false, None)?;
+        self.context.command_workers.flush_direct();
+        Some(())
+    }
+
+    fn ensure_slot(&mut self, index: usize, width: u32, height: u32) -> Option<()> {
+        self.slots
+            .resize_with(self.slots.len().max(index + 1), || None);
+        if !self.slots[index].as_ref().is_some_and(|s| {
+            s.target.info.extent.width == width && s.target.info.extent.height == height
+        }) {
+            let target = Image::new(&self.context, width, height, vk::Format::R8G8B8A8_UNORM)?;
+            let buffer = Buffer::new(&self.context, target.info.size)?;
+            self.slots[index] = Some(Slot {
+                commands: Commands::with_submission_ack(&self.context)?,
+                target,
+                buffer,
+            });
+        }
+        Some(())
+    }
+
+    pub fn submit_buffer(
+        &mut self,
+        index: usize,
+        source: vk::Buffer,
+        offset: u64,
+        width: u32,
+        height: u32,
+    ) -> Option<()> {
+        self.ensure_slot(index, width, height)?;
+        let slot = self.slots[index].as_mut()?;
+        let (cmd, _) = slot.commands.begin_direct()?;
+        buffer_barrier(&self.context.recorder(), cmd);
+        unsafe {
+            self.context.recorder().cmd_copy_buffer(
+                cmd,
+                source,
+                slot.buffer.buffer,
+                &[vk::BufferCopy::default()
+                    .src_offset(offset)
+                    .size(slot.target.info.size)],
+            );
+        }
+        buffer_barrier(&self.context.recorder(), cmd);
+        slot.commands.submit(false, None)?;
+        self.context.command_workers.flush_direct();
+        Some(())
     }
 
     pub fn read(&self, index: usize, wait: bool) -> Option<Option<(u32, u32, Vec<u8>)>> {

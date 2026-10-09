@@ -47,7 +47,11 @@ typedef struct novena_host_vulkan {
  *
  * The host guarantees that `user` and both callbacks stay usable until the
  * instance is destroyed, and that they tolerate being used from several
- * threads at once: a program can call the graphics API from any thread. */
+ * threads at once, including library execution threads. Queued work drains
+ * before instance destruction returns. Submitted memory remains valid and
+ * unchanged until completion. Callbacks must not wait for completion
+ * on their own instance; a call that would drain its own execution thread
+ * returns an internal error. */
 typedef struct novena_host {
     void *user;
     int32_t (*read_memory)(void *user, uint64_t address, uint8_t *out, uint64_t size);

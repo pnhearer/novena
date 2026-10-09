@@ -15,14 +15,16 @@ mod device;
 mod drawing;
 mod memory;
 mod objects;
-mod queue;
+pub(crate) mod queue;
 mod recording;
+mod recordings;
 mod resources;
 mod state;
 mod state_commands;
 
 use crate::functions::FunctionId;
 use crate::instance::{Instance, Registers, Status};
+pub(crate) use objects::RecordedCommand;
 #[cfg(feature = "vulkan")]
 pub use objects::SamplerDescription;
 pub use objects::{GpuAddress, GpuAddressError, Object, Objects, ShaderRecord, ShaderTranslation};
@@ -44,12 +46,12 @@ pub fn handler(name: &str) -> Option<Handler> {
 }
 
 /// Writes `value` through the pointer in `address`, through the host.
-fn write_u32(instance: &Instance, address: u64, value: u32) -> bool {
+fn write_u32(instance: &crate::instance::InstanceState, address: u64, value: u32) -> bool {
     instance.write_memory(address, &value.to_le_bytes())
 }
 
 /// Reads a 64-bit word from program memory.
-fn read_u64(instance: &Instance, address: u64) -> Option<u64> {
+fn read_u64(instance: &crate::instance::InstanceState, address: u64) -> Option<u64> {
     let mut bytes = [0u8; 8];
     instance
         .read_memory(address, &mut bytes)
@@ -57,7 +59,7 @@ fn read_u64(instance: &Instance, address: u64) -> Option<u64> {
 }
 
 /// Reads four floats from program memory.
-fn read_f32x4(instance: &Instance, address: u64) -> Option<[f32; 4]> {
+fn read_f32x4(instance: &crate::instance::InstanceState, address: u64) -> Option<[f32; 4]> {
     let mut bytes = [0u8; 16];
     instance.read_memory(address, &mut bytes).then(|| {
         let mut out = [0f32; 4];
