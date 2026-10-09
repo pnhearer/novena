@@ -503,7 +503,7 @@ impl Backend {
 
     /// Return a whole-resource view after making transfers visible to shaders.
     pub fn sampled_image(&mut self, key: u64) -> Option<vk::ImageView> {
-        self.images.sampled(key)
+        self.sampled_image_with_components(key, vk::ComponentMapping::default())
     }
 
     /// Return a sampled view with explicit host component selection.
@@ -518,7 +518,9 @@ impl Backend {
         {
             return None;
         }
-        self.images.sampled_with_components(key, components)
+        let view = self.images.sampled_with_components(key, components)?;
+        self.images.wait()?;
+        Some(view)
     }
 
     pub(crate) fn has_swizzle_contract(&self) -> bool {
