@@ -396,6 +396,8 @@ impl GraphicsPipelines {
         state: DrawPipelineState,
         storage: bool,
     ) -> Result<Option<Arc<GraphicsPipeline>>, String> {
+        #[cfg(feature = "draw-metrics")]
+        let _span = crate::draw_metrics::Span::new(0);
         let key = Key::new(stages, input, topology, state, self.uses_storage(storage))?;
         let request = match self.pool.request(key) {
             Ok(request) => request,
@@ -1057,6 +1059,8 @@ impl GraphicsPipeline {
         buffers: &[vk::DescriptorBufferInfo],
         images: &[vk::DescriptorImageInfo],
     ) -> Result<DrawDescriptors, String> {
+        #[cfg(feature = "draw-metrics")]
+        let _span = crate::draw_metrics::Span::new(1);
         if buffers.len() != self.banks.len() || images.len() != self.textures.len() {
             return Err("missing constant bank ranges".into());
         }

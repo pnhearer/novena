@@ -642,6 +642,8 @@ impl State {
         let storage = backend
             .graphics
             .uses_storage(backend.uniforms.storage_buffers);
+        #[cfg(feature = "draw-metrics")]
+        let uniform_span = crate::draw_metrics::Span::new(2);
         let mut uniform_buffers = Vec::new();
         for stage in [UniformStage::Vertex, UniformStage::Fragment] {
             let words = stages
@@ -679,6 +681,8 @@ impl State {
                 uniform_buffers.push(info);
             }
         }
+        #[cfg(feature = "draw-metrics")]
+        drop(uniform_span);
         if let Some(cache) = instance.startup_cache.lock().unwrap().as_mut() {
             cache.schedule(&mut backend.graphics);
         }

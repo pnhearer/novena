@@ -12,6 +12,7 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 default = []
 vulkan = ["dep:ash", "dep:blake3", "dep:serde", "dep:serde_json"]
 shadowbox = ["vulkan"]
+draw-metrics = ["vulkan"]
 
 [dependencies]
 ash = { version = "0.38", optional = true, default-features = false, features = ["loaded"] }
@@ -23,3 +24,7 @@ serde_json = { version = "1", optional = true }
 [[example]]
 name = "textured_triangle"
 required-features = ["vulkan"]
+
+[[example]]
+name = "draw_bench"
+required-features = ["draw-metrics"]

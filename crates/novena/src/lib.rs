@@ -16,6 +16,8 @@
 #![deny(missing_docs)]
 
 pub mod api;
+#[cfg(feature = "draw-metrics")]
+pub mod draw_metrics;
 pub mod functions;
 pub mod global_memory;
 #[cfg(feature = "vulkan")]
