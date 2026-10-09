@@ -245,7 +245,12 @@ mod execution {
                         .mark_written();
                     backend
                         .execution
-                        .fill(r, a[1], integer(a[2])?)
+                        .fill(
+                            backend.global_memory.as_ref().ok_or(Status::BadArgument)?,
+                            r,
+                            a[1],
+                            integer(a[2])?,
+                        )
                         .ok_or(Status::InternalError)
                 }
                 "CopyBufferToBuffer" => {
@@ -267,7 +272,12 @@ mod execution {
                         .mark_written();
                     backend
                         .execution
-                        .copy(source, destination, a[2])
+                        .copy(
+                            backend.global_memory.as_ref().ok_or(Status::BadArgument)?,
+                            source,
+                            destination,
+                            a[2],
+                        )
                         .ok_or(Status::InternalError)
                 }
                 "DispatchCompute" | "DispatchComputeIndirect" => {

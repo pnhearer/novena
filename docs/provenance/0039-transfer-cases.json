@@ -1,0 +1,111 @@
+{
+  "schema": "response-rsi/tasks/v4",
+  "judge_protocol": "response-rsi/semantic-judge/v1",
+  "tasks": [
+    {
+      "task_id": "transfer-baseline-20261009",
+      "prompt": "Explain the measured transfer reduction and its workload limits.",
+      "split": "dev",
+      "criteria": [
+        {
+          "criterion_id": "measurement",
+          "instruction": "Report baseline and notification payload per submission and distinguish thread CPU from elapsed time.",
+          "evidence_ids": [
+            "measurement"
+          ],
+          "weight": 2
+        },
+        {
+          "criterion_id": "scope",
+          "instruction": "State that notification-free hosts still inspect storage and physical stores retain conservative writeback.",
+          "evidence_ids": [
+            "scope"
+          ],
+          "weight": 1
+        }
+      ],
+      "evidence": [
+        {
+          "evidence_id": "measurement",
+          "path": "docs/provenance/0039-memory-transfers.md",
+          "contains": "One pool contains 512 MiB."
+        },
+        {
+          "evidence_id": "scope",
+          "path": "docs/provenance/0039-memory-transfers.md",
+          "contains": "The shaders are not instrumented to discover dynamic store addresses."
+        }
+      ]
+    },
+    {
+      "task_id": "pool-notifications-20261009",
+      "prompt": "Explain how host page notifications preserve aliases, callback failures and neighboring bytes.",
+      "split": "dev",
+      "criteria": [
+        {
+          "criterion_id": "pages",
+          "instruction": "Explain page clipping and coalescing, with complete initial import.",
+          "evidence_ids": [
+            "pages"
+          ],
+          "weight": 2
+        },
+        {
+          "criterion_id": "retry",
+          "instruction": "Explain why failed callback chunks and unfinished ranges can be retried.",
+          "evidence_ids": [
+            "retry"
+          ],
+          "weight": 1
+        }
+      ],
+      "evidence": [
+        {
+          "evidence_id": "pages",
+          "path": "crates/novena/src/gpu/memory.rs",
+          "contains": "pub fn notify_host_write"
+        },
+        {
+          "evidence_id": "retry",
+          "path": "crates/novena/src/gpu/memory_tests.rs",
+          "contains": "fn failed_callbacks_retain_only_unfinished_ranges"
+        }
+      ]
+    },
+    {
+      "task_id": "readonly-writeback-20261009",
+      "prompt": "Explain why a shader with a read-only storage input and a writable output downloads only the output.",
+      "split": "heldout",
+      "criteria": [
+        {
+          "criterion_id": "classification",
+          "instruction": "Connect read-only descriptor decorations to exclusion from device dirtiness.",
+          "evidence_ids": [
+            "classification"
+          ],
+          "weight": 2
+        },
+        {
+          "criterion_id": "result",
+          "instruction": "Identify the four-byte output assertion and the large surrounding pool.",
+          "evidence_ids": [
+            "result"
+          ],
+          "weight": 1
+        }
+      ],
+      "evidence": [
+        {
+          "evidence_id": "classification",
+          "path": "crates/novena/src/gpu/memory.rs",
+          "contains": "pub(super) fn descriptor_writable"
+        },
+        {
+          "evidence_id": "result",
+          "path": "crates/novena/src/gpu/memory_tests.rs",
+          "contains": "fn readonly_storage_bindings_produce_no_writeback"
+        }
+      ]
+    }
+  ]
+}

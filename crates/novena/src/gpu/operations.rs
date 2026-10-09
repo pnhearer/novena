@@ -115,9 +115,12 @@ impl Execution {
         self.counting.then_some(self.occlusion)
     }
 
-    pub fn collect_occlusion(&mut self) -> Option<()> {
+    pub(super) fn collect_occlusion(
+        &mut self,
+        submission: super::commands::Submission,
+    ) -> Option<()> {
         if self.counting {
-            self.context.wait_queue()?;
+            submission.wait()?;
             let mut result = [0_u64];
             unsafe {
                 self.context
@@ -154,15 +157,21 @@ impl Execution {
         );
     }
 
-    fn complete(&mut self, command: vk::CommandBuffer) -> Option<()> {
+    fn submit(&mut self, command: vk::CommandBuffer) -> Option<()> {
         unsafe {
             self.barrier(command);
         }
         self.commands.submit(false, None)?;
-        self.commands.wait()
+        Some(())
     }
 
-    pub fn fill(&mut self, region: (vk::Buffer, u64), size: u64, value: u32) -> Option<()> {
+    pub fn fill(
+        &mut self,
+        memory: &GlobalMemory,
+        region: (vk::Buffer, u64),
+        size: u64,
+        value: u32,
+    ) -> Option<()> {
         if !region.1.is_multiple_of(4) || !size.is_multiple_of(4) || size == 0 {
             return None;
         }
@@ -173,11 +182,14 @@ impl Execution {
                 .device
                 .cmd_fill_buffer(command, region.0, region.1, size, value);
         }
-        self.complete(command)
+        self.submit(command)?;
+        memory.submitted(region.1, size, true, self.commands.submission()?);
+        Some(())
     }
 
     pub fn copy(
         &mut self,
+        memory: &GlobalMemory,
         source: (vk::Buffer, u64),
         destination: (vk::Buffer, u64),
         size: u64,
@@ -202,7 +214,11 @@ impl Execution {
                     .size(size)],
             );
         }
-        self.complete(command)
+        self.submit(command)?;
+        let submission = self.commands.submission()?;
+        memory.submitted(source.1, size, false, submission.clone());
+        memory.submitted(destination.1, size, true, submission);
+        Some(())
     }
 
     pub fn report(
@@ -255,7 +271,9 @@ impl Execution {
                 vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT,
             );
         }
-        self.complete(command)
+        self.submit(command)?;
+        memory.submitted(at, 16, true, self.commands.submission()?);
+        Some(())
     }
 
     pub fn dispatch(
@@ -355,11 +373,33 @@ impl Execution {
                         .ok()?;
                 }
             }
-            self.complete(command)
+            self.submit(command)?;
+            let submission = self.commands.submission()?;
+            for b in bindings {
+                let info = &resources
+                    .iter()
+                    .find(|r| (r.0, r.1) == (b.set, b.binding))?
+                    .2;
+                memory.submitted(
+                    info.offset,
+                    info.range,
+                    b.descriptor_type == vk::DescriptorType::STORAGE_BUFFER
+                        && super::memory::descriptor_writable(words, b.set, b.binding),
+                    submission.clone(),
+                );
+            }
+            if super::memory::physical_writes(words) {
+                memory.submitted_all(true, submission.clone());
+            }
+            if let Some((_, at)) = indirect {
+                memory.submitted(at, 12, false, submission);
+            }
+            // Descriptor resources are owned locally until this dispatch finishes.
+            self.commands.wait()
         })();
         unsafe {
             if result.is_none() {
-                let _ = device.device_wait_idle();
+                let _ = self.commands.wait();
             }
             device.destroy_descriptor_pool(pool, None);
         }
@@ -369,7 +409,7 @@ impl Execution {
 impl Drop for Execution {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.context.device.device_wait_idle();
+            let _ = self.commands.wait();
             self.context.device.destroy_query_pool(self.timestamp, None);
             self.context.device.destroy_query_pool(self.occlusion, None);
         }

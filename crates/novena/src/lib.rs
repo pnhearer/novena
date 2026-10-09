@@ -16,6 +16,8 @@
 #![deny(missing_docs)]
 
 pub mod api;
+#[cfg(any(test, feature = "vulkan"))]
+mod dirty_ranges;
 #[cfg(feature = "draw-metrics")]
 pub mod draw_metrics;
 mod execution;
@@ -132,6 +134,125 @@ pub unsafe extern "C" fn novena_function_lookup(name: *const c_char) -> u32 {
             .ok()
             .and_then(functions::lookup)
             .map_or(FUNCTION_NONE, |id| id.0)
+    })
+}
+
+/// Enable host write notifications for a registered pool and its aliases.
+/// Every subsequent host storage write must be reported before submission.
+///
+/// # Safety
+/// `instance` must be a live instance pointer, or null.
+#[no_mangle]
+pub unsafe extern "C" fn novena_instance_track_pool_writes(
+    instance: *const Instance,
+    pool: u64,
+) -> Status {
+    ffi_guard(Status::InternalError, || {
+        let Some(instance) = (unsafe { instance.as_ref() }) else {
+            return Status::BadArgument;
+        };
+        #[cfg(feature = "vulkan")]
+        {
+            if instance.track_pool_writes(pool) {
+                Status::Ok
+            } else {
+                Status::BadArgument
+            }
+        }
+        #[cfg(not(feature = "vulkan"))]
+        {
+            let _ = (instance, pool);
+            Status::Unimplemented
+        }
+    })
+}
+
+/// Report a host storage write by byte address and length before the next submission.
+///
+/// # Safety
+/// `instance` must be a live instance pointer, or null.
+#[no_mangle]
+pub unsafe extern "C" fn novena_instance_notify_memory_write(
+    instance: *const Instance,
+    address: u64,
+    size: u64,
+) -> Status {
+    ffi_guard(Status::InternalError, || {
+        let Some(instance) = (unsafe { instance.as_ref() }) else {
+            return Status::BadArgument;
+        };
+        #[cfg(feature = "vulkan")]
+        {
+            if instance.notify_memory_write(address, size) {
+                Status::Ok
+            } else {
+                Status::BadArgument
+            }
+        }
+        #[cfg(not(feature = "vulkan"))]
+        {
+            let _ = (instance, address, size);
+            Status::Unimplemented
+        }
+    })
+}
+
+/// Adopt coherent arena storage for a registered pool. Returns null on failure.
+///
+/// # Safety
+/// `instance` must be live or null. The host must satisfy the mapping and access
+/// contract of `GlobalMemory::map_pool`, including callback routing and waits.
+#[no_mangle]
+pub unsafe extern "C" fn novena_instance_map_pool(instance: *const Instance, pool: u64) -> *mut u8 {
+    ffi_guard(std::ptr::null_mut(), || {
+        let Some(instance) = (unsafe { instance.as_ref() }) else {
+            return std::ptr::null_mut();
+        };
+        #[cfg(feature = "vulkan")]
+        {
+            unsafe { instance.map_pool(pool) }.unwrap_or(std::ptr::null_mut())
+        }
+        #[cfg(not(feature = "vulkan"))]
+        {
+            let _ = (instance, pool);
+            std::ptr::null_mut()
+        }
+    })
+}
+
+/// Wait for device access to a mapped host range. Nonzero `write` waits for readers too.
+///
+/// # Safety
+/// `instance` must be a live instance pointer, or null. Serialize access to mapped
+/// storage with submissions until the host read or write has finished.
+#[no_mangle]
+pub unsafe extern "C" fn novena_instance_wait_pool(
+    instance: *const Instance,
+    pool: u64,
+    offset: u64,
+    size: u64,
+    write: u32,
+) -> Status {
+    ffi_guard(Status::InternalError, || {
+        let Some(instance) = (unsafe { instance.as_ref() }) else {
+            return Status::BadArgument;
+        };
+        let Ok(size) = usize::try_from(size) else {
+            return Status::BadArgument;
+        };
+        #[cfg(feature = "vulkan")]
+        {
+            if instance.wait_pool(pool, offset, size, write != 0) {
+                Status::Ok
+            } else {
+                Status::BadArgument
+            }
+        }
+        #[cfg(not(feature = "vulkan"))]
+        {
+            let _ = (instance, pool, offset, size, write);
+            Status::Unimplemented
+        }
     })
 }
 

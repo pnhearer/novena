@@ -111,6 +111,8 @@ pub(crate) fn execute(
     #[cfg(feature = "vulkan")]
     let mut gpu = instance.gpu.lock().unwrap_or_else(|p| p.into_inner());
     #[cfg(feature = "vulkan")]
+    let host_writes = instance.take_host_writes();
+    #[cfg(feature = "vulkan")]
     if let Some(backend) = gpu.as_mut() {
         backend.set_parallel_recording(buffers.len() > 1);
     }
@@ -121,6 +123,10 @@ pub(crate) fn execute(
     {
         #[cfg(feature = "draw-metrics")]
         let _span = crate::draw_metrics::PipelineSpan::new(13);
+        memory.track_submissions();
+        for range in host_writes.intersections(0..u64::MAX) {
+            memory.notify_storage_write(range.start, range.end - range.start);
+        }
         if !memory.upload(|address, bytes| instance.read_memory(address, bytes)) {
             return Status::BadArgument;
         }
@@ -493,7 +499,7 @@ pub(crate) fn execute(
     {
         #[cfg(feature = "draw-metrics")]
         let _span = crate::draw_metrics::PipelineSpan::new(14);
-        if !memory.download(|address, bytes| instance.write_memory(address, bytes)) {
+        if !memory.download(|address, bytes| instance.write_memory_untracked(address, bytes)) {
             return Status::BadArgument;
         }
     }
@@ -968,3 +974,7 @@ mod tests {
         assert_eq!(read_pool_bytes(&instance, 0x1001, 2), None);
     }
 }
+
+#[cfg(all(test, feature = "vulkan"))]
+#[path = "queue_transfer_tests.rs"]
+mod transfer_tests;
