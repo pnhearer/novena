@@ -505,6 +505,39 @@ impl Backend {
         self.images.tiled_transfer(key, address, packing, load)
     }
 
+    /// Copy packed linear arena images in one submission, without conversion.
+    pub fn load_linear_batch(
+        &mut self,
+        resources: &[(u64, u64, u64, &crate::tiling::Layout)],
+    ) -> bool {
+        self.transfer_linear_batch(resources, true).is_some()
+    }
+
+    /// Copy images to packed linear arena storage in one submission.
+    pub fn store_linear_batch(
+        &mut self,
+        resources: &[(u64, u64, u64, &crate::tiling::Layout)],
+    ) -> bool {
+        self.transfer_linear_batch(resources, false).is_some()
+    }
+
+    fn transfer_linear_batch(
+        &mut self,
+        resources: &[(u64, u64, u64, &crate::tiling::Layout)],
+        load: bool,
+    ) -> Option<()> {
+        if resources.is_empty() || resources.len() > 256 {
+            return None;
+        }
+        let memory = self.global_memory.as_ref()?;
+        let mut ranges = Vec::with_capacity(resources.len());
+        for &(key, pool, offset, packing) in resources {
+            let (buffer, at) = memory.image_region(pool, offset, packing.linear_size())?;
+            ranges.push((key, buffer, at, packing));
+        }
+        self.images.linear_batch(&ranges, load)
+    }
+
     /// Complete all transfers before CPU access to shared arena storage.
     pub fn wait_transfers(&self) -> bool {
         self.images.wait().is_some()

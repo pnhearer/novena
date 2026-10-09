@@ -237,7 +237,7 @@ mod run {
         )
         .expect("batch layout");
         let stride = layout.tiled_size();
-        let mut arena_bytes = vec![0xc3; stride * 64];
+        let mut arena_bytes = vec![0xc3; stride * 128];
         let mut linear_images = Vec::new();
         for image in 0..64 {
             let linear: Vec<_> = (0..layout.linear_size())
@@ -249,6 +249,8 @@ mod run {
                     &mut arena_bytes[image * stride..(image + 1) * stride],
                 )
                 .expect("original batch image");
+            arena_bytes[(image + 64) * stride..(image + 64) * stride + linear.len()]
+                .copy_from_slice(&linear);
             linear_images.push(linear);
         }
         let mut backend = Backend::new(1.0).expect("batch graphics device");
@@ -307,6 +309,50 @@ mod run {
                 assert!(backend.wait_transfers());
             },
             loops,
+        );
+
+        let resident: Vec<_> = resources
+            .iter()
+            .map(|&(key, pool, offset, layout)| (key, pool, offset + (stride * 64) as u64, layout))
+            .collect();
+        assert!(backend.load_linear_batch(&resident));
+        assert!(backend.wait_transfers());
+        for (image, &(key, _, _, _)) in resident.iter().enumerate() {
+            assert_eq!(
+                backend.readback(key).unwrap().2,
+                linear_images[image],
+                "resident load preflight"
+            );
+        }
+        assert!(backend.store_linear_batch(&resident));
+        assert!(backend.wait_transfers());
+        backend
+            .global_memory
+            .as_mut()
+            .unwrap()
+            .read_pool(1, 0, &mut roundtrip)
+            .unwrap();
+        assert_eq!(roundtrip, arena_bytes, "resident store preflight");
+        let load_resident = wall_time(
+            || {
+                assert!(backend.load_linear_batch(&resident));
+                assert!(backend.wait_transfers());
+            },
+            loops,
+        );
+        let store_resident = wall_time(
+            || {
+                assert!(backend.store_linear_batch(&resident));
+                assert!(backend.wait_transfers());
+            },
+            loops,
+        );
+        println!(
+            "resident-batch64 {:.3} {:.3} time-ratio {:.3} {:.3}",
+            rate(bytes, loops, load_resident),
+            rate(bytes, loops, store_resident),
+            load_wall.as_secs_f64() / load_resident.as_secs_f64(),
+            store_wall.as_secs_f64() / store_resident.as_secs_f64()
         );
 
         let transfers: Vec<_> = (0..64)
@@ -452,12 +498,16 @@ mod run {
                 .expect("generate original tiled input");
             let mut backend = Backend::new(1.0).expect("graphics device");
             let context = Arc::clone(backend.context());
-            let arena_size = ((layout.tiled_size() + 15) & !15) as u64;
+            let resident_offset = (layout.tiled_size() + 255) & !255;
+            let arena_size = (resident_offset + linear.len()) as u64;
             backend.global_memory =
                 Some(GlobalMemory::new(&context, arena_size).expect("device-visible arena"));
             let guest = backend.allocate_pool(1, 0, arena_size).expect("arena pool");
             let arena = backend.global_memory.as_mut().unwrap();
             arena.write_pool(1, 0, &tiled).expect("upload arena once");
+            arena
+                .write_pool(1, resident_offset as u64, &linear)
+                .expect("resident linear population");
             let address = arena.addresses().host(guest).expect("arena device address");
             assert!(backend.ensure_image(
                 2,
@@ -496,6 +546,47 @@ mod run {
                     assert!(backend.wait_transfers());
                 },
                 loops,
+            );
+
+            let resident = [(2, 1, resident_offset as u64, &layout)];
+            assert!(backend.load_linear_batch(&resident));
+            assert!(backend.wait_transfers());
+            assert_eq!(
+                backend.readback(2).unwrap().2,
+                linear,
+                "resident load preflight"
+            );
+            assert!(backend.store_linear_batch(&resident));
+            assert!(backend.wait_transfers());
+            let mut resident_bytes = vec![0; linear.len()];
+            backend
+                .global_memory
+                .as_mut()
+                .unwrap()
+                .read_pool(1, resident_offset as u64, &mut resident_bytes)
+                .unwrap();
+            assert_eq!(resident_bytes, linear, "resident store preflight");
+            let load_resident = wall_time(
+                || {
+                    assert!(backend.load_linear_batch(&resident));
+                    assert!(backend.wait_transfers());
+                },
+                loops,
+            );
+            let store_resident = wall_time(
+                || {
+                    assert!(backend.store_linear_batch(&resident));
+                    assert!(backend.wait_transfers());
+                },
+                loops,
+            );
+            println!(
+                "resident-{} {:.3} {:.3} time-ratio {:.3} {:.3}",
+                name,
+                rate(bytes, loops, load_resident),
+                rate(bytes, loops, store_resident),
+                load_wall.as_secs_f64() / load_resident.as_secs_f64(),
+                store_wall.as_secs_f64() / store_resident.as_secs_f64()
             );
 
             let mut transfer = Transfer::new(&context).expect("resident compute pipeline");

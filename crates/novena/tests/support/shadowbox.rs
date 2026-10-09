@@ -27,7 +27,7 @@ pub fn run(test: &str) {
         root.join(target)
     };
     let directory = target
-        .join("shadowbox-global-memory")
+        .join("translator-checks")
         .join(test.replace("::", "-"));
     fs::create_dir_all(&directory).unwrap();
     let manifest = directory.join("Cargo.toml");
@@ -89,7 +89,7 @@ shadowbox = {{ path = {shadowbox:?} }}
         .arg("--manifest-path")
         .arg(manifest)
         .arg("--target-dir")
-        .arg(target.join("shadowbox-global-memory/build"))
+        .arg(target.join("translator-build"))
         .args([
             "--test",
             "global_memory",

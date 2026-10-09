@@ -394,3 +394,103 @@ fn cube_faces_must_be_square() {
     );
     assert_eq!(result, Err(LayoutError::InvalidShape));
 }
+
+#[test]
+fn specialized_streaming_matches_oracle_with_partial_rows_and_guards() {
+    for bytes in [1, 2, 4, 8, 16] {
+        for kind in [ImageKind::D2, ImageKind::D3] {
+            let layout = Layout::new(
+                ImageShape {
+                    width: if kind == ImageKind::D2 {
+                        4096 / u32::from(bytes)
+                    } else {
+                        1024 / u32::from(bytes)
+                    },
+                    height: if kind == ImageKind::D2 { 1025 } else { 65 },
+                    depth: if kind == ImageKind::D2 { 1 } else { 65 },
+                    layers: 1,
+                    levels: if kind == ImageKind::D2 { 10 } else { 1 },
+                    kind,
+                },
+                BlockFormat {
+                    width: 1,
+                    height: 1,
+                    bytes,
+                },
+                TileShape {
+                    height_log2: 4,
+                    depth_log2: 3,
+                },
+            )
+            .unwrap();
+            for shift in [0, 1, 16, 32, 48] {
+                let mut source = vec![0x5a; layout.linear_size() + 128];
+                let source_at = (64 - source.as_ptr() as usize % 64) % 64 + shift;
+                let mut expected = vec![0xc3; layout.tiled_size()];
+                for (mip, level) in layout.levels().iter().enumerate() {
+                    for z in 0..level.blocks[2] as usize {
+                        for y in 0..level.blocks[1] as usize {
+                            for x in 0..level.row_bytes {
+                                let at = level.linear_offset
+                                    + (z * level.blocks[1] as usize + y) * level.row_bytes
+                                    + x;
+                                let value =
+                                    (at as u8).wrapping_mul(37).wrapping_add((at >> 8) as u8);
+                                source[source_at + at] = value;
+                                expected[oracle_offset(&layout, mip, 0, x, y, z)] = value;
+                            }
+                        }
+                    }
+                }
+                let mut destination = vec![0xc3; layout.tiled_size() + 128];
+                let destination_at = (64 - destination.as_ptr() as usize % 64) % 64 + shift;
+                let tiled = &mut destination[destination_at..destination_at + layout.tiled_size()];
+                layout.encode(&source[source_at..], tiled).unwrap();
+                assert_eq!(
+                    tiled, &expected,
+                    "encode {kind:?}, bytes {bytes}, shift {shift}"
+                );
+                let mut decoded = vec![0x5a; layout.linear_size() + 128];
+                let decoded_at = (64 - decoded.as_ptr() as usize % 64) % 64 + shift;
+                layout
+                    .decode(
+                        tiled,
+                        &mut decoded[decoded_at..decoded_at + layout.linear_size()],
+                    )
+                    .unwrap();
+                assert_eq!(
+                    &decoded[decoded_at..decoded_at + layout.linear_size()],
+                    &source[source_at..source_at + layout.linear_size()]
+                );
+                tiled.fill(0xc3);
+                layout
+                    .encode_parallel(&source[source_at..], tiled, 4)
+                    .unwrap();
+                assert_eq!(
+                    tiled, &expected,
+                    "parallel encode {kind:?}, bytes {bytes}, shift {shift}"
+                );
+                decoded[decoded_at..decoded_at + layout.linear_size()].fill(0x5a);
+                layout
+                    .decode_parallel(
+                        tiled,
+                        &mut decoded[decoded_at..decoded_at + layout.linear_size()],
+                        4,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    &decoded[decoded_at..decoded_at + layout.linear_size()],
+                    &source[source_at..source_at + layout.linear_size()]
+                );
+                assert!(decoded[..decoded_at]
+                    .iter()
+                    .chain(&decoded[decoded_at + layout.linear_size()..])
+                    .all(|&b| b == 0x5a));
+                assert!(destination[..destination_at]
+                    .iter()
+                    .chain(&destination[destination_at + layout.tiled_size()..])
+                    .all(|&b| b == 0xc3));
+            }
+        }
+    }
+}

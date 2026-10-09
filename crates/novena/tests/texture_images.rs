@@ -884,9 +884,21 @@ fn batched_transfers_replay_with_changed_bytes_and_preserve_guards() {
                 .is_some());
             expected.push((linear, tiled));
         }
-        assert!(backend.load_tiled_batch(&resources));
+        if generation == 0 {
+            // Growing the ring waits for both earlier submissions before replacement.
+            for count in [1, 6, 12] {
+                assert!(backend.load_tiled_batch(&resources[..count]));
+            }
+        } else {
+            assert!(backend.load_tiled_batch(&resources));
+        }
         assert!(backend.wait_transfers());
     }
+    // Reuse both ring slots before waiting, then vary the batch span and wrap.
+    for count in [12, 1, 6, 2, 12] {
+        assert!(backend.load_tiled_batch(&resources[..count]));
+    }
+    assert!(backend.wait_transfers());
     for (&(key, _, _, layout), (linear, _)) in resources.iter().zip(&expected) {
         assert_active(layout, &backend.readback(key).unwrap().2, linear);
     }
@@ -902,6 +914,10 @@ fn batched_transfers_replay_with_changed_bytes_and_preserve_guards() {
         assert!(backend.store_tiled_batch(&resources));
         assert!(backend.wait_transfers());
     }
+    for _ in 0..5 {
+        assert!(backend.store_tiled_batch(&resources));
+    }
+    assert!(backend.wait_transfers());
     for (&(_, pool, offset, layout), (_, tiled)) in resources.iter().zip(&expected) {
         let mut actual = vec![0; layout.tiled_size() + 32];
         backend
@@ -912,6 +928,83 @@ fn batched_transfers_replay_with_changed_bytes_and_preserve_guards() {
             .unwrap();
         assert_eq!(&actual, tiled);
     }
+    let resident: Vec<_> = resources
+        .iter()
+        .enumerate()
+        .map(|(i, &(key, pool, _, layout))| {
+            let offset = 2 * 1024 * 1024 + i as u64 * 0x10000;
+            let mut guarded = vec![0xa5; layout.linear_size() + 32];
+            guarded[16..16 + layout.linear_size()].copy_from_slice(&expected[i].0);
+            backend
+                .global_memory
+                .as_mut()
+                .unwrap()
+                .write_pool(pool, offset - 16, &guarded)
+                .unwrap();
+            (key, pool, offset, layout)
+        })
+        .collect();
+    for _ in 0..5 {
+        assert!(backend.load_linear_batch(&resident));
+    }
+    assert!(backend.wait_transfers());
+    for (&(key, _, _, layout), (linear, _)) in resident.iter().zip(&expected) {
+        assert_active(layout, &backend.readback(key).unwrap().2, linear);
+    }
+    for _ in 0..5 {
+        assert!(backend.store_linear_batch(&resident));
+    }
+    assert!(backend.wait_transfers());
+    for (i, &(_, pool, offset, layout)) in resident.iter().enumerate() {
+        let mut actual = vec![0; layout.linear_size() + 32];
+        backend
+            .global_memory
+            .as_mut()
+            .unwrap()
+            .read_pool(pool, offset - 16, &mut actual)
+            .unwrap();
+        assert!(actual[..16]
+            .iter()
+            .chain(&actual[16 + layout.linear_size()..])
+            .all(|&b| b == 0xa5));
+        assert_active(
+            layout,
+            &actual[16..16 + layout.linear_size()],
+            &expected[i].0,
+        );
+    }
+    // Ordered writes to an overlapping resident range preserve the last image.
+    let (first_key, pool, offset, layout) = resident[0];
+    let second_key = resident[1].0;
+    let overlapping = [
+        (first_key, pool, offset, layout),
+        (second_key, pool, offset, layout),
+    ];
+    assert!(backend.store_linear_batch(&overlapping));
+    assert!(backend.wait_transfers());
+    let mut last = vec![0; layout.linear_size()];
+    backend
+        .global_memory
+        .as_mut()
+        .unwrap()
+        .read_pool(pool, offset, &mut last)
+        .unwrap();
+    assert_active(layout, &last, &expected[1].0);
+
+    // Two sources for one destination image also retain submission order.
+    let duplicate = [
+        (first_key, resident[2].1, resident[2].2, layout),
+        resident[0],
+    ];
+    assert!(backend.load_linear_batch(&duplicate));
+    assert!(backend.wait_transfers());
+    assert_active(
+        layout,
+        &backend.readback(first_key).unwrap().2,
+        &expected[1].0,
+    );
+    assert!(!backend.load_linear_batch(&[]));
+    assert!(!backend.load_linear_batch(&[(100, 1, 4 * 1024 * 1024, &layouts[0])]));
     for &(key, _, _, _) in &resources {
         backend.release_texture(key);
     }

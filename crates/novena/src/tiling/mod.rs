@@ -520,7 +520,13 @@ impl Layout {
         let tile_depths = div_ceil(level.blocks[2] as usize, tile_depth);
         let split_depth = self.shape.kind == ImageKind::D3;
         let units = if split_depth { tile_depths } else { tile_rows };
-        let workers = threads.min(units).max(1);
+        let workers = threads
+            .min(units)
+            .min(level.linear_size / (2 * 1024 * 1024))
+            .max(1);
+        if workers == 1 {
+            return self.convert_level(source, destination, decode, 0, level_index, 0);
+        }
         let units_per_worker = div_ceil(units, workers);
         let tile_row_bytes = level.tiled_row_stride;
         thread::scope(|scope| {
@@ -647,35 +653,47 @@ impl Layout {
         first_tile_row: usize,
         end_tile_row: usize,
     ) -> Result<(), LayoutError> {
-        if decode {
-            self.convert_level_direction::<true>(
-                source,
-                destination,
-                layer,
-                level_index,
-                destination_base,
-                first_tile_depth,
-                end_tile_depth,
-                first_tile_row,
-                end_tile_row,
-            )
-        } else {
-            self.convert_level_direction::<false>(
-                source,
-                destination,
-                layer,
-                level_index,
-                destination_base,
-                first_tile_depth,
-                end_tile_depth,
-                first_tile_row,
-                end_tile_row,
-            )
+        macro_rules! dispatch {
+            ($bytes:expr) => {
+                if decode {
+                    self.convert_level_direction::<true, $bytes>(
+                        source,
+                        destination,
+                        layer,
+                        level_index,
+                        destination_base,
+                        first_tile_depth,
+                        end_tile_depth,
+                        first_tile_row,
+                        end_tile_row,
+                    )
+                } else {
+                    self.convert_level_direction::<false, $bytes>(
+                        source,
+                        destination,
+                        layer,
+                        level_index,
+                        destination_base,
+                        first_tile_depth,
+                        end_tile_depth,
+                        first_tile_row,
+                        end_tile_row,
+                    )
+                }
+            };
+        }
+        match self.format.bytes {
+            1 => dispatch!(1),
+            2 => dispatch!(2),
+            4 => dispatch!(4),
+            8 => dispatch!(8),
+            16 => dispatch!(16),
+            _ => unreachable!(),
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn convert_level_direction<const DECODE: bool>(
+    fn convert_level_direction<const DECODE: bool, const BYTES: usize>(
         &self,
         source: &[u8],
         destination: &mut [u8],
@@ -688,6 +706,11 @@ impl Layout {
         end_tile_row: usize,
     ) -> Result<(), LayoutError> {
         let level = self.levels[level_index as usize];
+        #[cfg(target_arch = "x86_64")]
+        let paired = std::is_x86_feature_detected!("avx2");
+        #[cfg(target_arch = "x86_64")]
+        let wide = std::is_x86_feature_detected!("avx512f");
+        debug_assert_eq!(level.row_bytes, level.blocks[0] as usize * BYTES);
         let h = level.tile.height_log2 as usize;
         let d = level.tile.depth_log2 as usize;
         let tile_bytes = GOB_SIZE << (h + d);
@@ -716,105 +739,256 @@ impl Layout {
         debug_assert!(end_tile_depth <= tile_depths);
         for tile_z in first_tile_depth..end_tile_depth {
             for tile_y in first_tile_row..end_tile_row {
-                // Encode keeps eight linear source rows active; decode reads
-                // consecutive tiled GOBs to keep its source stream contiguous.
-                let bounds = if DECODE {
-                    [tile_columns, 1usize << d, 1usize << h]
+                let rows_per_group = if DECODE || level.row_bytes <= 256 {
+                    8
+                } else if level.row_bytes <= 512 {
+                    4
+                } else if level.row_bytes <= 1024 {
+                    2
                 } else {
-                    [1usize << d, 1usize << h, tile_columns]
-                };
+                    1
+                }
+                .min(1usize << h);
+                let bounds = [1usize << d, (1usize << h) / rows_per_group, tile_columns];
                 for first in 0..bounds[0] {
                     for second in 0..bounds[1] {
                         for third in 0..bounds[2] {
-                            let (tile_x, gob_z, gob_in_y) = if DECODE {
-                                (first, second, third)
-                            } else {
-                                (third, first, second)
-                            };
-                            let z = tile_z * (1usize << d) + gob_z;
-                            let y = tile_y * (GOB_HEIGHT << h) + gob_in_y * GOB_HEIGHT;
-                            if z >= level.blocks[2] as usize || y >= level.blocks[1] as usize {
-                                continue;
-                            }
-                            let tile_index = (tile_z * tile_rows + tile_y) * tile_columns + tile_x;
-                            let tile_base = tiled_level_base + tile_index * tile_bytes;
-                            let x = tile_x * GOB_WIDTH;
-                            let width = (level.row_bytes - x).min(GOB_WIDTH);
-                            let height = (level.blocks[1] as usize - y).min(GOB_HEIGHT);
-                            let tiled_base = tile_base + ((gob_z << h) | gob_in_y) * GOB_SIZE;
-                            let linear_base = linear_level_base
-                                + (z * level.blocks[1] as usize + y) * level.row_bytes
-                                + x;
-                            #[cfg(target_arch = "x86_64")]
-                            if prefix != 0 {
-                                // SAFETY: streaming selects complete 64-byte rows and
-                                // 16-byte alignment. Only existing neighbor columns
-                                // are read; prefix and tail writes stay in active rows.
-                                unsafe {
-                                    let src = source.as_ptr().add(tiled_base);
-                                    let dst = destination
-                                        .as_mut_ptr()
-                                        .add(linear_base - destination_base);
-                                    match prefix {
-                                        1 => decode_shifted_gob::<1>(
-                                            src,
-                                            dst,
-                                            level.row_bytes,
-                                            tile_bytes,
-                                            tile_x,
-                                            tile_columns,
-                                            height,
-                                        ),
-                                        2 => decode_shifted_gob::<2>(
-                                            src,
-                                            dst,
-                                            level.row_bytes,
-                                            tile_bytes,
-                                            tile_x,
-                                            tile_columns,
-                                            height,
-                                        ),
-                                        3 => decode_shifted_gob::<3>(
-                                            src,
-                                            dst,
-                                            level.row_bytes,
-                                            tile_bytes,
-                                            tile_x,
-                                            tile_columns,
-                                            height,
-                                        ),
-                                        _ => unreachable!(),
+                            for fourth in 0..rows_per_group {
+                                let (tile_x, gob_z, gob_in_y) =
+                                    (third, first, second * rows_per_group + fourth);
+                                let z = tile_z * (1usize << d) + gob_z;
+                                let y = tile_y * (GOB_HEIGHT << h) + gob_in_y * GOB_HEIGHT;
+                                if z >= level.blocks[2] as usize || y >= level.blocks[1] as usize {
+                                    continue;
+                                }
+                                let tile_index =
+                                    (tile_z * tile_rows + tile_y) * tile_columns + tile_x;
+                                let tile_base = tiled_level_base + tile_index * tile_bytes;
+                                let x = tile_x * GOB_WIDTH;
+                                let width = (level.row_bytes - x).min(GOB_WIDTH);
+                                let height = (level.blocks[1] as usize - y).min(GOB_HEIGHT);
+                                let tiled_base = tile_base + ((gob_z << h) | gob_in_y) * GOB_SIZE;
+                                let linear_base = linear_level_base
+                                    + (z * level.blocks[1] as usize + y) * level.row_bytes
+                                    + x;
+                                #[cfg(target_arch = "x86_64")]
+                                if DECODE && stream && tile_x + 2 < tile_columns {
+                                    unsafe {
+                                        use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+                                        for line in (0..GOB_SIZE).step_by(64) {
+                                            _mm_prefetch(
+                                                source
+                                                    .as_ptr()
+                                                    .add(tiled_base + 2 * tile_bytes + line)
+                                                    .cast(),
+                                                _MM_HINT_T0,
+                                            );
+                                        }
                                     }
                                 }
-                                continue;
-                            }
-                            if width == GOB_WIDTH && height == GOB_HEIGHT {
-                                Self::convert_full_gob::<DECODE>(
-                                    source,
-                                    destination,
-                                    tiled_base,
-                                    linear_base,
-                                    level.row_bytes,
-                                    destination_base,
-                                    stream,
-                                )?;
-                                continue;
-                            }
-                            for row in y..y + height {
-                                for byte in (x..x + width).step_by(SECTOR_SIZE) {
-                                    let count = (x + width - byte).min(SECTOR_SIZE);
-                                    self.copy_sector(
+                                #[cfg(target_arch = "x86_64")]
+                                if stream
+                                    && !DECODE
+                                    && tile_x + 4 < tile_columns
+                                    && height == GOB_HEIGHT
+                                {
+                                    unsafe {
+                                        use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+                                        for row in 0..GOB_HEIGHT {
+                                            _mm_prefetch(
+                                                source
+                                                    .as_ptr()
+                                                    .add(linear_base + row * level.row_bytes + 256)
+                                                    .cast(),
+                                                _MM_HINT_T0,
+                                            );
+                                        }
+                                    }
+                                }
+                                #[cfg(target_arch = "x86_64")]
+                                if DECODE
+                                    && wide
+                                    && prefix == 0
+                                    && width == GOB_WIDTH
+                                    && height == GOB_HEIGHT
+                                {
+                                    // SAFETY: this complete GOB and all eight output rows
+                                    // are in the checked level and worker range.
+                                    unsafe {
+                                        wide_decode::<BYTES>(
+                                            source.as_ptr().add(tiled_base),
+                                            destination
+                                                .as_mut_ptr()
+                                                .add(linear_base - destination_base),
+                                            level.blocks[0] as usize,
+                                            stream,
+                                        );
+                                    }
+                                    continue;
+                                }
+                                #[cfg(target_arch = "x86_64")]
+                                if DECODE && paired && width == GOB_WIDTH && height == GOB_HEIGHT {
+                                    unsafe {
+                                        macro_rules! copy {
+                                            ($prefix:expr, $stream:expr) => {
+                                                paired_decode::<BYTES, $prefix, $stream>(
+                                                    source.as_ptr().add(tiled_base),
+                                                    destination
+                                                        .as_mut_ptr()
+                                                        .add(linear_base - destination_base),
+                                                    level.blocks[0] as usize,
+                                                    tile_bytes,
+                                                    tile_x,
+                                                    tile_columns,
+                                                )
+                                            };
+                                        }
+                                        if !stream {
+                                            copy!(0, false);
+                                        } else {
+                                            match prefix {
+                                                0 => copy!(0, true),
+                                                1 => copy!(1, true),
+                                                2 => copy!(2, true),
+                                                3 => copy!(3, true),
+                                                _ => unreachable!(),
+                                            }
+                                        }
+                                    }
+                                    continue;
+                                }
+                                #[cfg(target_arch = "x86_64")]
+                                if !DECODE
+                                    && paired
+                                    && stream
+                                    && width == GOB_WIDTH
+                                    && height == GOB_HEIGHT
+                                {
+                                    // SAFETY: full rows, aligned output and complete
+                                    // adjacent GOBs are established here.
+                                    unsafe {
+                                        let src = source.as_ptr().add(linear_base);
+                                        let dst = destination
+                                            .as_mut_ptr()
+                                            .add(tiled_base - destination_base);
+                                        let previous = gob_in_y > 0;
+                                        let next = gob_in_y + 1 < (1usize << h)
+                                            && y + 16 <= level.blocks[1] as usize;
+                                        if (dst as usize).is_multiple_of(32) {
+                                            paired_encode::<BYTES, 0>(
+                                                src,
+                                                dst,
+                                                level.blocks[0] as usize,
+                                                previous,
+                                                next,
+                                            );
+                                        } else {
+                                            paired_encode::<BYTES, 1>(
+                                                src,
+                                                dst,
+                                                level.blocks[0] as usize,
+                                                previous,
+                                                next,
+                                            );
+                                        }
+                                    }
+                                    continue;
+                                }
+                                #[cfg(target_arch = "x86_64")]
+                                if !DECODE && wide && width == GOB_WIDTH && height == GOB_HEIGHT {
+                                    unsafe {
+                                        wide_encode::<BYTES>(
+                                            source.as_ptr().add(linear_base),
+                                            destination
+                                                .as_mut_ptr()
+                                                .add(tiled_base - destination_base),
+                                            level.blocks[0] as usize,
+                                            stream,
+                                            gob_in_y > 0,
+                                            gob_in_y + 1 < (1usize << h)
+                                                && y + 16 <= level.blocks[1] as usize,
+                                        );
+                                    }
+                                    continue;
+                                }
+                                #[cfg(target_arch = "x86_64")]
+                                if prefix != 0 {
+                                    // SAFETY: streaming selects complete 64-byte rows and
+                                    // 16-byte alignment. Only existing neighbor columns
+                                    // are read; prefix and tail writes stay in active rows.
+                                    unsafe {
+                                        let src = source.as_ptr().add(tiled_base);
+                                        let dst = destination
+                                            .as_mut_ptr()
+                                            .add(linear_base - destination_base);
+                                        match prefix {
+                                            1 => decode_shifted_gob::<1>(
+                                                src,
+                                                dst,
+                                                level.row_bytes,
+                                                tile_bytes,
+                                                tile_x,
+                                                tile_columns,
+                                                height,
+                                            ),
+                                            2 => decode_shifted_gob::<2>(
+                                                src,
+                                                dst,
+                                                level.row_bytes,
+                                                tile_bytes,
+                                                tile_x,
+                                                tile_columns,
+                                                height,
+                                            ),
+                                            3 => decode_shifted_gob::<3>(
+                                                src,
+                                                dst,
+                                                level.row_bytes,
+                                                tile_bytes,
+                                                tile_x,
+                                                tile_columns,
+                                                height,
+                                            ),
+                                            _ => unreachable!(),
+                                        }
+                                    }
+                                    continue;
+                                }
+                                if width == GOB_WIDTH && height == GOB_HEIGHT {
+                                    Self::convert_full_gob::<DECODE, BYTES>(
                                         source,
                                         destination,
-                                        DECODE,
-                                        layer,
-                                        level_index,
-                                        byte,
-                                        row,
-                                        z as u32,
-                                        count,
+                                        tiled_base,
+                                        linear_base,
+                                        level.row_bytes,
                                         destination_base,
+                                        stream,
                                     )?;
+                                    continue;
+                                }
+                                // Layout construction, worker ranges and the outer edge
+                                // bounds prove every sector here. No address query per byte.
+                                for (row, offsets) in SECTOR_OFFSETS.iter().enumerate().take(height)
+                                {
+                                    for sector in (0..width).step_by(SECTOR_SIZE) {
+                                        let count = (width - sector).min(SECTOR_SIZE);
+                                        let tiled = tiled_base + offsets[sector / SECTOR_SIZE];
+                                        let linear = linear_base + row * level.row_bytes + sector;
+                                        let (src, dst) = if DECODE {
+                                            (tiled, linear)
+                                        } else {
+                                            (linear, tiled)
+                                        };
+                                        unsafe {
+                                            std::ptr::copy_nonoverlapping(
+                                                source.as_ptr().add(src),
+                                                destination
+                                                    .as_mut_ptr()
+                                                    .add(dst - destination_base),
+                                                count,
+                                            );
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -831,9 +1005,9 @@ impl Layout {
         Ok(())
     }
 
-    #[inline]
+    #[inline(always)]
     #[allow(clippy::too_many_arguments)]
-    fn convert_full_gob<const DECODE: bool>(
+    fn convert_full_gob<const DECODE: bool, const BYTES: usize>(
         source: &[u8],
         destination: &mut [u8],
         tiled_base: usize,
@@ -842,129 +1016,333 @@ impl Layout {
         destination_base: usize,
         stream: bool,
     ) -> Result<(), LayoutError> {
-        #[cfg(not(target_arch = "x86_64"))]
-        let _ = stream;
-        let (source_base, destination_base) = if DECODE {
-            (
-                tiled_base,
-                linear_base
-                    .checked_sub(destination_base)
-                    .ok_or(LayoutError::Overflow)?,
-            )
-        } else {
-            (
-                linear_base,
-                tiled_base
-                    .checked_sub(destination_base)
-                    .ok_or(LayoutError::Overflow)?,
-            )
-        };
-        #[cfg(target_arch = "x86_64")]
-        if stream && !DECODE {
-            // Pull the later half of the eight-row strip in before stores begin.
-            // The first half is consumed immediately and benefits from demand loads.
-            unsafe {
-                use std::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
-                _mm_prefetch(
-                    source.as_ptr().add(source_base + 4 * row_bytes).cast(),
-                    _MM_HINT_T0,
-                );
-            }
-            for sector_group in [0usize, 2] {
-                for row_pair in 0..4 {
-                    for sector_in_group in 0..2 {
-                        for row_in_pair in 0..2 {
-                            let row = row_pair * 2 + row_in_pair;
-                            let sector_index = sector_group + sector_in_group;
-                            let sector = sector_index * SECTOR_SIZE;
-                            let swizzled = SECTOR_OFFSETS[row][sector_index];
-                            unsafe {
-                                stream_copy_16(
-                                    source.as_ptr().add(source_base + row * row_bytes + sector),
-                                    destination.as_mut_ptr().add(destination_base + swizzled),
-                                )
-                            };
+        // Specialize the sector element count outside the GOB loop.
+        // Full GOBs and worker destination ranges are proved by the caller.
+        macro_rules! sector {
+            ($row:expr, $index:expr) => {{
+                let element = $index * (16 / BYTES);
+                let linear = linear_base + $row * row_bytes + element * BYTES;
+                let tiled = tiled_base + SECTOR_OFFSETS[$row][$index];
+                let (src, dst) = if DECODE {
+                    (tiled, linear)
+                } else {
+                    (linear, tiled)
+                };
+                unsafe {
+                    let src = source.as_ptr().add(src);
+                    let dst = destination.as_mut_ptr().add(dst - destination_base);
+                    #[cfg(target_arch = "x86_64")]
+                    {
+                        use std::arch::x86_64::{_mm_loadu_si128, _mm_storeu_si128};
+                        if stream {
+                            stream_copy_16(src, dst);
+                        } else {
+                            _mm_storeu_si128(dst.cast(), _mm_loadu_si128(src.cast()));
                         }
                     }
+                    #[cfg(not(target_arch = "x86_64"))]
+                    {
+                        let _ = stream;
+                        std::ptr::copy_nonoverlapping(src, dst, 16);
+                    }
                 }
-            }
-            return Ok(());
+            }};
         }
-        for (row, offsets) in SECTOR_OFFSETS.iter().enumerate() {
-            for (sector_index, &swizzled) in offsets.iter().enumerate() {
-                let sector = sector_index * SECTOR_SIZE;
-                let (src, dst) = if DECODE {
-                    (
-                        source_base + swizzled,
-                        destination_base + row * row_bytes + sector,
-                    )
-                } else {
-                    (
-                        source_base + row * row_bytes + sector,
-                        destination_base + swizzled,
-                    )
-                };
-                // The constructor and buffer checks prove both fixed-size regions
-                // are in bounds. Full GOB sectors never overlap within one image.
-                #[cfg(target_arch = "x86_64")]
-                if stream {
-                    // SAFETY: runtime checks prove 16-byte destination alignment;
-                    // every offset is 16-byte aligned and the regions are in bounds.
-                    unsafe {
-                        stream_copy_16(source.as_ptr().add(src), destination.as_mut_ptr().add(dst))
-                    };
-                    continue;
-                }
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        source.as_ptr().add(src),
-                        destination.as_mut_ptr().add(dst),
-                        SECTOR_SIZE,
-                    )
+        if DECODE {
+            macro_rules! row {
+                ($row:expr) => {
+                    sector!($row, 0);
+                    sector!($row, 1);
+                    sector!($row, 2);
+                    sector!($row, 3);
                 };
             }
+            row!(0);
+            row!(1);
+            row!(2);
+            row!(3);
+            row!(4);
+            row!(5);
+            row!(6);
+            row!(7);
+        } else {
+            // Consecutive tiled sectors complete output cache lines together.
+            macro_rules! pair {
+                ($a:expr, $b:expr, $sector:expr) => {
+                    sector!($a, $sector);
+                    sector!($b, $sector);
+                    sector!($a, $sector + 1);
+                    sector!($b, $sector + 1);
+                };
+            }
+            pair!(0, 1, 0);
+            pair!(2, 3, 0);
+            pair!(4, 5, 0);
+            pair!(6, 7, 0);
+            pair!(0, 1, 2);
+            pair!(2, 3, 2);
+            pair!(4, 5, 2);
+            pair!(6, 7, 2);
         }
         Ok(())
     }
+}
 
-    #[inline(always)]
-    #[allow(clippy::too_many_arguments)]
-    fn copy_sector(
-        &self,
-        source: &[u8],
-        destination: &mut [u8],
-        decode: bool,
-        layer: u32,
-        level: u32,
-        x: usize,
-        y: usize,
-        z: u32,
-        count: usize,
-        destination_base: usize,
-    ) -> Result<(), LayoutError> {
-        let tiled = self
-            .tiled_byte_offset(level, layer, x as u32, y as u32, z)
-            .ok_or(LayoutError::Overflow)?;
-        let linear = self
-            .linear_byte_offset(level, layer, x as u32, y as u32, z)
-            .ok_or(LayoutError::Overflow)?;
-        let (src, dst) = if decode {
-            (
-                tiled,
-                linear
-                    .checked_sub(destination_base)
-                    .ok_or(LayoutError::Overflow)?,
-            )
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn paired_decode<const BYTES: usize, const PREFIX: usize, const STREAM: bool>(
+    source: *const u8,
+    destination: *mut u8,
+    row_elements: usize,
+    tile_bytes: usize,
+    column: usize,
+    columns: usize,
+) {
+    let row_bytes = row_elements * BYTES;
+    use std::arch::x86_64::*;
+    unsafe {
+        macro_rules! row {
+            ($row:expr) => {{
+                let offsets = SECTOR_OFFSETS[$row];
+                let dst = destination.add($row * row_bytes);
+                if PREFIX != 0 && column == 0 {
+                    for sector in 0..PREFIX {
+                        _mm_storeu_si128(
+                            dst.add(sector * 16).cast(),
+                            _mm_loadu_si128(source.add(offsets[sector]).cast()),
+                        );
+                    }
+                }
+                if PREFIX != 0 && column + 1 == columns {
+                    for sector in PREFIX..4 {
+                        _mm_storeu_si128(
+                            dst.add(sector * 16).cast(),
+                            _mm_loadu_si128(source.add(offsets[sector]).cast()),
+                        );
+                    }
+                } else {
+                    macro_rules! pair {
+                        ($pair:expr) => {{
+                            let sector = PREFIX + $pair * 2;
+                            let first = if sector < 4 {
+                                source.add(offsets[sector])
+                            } else {
+                                source.add(tile_bytes + offsets[sector - 4])
+                            };
+                            let second = if sector + 1 < 4 {
+                                source.add(offsets[sector + 1])
+                            } else {
+                                source.add(tile_bytes + offsets[sector - 3])
+                            };
+                            let value = _mm256_set_m128i(
+                                _mm_loadu_si128(second.cast()),
+                                _mm_loadu_si128(first.cast()),
+                            );
+                            let output = dst.add(sector * 16);
+                            if STREAM {
+                                _mm256_stream_si256(output.cast(), value);
+                            } else {
+                                _mm256_storeu_si256(output.cast(), value);
+                            }
+                        }};
+                    }
+                    pair!(0);
+                    pair!(1);
+                }
+            }};
+        }
+        row!(0);
+        row!(1);
+        row!(2);
+        row!(3);
+        row!(4);
+        row!(5);
+        row!(6);
+        row!(7);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn paired_encode<const BYTES: usize, const PREFIX: usize>(
+    source: *const u8,
+    destination: *mut u8,
+    row_elements: usize,
+    previous: bool,
+    next: bool,
+) {
+    use std::arch::x86_64::*;
+    let row_bytes = row_elements * BYTES;
+    unsafe {
+        if PREFIX != 0 {
+            let first = _mm_loadu_si128(source.cast());
+            if previous {
+                let tail = _mm_loadu_si128(source.sub(row_bytes).add(48).cast());
+                _mm256_stream_si256(destination.sub(16).cast(), _mm256_set_m128i(first, tail));
+            } else {
+                _mm_storeu_si128(destination.cast(), first);
+            }
+        }
+        // Physical sectors select two rows and two columns per cache line.
+        // These indices become constants for each unrolled pair.
+        macro_rules! sector {
+            ($index:expr) => {{
+                let index = $index;
+                let row = (index / 4 % 4) * 2 + index % 2;
+                let column = index / 16 * 2 + index % 4 / 2;
+                source.add(row * row_bytes + column * (16 / BYTES) * BYTES)
+            }};
+        }
+        macro_rules! pair {
+            ($pair:expr) => {{
+                let index = PREFIX + $pair * 2;
+                let first = _mm_loadu_si128(sector!(PREFIX + $pair * 2).cast());
+                if PREFIX != 0 && $pair == 15 {
+                    if !next {
+                        _mm_storeu_si128(destination.add(index * 16).cast(), first);
+                    }
+                } else {
+                    let second = _mm_loadu_si128(sector!(PREFIX + $pair * 2 + 1).cast());
+                    _mm256_stream_si256(
+                        destination.add(index * 16).cast(),
+                        _mm256_set_m128i(second, first),
+                    );
+                }
+            }};
+        }
+        pair!(0);
+        pair!(1);
+        pair!(2);
+        pair!(3);
+        pair!(4);
+        pair!(5);
+        pair!(6);
+        pair!(7);
+        pair!(8);
+        pair!(9);
+        pair!(10);
+        pair!(11);
+        pair!(12);
+        pair!(13);
+        pair!(14);
+        pair!(15);
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+unsafe fn wide_decode<const BYTES: usize>(
+    source: *const u8,
+    destination: *mut u8,
+    row_elements: usize,
+    stream: bool,
+) {
+    let row_bytes = row_elements * BYTES;
+    use std::arch::x86_64::*;
+    unsafe {
+        let even = _mm512_setr_epi64(0, 1, 4, 5, 8, 9, 12, 13);
+        let odd = _mm512_setr_epi64(2, 3, 6, 7, 10, 11, 14, 15);
+        for pair in 0..4 {
+            let a = _mm512_loadu_si512(source.add(pair * 64).cast());
+            let b = _mm512_loadu_si512(source.add(pair * 64 + 256).cast());
+            let first = _mm512_permutex2var_epi64(a, even, b);
+            let second = _mm512_permutex2var_epi64(a, odd, b);
+            let dst = destination.add(pair * 2 * row_bytes);
+            if stream {
+                _mm512_stream_si512(dst.cast(), first);
+                _mm512_stream_si512(dst.add(row_bytes).cast(), second);
+            } else {
+                _mm512_storeu_si512(dst.cast(), first);
+                _mm512_storeu_si512(dst.add(row_bytes).cast(), second);
+            }
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+unsafe fn load_sectors(source: *const u8) -> std::arch::x86_64::__m512i {
+    use std::arch::x86_64::*;
+    unsafe { _mm512_loadu_si512(source.cast()) }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn wide_encode<const BYTES: usize>(
+    source: *const u8,
+    destination: *mut u8,
+    row_elements: usize,
+    stream: bool,
+    previous: bool,
+    next: bool,
+) {
+    let row_bytes = row_elements * BYTES;
+    use std::arch::x86_64::*;
+    // Pair 16-byte sectors from two rows into physical cache lines.
+    unsafe {
+        let encode0 = _mm512_setr_epi64(0, 1, 8, 9, 2, 3, 10, 11);
+        let encode1 = _mm512_setr_epi64(4, 5, 12, 13, 6, 7, 14, 15);
+        let mut lines = [_mm512_setzero_si512(); 8];
+        for pair in 0..4 {
+            let a = load_sectors(source.add(pair * 2 * row_bytes).cast());
+            let b = load_sectors(source.add((pair * 2 + 1) * row_bytes).cast());
+            lines[pair] = _mm512_permutex2var_epi64(a, encode0, b);
+            lines[pair + 4] = _mm512_permutex2var_epi64(a, encode1, b);
+        }
+        let shift = (64 - destination as usize % 64) % 64;
+        if stream && shift != 0 {
+            // Cached prefix and suffix enclose seven complete streaming lines.
+            let lanes = shift / 8;
+            if previous {
+                // The previous GOB owns the same eight-row strip at y - 8.
+                // Its final sectors and this prefix make a complete cache line.
+                let a = load_sectors(source.sub(2 * row_bytes));
+                let b = load_sectors(source.sub(row_bytes));
+                let tail = _mm512_permutex2var_epi64(a, encode1, b);
+                let value = match lanes {
+                    2 => _mm512_alignr_epi64::<2>(lines[0], tail),
+                    4 => _mm512_alignr_epi64::<4>(lines[0], tail),
+                    6 => _mm512_alignr_epi64::<6>(lines[0], tail),
+                    _ => unreachable!(),
+                };
+                _mm512_stream_si512(destination.add(shift).sub(64).cast(), value);
+            } else {
+                _mm512_mask_storeu_epi64(destination.cast(), ((1u16 << lanes) - 1) as u8, lines[0]);
+            }
+            for line in 0..7 {
+                let value = match lanes {
+                    2 => _mm512_alignr_epi64::<2>(lines[line + 1], lines[line]),
+                    4 => _mm512_alignr_epi64::<4>(lines[line + 1], lines[line]),
+                    6 => _mm512_alignr_epi64::<6>(lines[line + 1], lines[line]),
+                    _ => unreachable!(),
+                };
+                _mm512_stream_si512(destination.add(shift + line * 64).cast(), value);
+            }
+            let value = match lanes {
+                2 => _mm512_alignr_epi64::<2>(lines[7], lines[7]),
+                4 => _mm512_alignr_epi64::<4>(lines[7], lines[7]),
+                6 => _mm512_alignr_epi64::<6>(lines[7], lines[7]),
+                _ => unreachable!(),
+            };
+            if !next {
+                _mm512_mask_storeu_epi64(
+                    destination.add(448 + shift).cast(),
+                    ((1u16 << (8 - lanes)) - 1) as u8,
+                    value,
+                );
+            }
         } else {
-            (
-                linear,
-                tiled
-                    .checked_sub(destination_base)
-                    .ok_or(LayoutError::Overflow)?,
-            )
-        };
-        destination[dst..dst + count].copy_from_slice(&source[src..src + count]);
-        Ok(())
+            for (line, value) in lines.into_iter().enumerate() {
+                let dst = destination.add(line * 64).cast();
+                if stream {
+                    _mm512_stream_si512(dst, value);
+                } else {
+                    _mm512_storeu_si512(dst, value);
+                }
+            }
+        }
     }
 }
 
