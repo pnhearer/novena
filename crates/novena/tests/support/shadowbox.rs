@@ -56,6 +56,7 @@ shadowbox = {{ path = {shadowbox:?} }}
             source = crate_root.join(if cache_test {
                 "tests/shadowbox/startup.rs"
             } else if test == "startup::cold_and_warm_first_draw"
+                || test == "latency::translated_pipeline_first_use"
                 || matches!(
                     test,
                     "first_draw_executes_translated_triangle"

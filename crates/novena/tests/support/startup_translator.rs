@@ -56,6 +56,7 @@ fn context(context: &TranslationContext) -> Result<CacheContext<'_>, String> {
         generation,
         options: TranslationOptions {
             global_delta_zero: context.global_delta_zero,
+            supports_shader_float64: false,
         },
         graphics_state: GraphicsState {
             geometry_input,

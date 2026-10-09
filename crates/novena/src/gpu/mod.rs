@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 mod commands;
 pub mod graphics;
+mod graphics_libraries;
 pub mod image_enums;
 pub mod image_layout;
 mod images;
@@ -94,6 +95,10 @@ pub struct Context {
     /// Indices of families for which the device created queues.
     pub queue_families: Vec<u32>,
     swapchain: bool,
+    /// Whether graphics library compilation is enabled. Evidence: provenance 0037.
+    pub graphics_pipeline_libraries: bool,
+    /// Whether the device advertises linking suitable for draw-time use.
+    pub graphics_pipeline_fast_linking: bool,
     pub(crate) push_descriptors: Option<ash::khr::push_descriptor::Device>,
     pub(crate) max_push_descriptors: u32,
 }
@@ -911,7 +916,7 @@ impl Context {
         let instance = unsafe { entry.create_instance(&create, None).ok()? };
         // SAFETY: the instance is live and owns this enumeration.
         let result = Self::create_device(&instance, swapchain);
-        let Some((pick, device, family, shader_features)) = result else {
+        let Some((pick, device, family, shader_features, libraries, fast_linking)) = result else {
             // SAFETY: no device was created and the instance is owned here.
             unsafe { instance.destroy_instance(None) };
             return None;
@@ -933,6 +938,8 @@ impl Context {
             }
         }
         Some(Self {
+            graphics_pipeline_libraries: libraries,
+            graphics_pipeline_fast_linking: fast_linking,
             push_descriptors,
             max_push_descriptors: push.max_push_descriptors,
             entry,
@@ -960,7 +967,7 @@ impl Context {
     fn create_device(
         instance: &Instance,
         swapchain: bool,
-    ) -> Option<(vk::PhysicalDevice, Device, u32, ShaderFeatures)> {
+    ) -> Option<(vk::PhysicalDevice, Device, u32, ShaderFeatures, bool, bool)> {
         // SAFETY: instance is live for all enumeration and feature queries below.
         let mut devices = unsafe { instance.enumerate_physical_devices().ok()? };
         devices.sort_by_key(|&device| unsafe {
@@ -992,6 +999,33 @@ impl Context {
                 continue;
             };
             let family = family as u32;
+            let supported = unsafe { instance.enumerate_device_extension_properties(pick) }.ok()?;
+            let has = |name| {
+                supported.iter().any(|e| {
+                    (unsafe { std::ffi::CStr::from_ptr(e.extension_name.as_ptr()) }) == name
+                })
+            };
+            let available = has(ash::ext::graphics_pipeline_library::NAME)
+                && has(ash::khr::pipeline_library::NAME)
+                && std::env::var_os("NOVENA_DISABLE_PIPELINE_LIBRARIES").is_none();
+            let mut library_features =
+                vk::PhysicalDeviceGraphicsPipelineLibraryFeaturesEXT::default();
+            if available {
+                let mut query =
+                    vk::PhysicalDeviceFeatures2::default().push_next(&mut library_features);
+                unsafe { instance.get_physical_device_features2(pick, &mut query) };
+            }
+            let libraries = available && library_features.graphics_pipeline_library != vk::FALSE;
+            let mut library_properties =
+                vk::PhysicalDeviceGraphicsPipelineLibraryPropertiesEXT::default();
+            if libraries {
+                let mut query =
+                    vk::PhysicalDeviceProperties2::default().push_next(&mut library_properties);
+                unsafe { instance.get_physical_device_properties2(pick, &mut query) };
+            }
+            let fast_linking = libraries
+                && library_properties.graphics_pipeline_library_fast_linking != vk::FALSE
+                && std::env::var_os("NOVENA_DISABLE_FAST_LINKING").is_none();
             let mut v11 = vk::PhysicalDeviceVulkan11Features::default();
             let mut v12 = vk::PhysicalDeviceVulkan12Features::default();
             let mut features = vk::PhysicalDeviceFeatures2::default()
@@ -1042,15 +1076,32 @@ impl Context {
             if Self::supports_push(instance, pick) {
                 extensions.push(ash::khr::push_descriptor::NAME.as_ptr());
             }
-            let device_info = vk::DeviceCreateInfo::default()
+            if libraries {
+                extensions.push(ash::ext::graphics_pipeline_library::NAME.as_ptr());
+                extensions.push(ash::khr::pipeline_library::NAME.as_ptr());
+            }
+            let mut enabled_library =
+                vk::PhysicalDeviceGraphicsPipelineLibraryFeaturesEXT::default()
+                    .graphics_pipeline_library(libraries);
+            let mut device_info = vk::DeviceCreateInfo::default()
                 .queue_create_infos(&queue_info)
                 .enabled_extension_names(&extensions)
                 .enabled_features(&enabled)
                 .push_next(&mut enabled11)
                 .push_next(&mut enabled12);
+            if libraries {
+                device_info = device_info.push_next(&mut enabled_library);
+            }
             // SAFETY: the selected family supports graphics and the create info is valid.
             if let Ok(device) = unsafe { instance.create_device(pick, &device_info, None) } {
-                return Some((pick, device, family, shader_features));
+                return Some((
+                    pick,
+                    device,
+                    family,
+                    shader_features,
+                    libraries,
+                    fast_linking,
+                ));
             }
         }
         None

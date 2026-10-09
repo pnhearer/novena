@@ -1,15 +1,17 @@
-//! Bounded drawing with public Vulkan state and host choices. Provenance: 0027, 0028, 0029.
+//! Bounded drawing with public Vulkan state and host choices. Provenance: 0027, 0028, 0029, 0037.
 use super::{
-    pipeline_workers::AsyncPipelines,
-    pipelines::{
-        CacheStats, DriverCache, PersistenceStats, PipelineStatus, RequestError,
-        TranslationIdentity,
-    },
+    graphics_libraries::{Compiler, Part},
+    pipelines::{CacheStats, DriverCache, PersistenceStats, TranslationIdentity},
     uniforms::{self, Bank, UniformStage, BANK_SIZE},
     Context, GlobalMemory,
 };
 use ash::vk;
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::Path,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 /// Opt-in host interpretation, not established guest enums. Provenance: 0028.
 /// Viewport/scissor use Vulkan pixel coordinates. Without the depth/raster extension, raster state uses fill,
@@ -323,18 +325,41 @@ pub struct VertexAttribute {
 
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub(crate) struct Key {
-    vertex: Vec<u32>,
-    fragment: Vec<u32>,
-    input: VertexInput,
-    topology: PrimitiveTopology,
-    storage: bool,
-    state: DrawPipelineState,
+    pub(super) vertex: Vec<u32>,
+    pub(super) fragment: Vec<u32>,
+    pub(super) input: VertexInput,
+    pub(super) topology: PrimitiveTopology,
+    pub(super) storage: bool,
+    pub(super) state: DrawPipelineState,
+}
+
+/// Host choice when a draw needs unfinished compilation. Evidence: provenance 0037.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PendingDrawPolicy {
+    /// Submit other commands and try this draw again in a later frame.
+    #[default]
+    Skip,
+    /// Wait for at most this budget across all parts, then skip this frame.
+    /// The host setter accepts budgets up to 16 milliseconds.
+    Wait(Duration),
+}
+
+/// Successful driver creation counts, excluding cache request hits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GraphicsCompilationStats {
+    /// Vertex input, pre-rasterization, fragment shader, and fragment output counts.
+    pub library_parts: [u64; 4],
+    /// Executable links, including startup links.
+    pub links: u64,
+    /// Whole pipelines created on devices without library support.
+    pub whole: u64,
 }
 
 pub(crate) struct GraphicsPipelines {
     driver: Arc<DriverCache>,
     requires_storage: bool,
-    pool: AsyncPipelines<Key, GraphicsPipeline>,
+    pool: Compiler,
+    policy: PendingDrawPolicy,
     ready_ids: HashMap<u64, Vec<usize>>,
     ready: Vec<(Key, Arc<GraphicsPipeline>)>,
 }
@@ -364,18 +389,12 @@ impl GraphicsPipelines {
             b"novena graphics main interface 3 disk 1",
             persistence,
         )?;
-        let worker_driver = driver.clone();
-        let pool = AsyncPipelines::new(
-            HashMap::new(),
-            CacheStats::default(),
+        let pool = Compiler::new(
+            &driver,
+            context.graphics_pipeline_libraries,
+            context.graphics_pipeline_fast_linking,
             workers,
             capacity,
-            move |key: &Key| {
-                let pipeline = worker_driver
-                    .create(|context, cache| GraphicsPipeline::create(context, cache, key))?;
-                worker_driver.persist_driver();
-                Ok(Arc::new(pipeline))
-            },
         )?;
         let limits = unsafe {
             context
@@ -386,6 +405,7 @@ impl GraphicsPipelines {
         Ok(Self {
             driver,
             pool,
+            policy: PendingDrawPolicy::default(),
             ready_ids: HashMap::new(),
             ready: Vec::new(),
             requires_storage: u64::from(limits.max_uniform_buffer_range) < BANK_SIZE,
@@ -427,29 +447,35 @@ impl GraphicsPipelines {
                     && ((stages[0] == key.vertex && stages[1] == key.fragment)
                         || (stages[1] == key.vertex && stages[0] == key.fragment))
                 {
-                    self.pool.stats.hits += 1;
+                    self.pool.hit();
                     return Ok(Some(pipeline.clone()));
                 }
             }
         }
         let key = Key::new(stages, input, topology, state, storage)?;
-        let retained = key.clone();
-        let request = match self.pool.request(key) {
-            Ok(request) => request,
-            Err(RequestError::QueueFull) => return Ok(None),
-            Err(RequestError::Stopped) => return Err("graphics compiler stopped".into()),
+        let deadline = match self.policy {
+            PendingDrawPolicy::Skip => None,
+            PendingDrawPolicy::Wait(budget) => Some(Instant::now() + budget),
         };
-        match request.poll() {
-            PipelineStatus::Ready(pipeline) => {
-                let id = self.ready.len();
-                self.ready.push((retained, pipeline.clone()));
-                self.ready_ids.entry(fingerprint).or_default().push(id);
-                Ok(Some(pipeline))
-            }
-            PipelineStatus::Failed(error) => Err(error),
-            PipelineStatus::Queued | PipelineStatus::Compiling => Ok(None),
+        let pipeline = self.pool.request(key.clone(), deadline)?;
+        if let Some(pipeline) = &pipeline {
+            let id = self.ready.len();
+            self.ready.push((key, pipeline.clone()));
+            self.ready_ids.entry(fingerprint).or_default().push(id);
         }
+        Ok(pipeline)
     }
+    pub(crate) fn set_policy(&mut self, policy: PendingDrawPolicy) -> Result<(), String> {
+        if matches!(policy, PendingDrawPolicy::Wait(budget) if budget > Duration::from_millis(16)) {
+            return Err("draw wait budget exceeds 16 milliseconds".into());
+        }
+        self.policy = policy;
+        Ok(())
+    }
+    pub(crate) fn policy(&self) -> PendingDrawPolicy {
+        self.policy
+    }
+
     pub(crate) fn queue_startup(
         &mut self,
         stages: &[Vec<u32>],
@@ -462,11 +488,7 @@ impl GraphicsPipelines {
             recipe.state,
             self.uses_storage(recipe.storage),
         )?;
-        match self.pool.request(key) {
-            Ok(_) => Ok(true),
-            Err(RequestError::QueueFull) => Ok(false),
-            Err(RequestError::Stopped) => Err("graphics compiler stopped".into()),
-        }
+        self.pool.queue(key)
     }
 
     pub(super) fn invalidate_descriptors(&mut self) {
@@ -501,12 +523,15 @@ impl GraphicsPipelines {
     pub fn uses_storage(&self, requested: bool) -> bool {
         requested || self.requires_storage
     }
+    pub(crate) fn compilation_stats(&self) -> GraphicsCompilationStats {
+        self.pool.compilation_stats()
+    }
     /// Return cumulative request reuse and insertion counters.
     pub fn stats(&self) -> CacheStats {
-        self.pool.stats
+        self.pool.stats()
     }
     /// Number of queued or compiling graphics requests.
-    pub fn pending(&self) -> usize {
+    pub fn pending(&mut self) -> usize {
         self.pool.pending()
     }
     /// Return persistent cache loading and reuse counters.
@@ -519,6 +544,25 @@ impl GraphicsPipelines {
     }
 }
 impl Key {
+    pub(super) fn validate_interfaces(&self) -> Result<(), String> {
+        let inputs = float_interface(&self.vertex, 1)?;
+        if inputs.is_empty()
+            || inputs.len() != self.input.attributes.len()
+            || inputs
+                .iter()
+                .enumerate()
+                .any(|(i, &(at, _))| at != i as u32)
+            || float_interface(&self.vertex, 3)? != float_interface(&self.fragment, 1)?
+            || float_interface(&self.fragment, 3)?
+                != (0..self.state.color_count.max(1))
+                    .map(|i| (i, 4))
+                    .collect::<Vec<_>>()
+        {
+            return Err("incompatible graphics interfaces".into());
+        }
+        Ok(())
+    }
+
     pub(crate) fn new(
         stages: &[Vec<u32>],
         input: VertexInput,
@@ -704,10 +748,16 @@ pub(crate) struct GraphicsPipeline {
     pub batch_safe: bool,
     descriptors: std::sync::Mutex<DescriptorCache>,
     push_set: Option<u32>,
+    resource_owner: Option<Arc<GraphicsPipeline>>,
 }
 
 impl GraphicsPipeline {
-    fn create(context: &Arc<Context>, cache: vk::PipelineCache, key: &Key) -> Result<Self, String> {
+    pub(super) fn create(
+        context: &Arc<Context>,
+        cache: vk::PipelineCache,
+        key: &Key,
+        part: Option<Part>,
+    ) -> Result<Self, String> {
         let mut banks = uniforms::banks(&key.vertex, UniformStage::Vertex)?;
         banks.extend(uniforms::banks(&key.fragment, UniformStage::Fragment)?);
         let mut textures = super::textures::bindings(&key.vertex, UniformStage::Vertex)?;
@@ -862,6 +912,7 @@ impl GraphicsPipeline {
             set_layouts: Vec::new(),
             descriptors: std::sync::Mutex::new(DescriptorCache::default()),
             push_set: None,
+            resource_owner: None,
             batch_safe: [&key.vertex, &key.fragment].iter().all(|words| {
                 instructions(words).is_ok_and(|ops| {
                     !ops.iter()
@@ -1008,28 +1059,36 @@ impl GraphicsPipeline {
                 )
                 .map_err(|e| format!("create draw layout: {e:?}"))?;
         }
-        let vertex_words = uniforms::lower(&key.vertex, UniformStage::Vertex, key.storage)?;
-        let fragment_words = uniforms::lower(&key.fragment, UniformStage::Fragment, key.storage)?;
-        let vertex = context.create_global_shader_module(&vertex_words)?;
-        let fragment = match context.create_global_shader_module(&fragment_words) {
-            Ok(module) => module,
-            Err(error) => {
-                unsafe {
-                    context.device.destroy_shader_module(vertex, None);
-                }
-                return Err(error);
+        let mut modules = Vec::new();
+        let mut stages = Vec::new();
+        for (words, stage, subset) in [
+            (&key.vertex, UniformStage::Vertex, Part::Raster),
+            (&key.fragment, UniformStage::Fragment, Part::Fragment),
+        ] {
+            if part.is_some_and(|p| p != subset) {
+                continue;
             }
-        };
-        let stages = [
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::VERTEX)
-                .module(vertex)
-                .name(c"main"),
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(fragment)
-                .name(c"main"),
-        ];
+            let module = uniforms::lower(words, stage, key.storage)
+                .and_then(|words| context.create_global_shader_module(&words));
+            let module = match module {
+                Ok(module) => module,
+                Err(error) => {
+                    unsafe {
+                        for module in modules {
+                            context.device.destroy_shader_module(module, None);
+                        }
+                    }
+                    return Err(error);
+                }
+            };
+            modules.push(module);
+            stages.push(
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(stage.flags())
+                    .module(module)
+                    .name(c"main"),
+            );
+        }
         let bindings: Vec<_> = key
             .input
             .bindings
@@ -1091,7 +1150,7 @@ impl GraphicsPipeline {
         let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&colors);
         let dynamic = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
         let dynamics = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic);
-        let info = vk::GraphicsPipelineCreateInfo::default()
+        let mut info = vk::GraphicsPipelineCreateInfo::default()
             .stages(&stages)
             .vertex_input_state(&input)
             .input_assembly_state(&assembly)
@@ -1103,14 +1162,22 @@ impl GraphicsPipeline {
             .dynamic_state(&dynamics)
             .layout(result.layout)
             .render_pass(result.render_pass);
+        let mut subset = vk::GraphicsPipelineLibraryCreateInfoEXT::default();
+        if let Some(part) = part {
+            subset.flags = part.flags();
+            info = info
+                .flags(vk::PipelineCreateFlags::LIBRARY_KHR)
+                .push_next(&mut subset);
+        }
         let created = unsafe {
             context
                 .device
                 .create_graphics_pipelines(cache, &[info], None)
         };
         unsafe {
-            context.device.destroy_shader_module(vertex, None);
-            context.device.destroy_shader_module(fragment, None);
+            for module in modules {
+                context.device.destroy_shader_module(module, None);
+            }
         }
         match created {
             Ok(pipelines) => result.pipeline = pipelines[0],
@@ -1124,6 +1191,60 @@ impl GraphicsPipeline {
             }
         }
         Ok(result)
+    }
+
+    pub(super) fn link(key: &Key, parts: &[Arc<Self>]) -> Result<Self, String> {
+        let mut banks = uniforms::banks(&key.vertex, UniformStage::Vertex)?;
+        banks.extend(uniforms::banks(&key.fragment, UniformStage::Fragment)?);
+        let mut textures = super::textures::bindings(&key.vertex, UniformStage::Vertex)?;
+        textures.extend(super::textures::bindings(
+            &key.fragment,
+            UniformStage::Fragment,
+        )?);
+        let owner = &parts[1];
+        let handles: Vec<_> = parts.iter().map(|p| p.pipeline).collect();
+        let mut libraries = vk::PipelineLibraryCreateInfoKHR::default().libraries(&handles);
+        let info = vk::GraphicsPipelineCreateInfo::default()
+            .layout(owner.layout)
+            .render_pass(owner.render_pass)
+            .push_next(&mut libraries);
+        // Fast links do not acquire the compilation cache or perform disk I/O.
+        let created = unsafe {
+            owner
+                .context
+                .device
+                .create_graphics_pipelines(vk::PipelineCache::null(), &[info], None)
+        };
+        let pipeline = match created {
+            Ok(values) => values[0],
+            Err((values, error)) => {
+                unsafe {
+                    for value in values {
+                        owner.context.device.destroy_pipeline(value, None);
+                    }
+                }
+                return Err(format!("link graphics pipeline: {error:?}"));
+            }
+        };
+        Ok(Self {
+            context: owner.context.clone(),
+            render_pass: owner.render_pass,
+            pipeline,
+            layout: owner.layout,
+            set_layouts: owner.set_layouts.clone(),
+            banks,
+            textures,
+            storage: key.storage,
+            batch_safe: [&key.vertex, &key.fragment].iter().all(|words| {
+                instructions(words).is_ok_and(|ops| {
+                    !ops.iter()
+                        .any(|&(op, args)| op == 32 && args.get(1) == Some(&5349))
+                })
+            }),
+            descriptors: std::sync::Mutex::new(DescriptorCache::default()),
+            push_set: owner.push_set,
+            resource_owner: Some(owner.clone()),
+        })
     }
 
     fn descriptor_type(&self) -> vk::DescriptorType {
@@ -1362,6 +1483,9 @@ impl Drop for GraphicsPipeline {
     fn drop(&mut self) {
         unsafe {
             self.context.device.destroy_pipeline(self.pipeline, None);
+            if self.resource_owner.is_some() {
+                return;
+            }
             self.context
                 .device
                 .destroy_pipeline_layout(self.layout, None);

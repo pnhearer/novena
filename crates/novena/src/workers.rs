@@ -1,4 +1,4 @@
-//! Bounded owned pipeline requests. Evidence: provenance 0026 and 0027.
+//! Bounded owned pipeline requests. Evidence: provenance 0026, 0027, and 0037.
 /// Cumulative request reuse and insertion counters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CacheStats {
@@ -11,9 +11,10 @@ use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicU8, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc, Arc, Condvar, Mutex,
     },
     thread::{self, JoinHandle},
+    time::Instant,
 };
 
 /// A frame polls this state and skips the draw unless Ready is returned.
@@ -29,6 +30,7 @@ pub enum PipelineStatus<P> {
 }
 
 struct RequestState<P> {
+    completed: Condvar,
     phase: AtomicU8,
     result: Mutex<Option<Result<Arc<P>, String>>>,
 }
@@ -46,10 +48,34 @@ impl<P> Clone for PipelineRequest<P> {
 impl<P> PipelineRequest<P> {
     /// Create an already completed request retaining the supplied shared result.
     pub fn ready(value: Arc<P>) -> Self {
+        Self::completed(Ok(value))
+    }
+
+    pub(crate) fn completed(result: Result<Arc<P>, String>) -> Self {
         Self(Arc::new(RequestState {
+            completed: Condvar::new(),
             phase: AtomicU8::new(2),
-            result: Mutex::new(Some(Ok(value))),
+            result: Mutex::new(Some(result)),
         }))
+    }
+
+    /// Wait for completion until one shared draw deadline, then return a snapshot.
+    pub fn wait_until(&self, deadline: Instant) -> PipelineStatus<P> {
+        let result = self.0.result.lock().unwrap_or_else(|p| p.into_inner());
+        let (result, _) = self
+            .0
+            .completed
+            .wait_timeout_while(
+                result,
+                deadline.saturating_duration_since(Instant::now()),
+                |r| r.is_none(),
+            )
+            .unwrap_or_else(|p| p.into_inner());
+        match result.as_ref() {
+            Some(Ok(value)) => PipelineStatus::Ready(value.clone()),
+            Some(Err(error)) => PipelineStatus::Failed(error.clone()),
+            None => self.poll(),
+        }
     }
 
     /// Return the current phase without waiting for compilation.
@@ -116,6 +142,7 @@ impl<K: Eq + std::hash::Hash + Clone + Send + 'static, P: Send + Sync + 'static>
                     (
                         program,
                         PipelineRequest(Arc::new(RequestState {
+                            completed: Condvar::new(),
                             phase: AtomicU8::new(2),
                             result: Mutex::new(Some(Ok(pipeline))),
                         })),
@@ -144,6 +171,7 @@ impl<K: Eq + std::hash::Hash + Clone + Send + 'static, P: Send + Sync + 'static>
                     .unwrap_or_else(|_| Err("pipeline compiler panicked".into()));
                     *job.state.result.lock().unwrap() = Some(compiled);
                     job.state.phase.store(2, Ordering::Release);
+                    job.state.completed.notify_all();
                 })
                 .map_err(|error| format!("start pipeline worker: {error}"))?;
             result.workers.push(worker);
@@ -159,6 +187,7 @@ impl<K: Eq + std::hash::Hash + Clone + Send + 'static, P: Send + Sync + 'static>
             return Ok(request.clone());
         }
         let state = Arc::new(RequestState {
+            completed: Condvar::new(),
             phase: AtomicU8::new(0),
             result: Mutex::new(None),
         });
@@ -229,3 +258,69 @@ impl<P> PartialEq for PipelineRequest<P> {
     }
 }
 impl<P> Eq for PipelineRequest<P> {}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn one_deadline_bounds_waiting_and_completion_wakes_waiters() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let mut pool = AsyncPipelines::new(
+            HashMap::new(),
+            CacheStats::default(),
+            1,
+            1,
+            move |key: &u32| {
+                started_tx.send(()).unwrap();
+                release_rx.lock().unwrap().recv().unwrap();
+                Ok(Arc::new(*key))
+            },
+        )
+        .unwrap();
+        let first = pool.request(7).unwrap();
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let second = pool.request(8).unwrap();
+        assert_eq!(pool.request(9).unwrap_err(), RequestError::QueueFull);
+        let start = Instant::now();
+        let deadline = start + Duration::from_millis(5);
+        assert!(matches!(
+            first.wait_until(deadline),
+            PipelineStatus::Compiling
+        ));
+        assert!(matches!(
+            second.wait_until(deadline),
+            PipelineStatus::Queued
+        ));
+        assert!(
+            start.elapsed() < Duration::from_millis(250),
+            "wait exceeded shared deadline"
+        );
+        release_tx.send(()).unwrap();
+        assert!(
+            matches!(first.wait_until(Instant::now() + Duration::from_secs(5)), PipelineStatus::Ready(value) if *value == 7)
+        );
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        release_tx.send(()).unwrap();
+        assert!(
+            matches!(second.wait_until(Instant::now() + Duration::from_secs(5)), PipelineStatus::Ready(value) if *value == 8)
+        );
+    }
+
+    #[test]
+    fn waiting_preserves_failed_results() {
+        let mut pool =
+            AsyncPipelines::<u32, u32>::new(HashMap::new(), CacheStats::default(), 1, 1, |_| {
+                Err("synthetic failure".into())
+            })
+            .unwrap();
+        let request = pool.request(1).unwrap();
+        assert!(
+            matches!(request.wait_until(Instant::now() + Duration::from_secs(5)), PipelineStatus::Failed(error) if error == "synthetic failure")
+        );
+        assert!(matches!(request.poll(), PipelineStatus::Failed(_)));
+    }
+}
