@@ -769,7 +769,8 @@ mod tests {
         };
         #[cfg(not(feature = "vulkan"))]
         let expected = Status::Ok;
-        assert_eq!(call(&instance, "QueueSubmitCommands", &mut r), expected);
+        assert_eq!(call(&instance, "QueueSubmitCommands", &mut r), Status::Ok);
+        assert_eq!(instance.queue.drain(), expected);
         assert!(instance.objects.recording(handle).is_none());
         assert_eq!(memory.writes.load(Ordering::Relaxed), 0);
         assert_eq!(memory.buffer, [0xa5; 16]);

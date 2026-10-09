@@ -60,6 +60,7 @@ impl PartKey {
             Part::Input => {
                 result.input = Some(key.input.clone());
                 result.topology = Some(key.topology);
+                result.state.instance_bindings = key.state.instance_bindings;
             }
             Part::Raster | Part::Fragment => {
                 result.storage = key.storage;
@@ -164,6 +165,8 @@ impl Compiler {
         let counts = Arc::new(std::array::from_fn(|_| AtomicU64::new(0)));
         let worker_counts: Arc<[AtomicU64; 6]> = counts.clone();
         let modules = ShaderModules::default();
+        // Job equality and hashing use only the immutable id, never retained resources.
+        #[allow(clippy::mutable_key_type)]
         let mut warmed = HashMap::new();
         if libraries {
             for job in common_jobs() {
@@ -479,6 +482,9 @@ mod tests {
         assert!(changed_parts(&a, &b) == [Part::Raster]);
         b = a.clone();
         b.input.bindings[0].stride = 32;
+        assert!(changed_parts(&a, &b) == [Part::Input]);
+        b = a.clone();
+        b.state.instance_bindings = 1;
         assert!(changed_parts(&a, &b) == [Part::Input]);
         b = a.clone();
         b.topology = PrimitiveTopology::TriangleStrip;
