@@ -63,6 +63,9 @@ fn call(instance: &Instance, name: &str, args: &[u64]) -> u64 {
         Status::Ok,
         "{name}"
     );
+    if name.get(3..) == Some("QueuePresentTexture") {
+        assert_eq!(instance.poll_presentations(true), Status::Ok);
+    }
     registers.x[0]
 }
 

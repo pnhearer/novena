@@ -50,7 +50,7 @@ fn scene(frames: usize, draws_per_frame: usize, indexed: bool, fail_tail: bool) 
     fs::remove_dir_all(&scratch).unwrap();
 
     // Host memory outlives the instance. Pool storage starts at byte 0x1000.
-    let memory = Memory(Mutex::new(vec![0; 0x9000]));
+    let memory = Memory(Mutex::new(vec![0; 0x9000]), Mutex::default());
     let instance = hosted(&memory);
     assert!(
         instance.set_first_draw_contract(Some(FirstDrawContract {

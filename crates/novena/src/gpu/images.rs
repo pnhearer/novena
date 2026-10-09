@@ -26,6 +26,7 @@ pub(super) struct ImageInfo {
 }
 
 pub(super) struct Image {
+    pub wait_on_drop: bool,
     context: Arc<Context>,
     memory: vk::DeviceMemory,
     /// Image handle and tracked transfer metadata.
@@ -187,6 +188,7 @@ impl Image {
                 .ok()?
         };
         let mut result = Self {
+            wait_on_drop: true,
             context: Arc::clone(context),
             memory: vk::DeviceMemory::null(),
             views: HashMap::new(),
@@ -283,7 +285,9 @@ impl Drop for Image {
     fn drop(&mut self) {
         unsafe {
             // Includes presentation copies and callers using the context directly.
-            let _ = self.context.device.device_wait_idle();
+            if self.wait_on_drop {
+                let _ = self.context.wait_queue();
+            }
             for view in self.views.values() {
                 self.context.device.destroy_image_view(*view, None);
             }
@@ -294,6 +298,7 @@ impl Drop for Image {
 }
 
 pub(super) struct Buffer {
+    pub wait_on_drop: bool,
     context: Arc<Context>,
     memory: vk::DeviceMemory,
     /// Owned mapped staging buffer handle.
@@ -323,6 +328,7 @@ impl Buffer {
                 .ok()?
         };
         let mut result = Self {
+            wait_on_drop: true,
             context: Arc::clone(context),
             memory: vk::DeviceMemory::null(),
             buffer,
@@ -384,7 +390,9 @@ impl Buffer {
 impl Drop for Buffer {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.context.device.device_wait_idle();
+            if self.wait_on_drop {
+                let _ = self.context.wait_queue();
+            }
             if !self.mapped.is_null() {
                 self.context.device.unmap_memory(self.memory);
             }
@@ -910,9 +918,7 @@ impl Images {
             self.commands.wait()
         })();
         if result.is_none() {
-            unsafe {
-                let _ = device.device_wait_idle();
-            }
+            let _ = self.context.wait_queue();
         }
         result
     }

@@ -102,7 +102,7 @@ impl Scratch {
 impl Drop for Scratch {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.context.device.device_wait_idle();
+            let _ = self.context.wait_queue();
             if self.mapped != 0 {
                 self.context.device.unmap_memory(self.memory);
             }
@@ -425,7 +425,7 @@ impl Transfer {
 impl Drop for Transfer {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.context.device.device_wait_idle();
+            let _ = self.context.wait_queue();
             self.context.device.destroy_pipeline(self.pipeline, None);
             self.context
                 .device
