@@ -183,8 +183,10 @@ thread_local! {
 }
 
 /// Host connection, object records, observation counters, and optional execution services.
-pub struct Instance {
+#[doc(hidden)]
+pub struct InstanceState {
     host: Option<Host>,
+    pub(crate) presentation: Mutex<crate::presentation::Presentation>,
     /// novena's record of the program's objects.
     pub objects: Objects,
     handlers: Vec<Option<Handler>>,
@@ -211,9 +213,11 @@ pub struct Instance {
     shader_header_without_code: AtomicU64,
     #[cfg(feature = "vulkan")]
     pub(crate) gpu: Mutex<Option<Backend>>,
+    #[cfg(feature = "vulkan")]
+    recording_strides: arc_swap::ArcSwap<[Option<u64>; 2]>,
 }
 
-impl Instance {
+impl InstanceState {
     /// An instance with no host. It can record requests and calls, which is
     /// all the library does so far.
     pub fn new() -> Self {
@@ -236,6 +240,7 @@ impl Instance {
         let count = functions::count();
         Self {
             host,
+            presentation: Mutex::default(),
             objects: Objects::new(),
             handlers: functions::all()
                 .map(|(_, name)| api::handler(name))
@@ -260,6 +265,8 @@ impl Instance {
             shader_header_without_code: AtomicU64::new(0),
             #[cfg(feature = "vulkan")]
             gpu: Mutex::new(host.and_then(|h| Backend::with_host(&h))),
+            #[cfg(feature = "vulkan")]
+            recording_strides: arc_swap::ArcSwap::from_pointee([None, None]),
         }
     }
 
@@ -269,7 +276,7 @@ impl Instance {
         config: crate::startup_cache::StartupCacheConfig,
         translator: Arc<dyn ShaderTranslator>,
     ) -> Result<Self, String> {
-        let mut instance = Self::new();
+        let instance = Self::new();
         instance.configure_startup_cache(config, translator)?;
         Ok(instance)
     }
@@ -283,7 +290,7 @@ impl Instance {
         config: crate::startup_cache::StartupCacheConfig,
         translator: Arc<dyn ShaderTranslator>,
     ) -> Result<Self, String> {
-        let mut instance = Self::build(Some(host));
+        let instance = Self::build(Some(host));
         instance.configure_startup_cache(config, translator)?;
         Ok(instance)
     }
@@ -292,7 +299,7 @@ impl Instance {
     /// the translator underneath current owned requests. Existing objects must
     /// be registered again if translation inputs change.
     pub fn configure_startup_cache(
-        &mut self,
+        &self,
         config: crate::startup_cache::StartupCacheConfig,
         translator: Arc<dyn ShaderTranslator>,
     ) -> Result<(), String> {
@@ -311,7 +318,7 @@ impl Instance {
         #[cfg(feature = "vulkan")]
         let mut cache = cache;
         #[cfg(feature = "vulkan")]
-        if let Some(backend) = self.gpu.get_mut().unwrap().as_mut() {
+        if let Some(backend) = self.gpu.lock().unwrap().as_mut() {
             let mut graphics = crate::gpu::graphics::GraphicsPipelines::persistent(
                 backend.context(),
                 &directory,
@@ -322,8 +329,8 @@ impl Instance {
             cache.schedule(&mut graphics);
             backend.graphics = graphics;
         }
-        *self.startup_cache.get_mut().unwrap() = Some(cache);
-        *self.shader_translator.get_mut().unwrap() = Some(translator);
+        *self.startup_cache.lock().unwrap() = Some(cache);
+        *self.shader_translator.lock().unwrap() = Some(translator);
         self.shader_translation_enabled
             .store(true, Ordering::Relaxed);
         Ok(())
@@ -415,8 +422,21 @@ impl Instance {
         let Some(backend) = gpu.as_mut() else {
             return false;
         };
+        let strides = contract.as_ref().map_or([None, None], |contract| {
+            [
+                contract.attribute_state_stride,
+                contract.stream_state_stride,
+            ]
+        });
         backend.first_draw = contract;
+        self.recording_strides.store(Arc::new(strides));
         true
+    }
+
+    #[cfg(feature = "vulkan")]
+    pub(crate) fn recording_stride(&self, kind: &str) -> Option<u64> {
+        let index = usize::from(kind != "VertexAttribState");
+        self.recording_strides.load()[index]
     }
 
     /// Configure explicit stage/index-to-bank choices for translated graphics.
@@ -773,31 +793,6 @@ impl Instance {
         unsafe { write(user, address, data.as_ptr(), data.len() as u64) == 0 }
     }
 
-    /// Run a call. A function with a handler runs it; any other known
-    /// function is counted and reported as unimplemented with zeroed
-    /// results.
-    pub fn call(&self, function: FunctionId, registers: &mut Registers) -> Status {
-        let Some(counter) = self.calls.get(function.0 as usize) else {
-            return Status::BadFunction;
-        };
-        // The first calls of each function are sampled for their shape; after
-        // that only the counter is touched.
-        let snapshot = if counter.fetch_add(1, Ordering::Relaxed) < crate::observe::SAMPLE_LIMIT {
-            self.shape(function)
-                .record_call(self.host.as_ref(), &self.objects, registers)
-        } else {
-            None
-        };
-        PENDING.set(snapshot.map(|snapshot| (function.0, snapshot, *registers)));
-        if let Some(Some(handler)) = self.handlers.get(function.0 as usize) {
-            return handler(self, function, registers);
-        }
-        registers.x[0] = 0;
-        registers.x[1] = 0;
-        registers.d[0] = 0;
-        Status::Unimplemented
-    }
-
     /// A host that lets the original implementation run reports what it
     /// returned here, so results are sampled along with arguments.
     pub fn returned(&self, function: FunctionId, registers: &Registers) -> Status {
@@ -919,6 +914,118 @@ impl Instance {
             shader_zero_header: self.shader_zero_header.load(Ordering::Relaxed),
             shader_header_without_code: self.shader_header_without_code.load(Ordering::Relaxed),
         }
+    }
+}
+
+/// Host connection whose shutdown joins all queued execution.
+pub struct Instance {
+    state: Arc<InstanceState>,
+    pub(crate) queue: crate::execution::QueueExecutor,
+}
+
+impl std::ops::Deref for Instance {
+    type Target = InstanceState;
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl Instance {
+    /// Create an instance without host callbacks.
+    pub fn new() -> Self {
+        Self::from_state(InstanceState::new())
+    }
+
+    /// Create a hosted instance.
+    ///
+    /// # Safety
+    /// Callbacks and their context remain valid until shutdown returns and support concurrent calls.
+    pub unsafe fn with_host(host: Host) -> Self {
+        Self::from_state(unsafe { InstanceState::with_host(host) })
+    }
+
+    fn from_state(state: InstanceState) -> Self {
+        let state = Arc::new(state);
+        let queue = crate::execution::QueueExecutor::new(state.clone());
+        Self { state, queue }
+    }
+
+    /// Load startup caches and configure translation before use.
+    pub fn with_startup_cache(
+        config: crate::startup_cache::StartupCacheConfig,
+        translator: Arc<dyn ShaderTranslator>,
+    ) -> Result<Self, String> {
+        Ok(Self::from_state(InstanceState::with_startup_cache(
+            config, translator,
+        )?))
+    }
+
+    /// Create a hosted instance with startup caches.
+    ///
+    /// # Safety
+    /// The callback lifetime and concurrency contract of with_host applies.
+    pub unsafe fn with_host_startup_cache(
+        host: Host,
+        config: crate::startup_cache::StartupCacheConfig,
+        translator: Arc<dyn ShaderTranslator>,
+    ) -> Result<Self, String> {
+        Ok(Self::from_state(unsafe {
+            InstanceState::with_host_startup_cache(host, config, translator)?
+        }))
+    }
+
+    /// Drain previous execution before replacing cache configuration.
+    pub fn configure_startup_cache(
+        &mut self,
+        config: crate::startup_cache::StartupCacheConfig,
+        translator: Arc<dyn ShaderTranslator>,
+    ) -> Result<(), String> {
+        if self.queue.drain() != Status::Ok {
+            return Err("queued execution failed".into());
+        }
+        self.state.configure_startup_cache(config, translator)
+    }
+
+    /// Run a call. A function with a handler runs it; any other known
+    /// function is counted and reported as unimplemented with zeroed
+    /// results.
+    pub fn call(&self, function: FunctionId, registers: &mut Registers) -> Status {
+        let name = functions::name(function);
+        if name.is_some_and(|name| {
+            !name.contains("CommandBuffer")
+                && !name.ends_with("QueueSubmitCommands")
+                && !name.ends_with("QueueFlush")
+        }) {
+            let status = self.queue.drain();
+            if status != Status::Ok {
+                return status;
+            }
+        }
+        let Some(counter) = self.calls.get(function.0 as usize) else {
+            return Status::BadFunction;
+        };
+        // The first calls of each function are sampled for their shape; after
+        // that only the counter is touched.
+        let snapshot = if counter.fetch_add(1, Ordering::Relaxed) < crate::observe::SAMPLE_LIMIT {
+            self.shape(function)
+                .record_call(self.host.as_ref(), &self.objects, registers)
+        } else {
+            None
+        };
+        PENDING.set(snapshot.map(|snapshot| (function.0, snapshot, *registers)));
+        if let Some(Some(handler)) = self.handlers.get(function.0 as usize) {
+            return handler(self, function, registers);
+        }
+        registers.x[0] = 0;
+        registers.x[1] = 0;
+        registers.d[0] = 0;
+        Status::Unimplemented
+    }
+}
+impl Drop for Instance {
+    fn drop(&mut self) {
+        self.queue.shutdown();
+        let _ = self.poll_presentations(true);
     }
 }
 

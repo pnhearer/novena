@@ -39,7 +39,7 @@ fn main() {
     fs::remove_dir_all(&scratch).unwrap();
 
     // Host memory outlives the instance. Pool storage starts at byte 0x1000.
-    let memory = Memory(Mutex::new(vec![0; 0x9000]));
+    let memory = Memory(Mutex::new(vec![0; 0x9000]), Mutex::default());
     let instance = hosted(&memory);
     assert!(
         instance.set_first_draw_contract(Some(FirstDrawContract {
@@ -179,7 +179,7 @@ fn main() {
 
     // The first submission can skip a draw while its pipeline compiles.
     let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
+    let draw_frame = || {
         call(&instance, "CommandBufferBeginRecording", &[7]);
         call(
             &instance,
@@ -220,6 +220,10 @@ fn main() {
         let handle = call(&instance, "CommandBufferEndRecording", &[7]);
         put(&memory, 0x300, &handle.to_le_bytes());
         call(&instance, "QueueSubmitCommands", &[0, 1, 0x300]);
+        call(&instance, "TextureGetLevels", &[4]);
+    };
+    loop {
+        draw_frame();
         let pixels = memory.0.lock().unwrap()[0x2000..0x6000].to_vec();
         if pixels
             .as_chunks::<4>()
@@ -233,6 +237,84 @@ fn main() {
         std::thread::sleep(Duration::from_millis(1));
     }
     assert!(instance.take_graphics_cache_diagnostics().is_empty());
+    let frames = std::env::args()
+        .nth(2)
+        .map(|s| s.parse::<usize>().unwrap())
+        .unwrap_or(0);
+    let mode = match std::env::args().nth(3).as_deref() {
+        None | Some("fifo") => novena::PresentationMode::Fifo,
+        Some("mailbox") => novena::PresentationMode::Mailbox,
+        _ => panic!("mode must be fifo or mailbox"),
+    };
+    let capacity = std::env::args()
+        .nth(4)
+        .map(|s| s.parse().unwrap())
+        .unwrap_or(2);
+    assert_eq!(
+        instance.configure_presentation(novena::PresentationConfig {
+            frames_in_flight: capacity,
+            mode
+        }),
+        novena::Status::Ok
+    );
+    let tick = match std::env::args().nth(5).as_deref() {
+        Some("serial") => 1,
+        Some(value) => value.parse::<usize>().expect("host tick period"),
+        None => 0,
+    };
+    for batch in [32, frames] {
+        if frames == 0 {
+            break;
+        }
+        memory.1.lock().unwrap().samples.clear();
+        for frame in 0..batch {
+            draw_frame();
+            if mode == novena::PresentationMode::Mailbox {
+                memory.1.lock().unwrap().pending.clear();
+            }
+            memory.1.lock().unwrap().pending.push_back(Instant::now());
+            call(&instance, "QueuePresentTexture", &[0, 9, 0]);
+            if tick != 0 && (frame + 1) % tick == 0 {
+                assert_eq!(instance.poll_presentations(true), novena::Status::Ok);
+            }
+        }
+        assert_eq!(instance.poll_presentations(true), novena::Status::Ok);
+    }
+    if frames != 0 {
+        let measurement = memory.1.lock().unwrap();
+        let delivered = if mode == novena::PresentationMode::Mailbox {
+            if tick == 0 {
+                1
+            } else {
+                frames.div_ceil(tick)
+            }
+        } else {
+            frames
+        };
+        assert_eq!(measurement.samples.len(), delivered);
+        let n = measurement.samples.len() as f64;
+        let mean = measurement.samples.iter().sum::<f64>() / n;
+        let variance = measurement
+            .samples
+            .iter()
+            .map(|x| (x - mean).powi(2))
+            .sum::<f64>()
+            / n;
+        println!(
+            "callback samples={} mean_us={mean:.3} variance_us2={variance:.3} stddev_us={:.3}",
+            measurement.samples.len(),
+            variance.sqrt()
+        );
+        let stats = instance.frame_statistics();
+        assert_eq!(stats.pending, 0);
+        assert_eq!(stats.failed, 0);
+        assert!(stats.peak_pending <= capacity);
+        assert_eq!(stats.submitted, stats.delivered + stats.dropped);
+        println!(
+            "submitted={} delivered={} dropped={} peak_pending={}",
+            stats.submitted, stats.delivered, stats.dropped, stats.peak_pending
+        );
+    }
     let memory = memory.0.lock().unwrap();
     let pixels = &memory[0x2000..0x6000];
     assert_eq!(&pixels[..4], &[0, 0, 255, 255]);

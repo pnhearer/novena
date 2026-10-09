@@ -1,7 +1,4 @@
-use super::{
-    objects::{Object, RecordedCommand},
-    read_f32x4, read_u64, Handler,
-};
+use super::{objects::RecordedCommand, read_f32x4, read_u64, Handler};
 use crate::instance::{Instance, Registers, Status};
 
 pub(super) fn record(
@@ -10,16 +7,9 @@ pub(super) fn record(
     registers: &mut Registers,
     command: RecordedCommand,
 ) -> Status {
-    instance.objects.update(registers.x[0], |object| {
-        if let Object::CommandBuffer {
-            recording: true,
-            commands,
-            ..
-        } = object
-        {
-            commands.push(command);
-        }
-    });
+    if !instance.objects.record_command(registers.x[0], command) {
+        return Status::BadArgument;
+    }
     let _ = function;
     // Recorded commands return nothing novena knows of. The result
     // registers are cleared, as for an unhandled call, so a caller that does

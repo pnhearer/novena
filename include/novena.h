@@ -47,7 +47,11 @@ typedef struct novena_host_vulkan {
  *
  * The host guarantees that `user` and both callbacks stay usable until the
  * instance is destroyed, and that they tolerate being used from several
- * threads at once: a program can call the graphics API from any thread. */
+ * threads at once, including library execution threads. Queued work drains
+ * before instance destruction returns. Submitted memory remains valid and
+ * unchanged until completion. Callbacks must not wait for completion
+ * on their own instance; a call that would drain its own execution thread
+ * returns an internal error. */
 typedef struct novena_host {
     void *user;
     int32_t (*read_memory)(void *user, uint64_t address, uint8_t *out, uint64_t size);
@@ -95,6 +99,31 @@ novena_instance *novena_instance_create(const novena_host *host);
 /* Null is accepted. No other call on the instance may be running, and none
  * may be made afterwards. */
 void novena_instance_destroy(novena_instance *instance);
+
+/* Host-selected policy. Capacity is 1..16, default 2. Mode is 0 for FIFO,
+ * 1 for mailbox. Changing policy drains pending callbacks first.
+ * Callback bytes are borrowed and valid until the callback returns.
+ * Presentation callbacks must not reenter the library. */
+novena_status novena_instance_set_presentation(const novena_instance *instance,
+                                               uint32_t frames_in_flight, uint32_t mode);
+
+/* wait=0 delivers one ready frame without waiting for GPU completion.
+ * wait=1 drains all pending frames. The host supplies vblank pacing.
+ * QueueFinish and WindowFinalize also drain pending callbacks. */
+novena_status novena_instance_poll_presentations(const novena_instance *instance, uint32_t wait);
+
+typedef struct novena_frame_statistics {
+    uint64_t submitted, delivered, dropped, skipped, failed;
+    uint32_t pending, peak_pending;
+    uint64_t last_latency_ns;
+    double mean_latency_ns, variance_latency_ns2;
+} novena_frame_statistics;
+
+/* Cumulative latency runs from guest present entry to callback entry, or native
+ * presentation handoff. Variance is the population variance. Counts distinguish
+ * mailbox drops from delivery and failures. Display scanout is not measured. */
+novena_status novena_instance_frame_statistics(const novena_instance *instance,
+                                               novena_frame_statistics *out);
 
 /* Set or clear (with null) the directory for local debugging dumps of
  * translated shaders. Files contain translated output derived from the

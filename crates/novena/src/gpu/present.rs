@@ -1,4 +1,4 @@
-//! Window surface, swapchain and presentation. Provenance: 0026.
+//! Window surface, swapchain and presentation. Provenance: 0026 and 0034.
 
 use super::{
     commands::Commands,
@@ -6,7 +6,7 @@ use super::{
     Context,
 };
 use ash::vk;
-use std::sync::Arc;
+use std::{collections::VecDeque, sync::Arc};
 
 struct Swapchain {
     context: Arc<Context>,
@@ -16,12 +16,26 @@ struct Swapchain {
     mode: vk::PresentModeKHR,
     images: Vec<ImageInfo>,
     ready: Vec<vk::Semaphore>,
+    retired: Vec<vk::Fence>,
+    presented: Vec<bool>,
+    in_flight: VecDeque<usize>,
 }
 
 impl Drop for Swapchain {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.context.device.device_wait_idle();
+            let fences: Vec<_> = self
+                .retired
+                .iter()
+                .zip(&self.presented)
+                .filter_map(|(&f, &p)| p.then_some(f))
+                .collect();
+            if !fences.is_empty() {
+                let _ = self.context.device.wait_for_fences(&fences, true, u64::MAX);
+            }
+            for &fence in &self.retired {
+                self.context.device.destroy_fence(fence, None);
+            }
             for &semaphore in &self.ready {
                 self.context.device.destroy_semaphore(semaphore, None);
             }
@@ -72,7 +86,11 @@ impl Window {
         Some(window)
     }
 
-    fn configure(&mut self, desired: vk::Extent2D, interval: u32) -> Option<bool> {
+    pub fn wait(&self) -> bool {
+        self.commands.as_ref().is_none_or(|c| c.wait().is_some())
+    }
+
+    fn configure(&mut self, desired: vk::Extent2D, mode: crate::PresentationMode) -> Option<bool> {
         let context = &self.context;
         let caps = unsafe {
             self.surface_loader
@@ -106,8 +124,10 @@ impl Window {
                 .get_physical_device_surface_present_modes(context.physical_device, self.surface)
                 .ok()?
         };
-        let mode = if interval == 0 && modes.contains(&vk::PresentModeKHR::IMMEDIATE) {
-            vk::PresentModeKHR::IMMEDIATE
+        let mode = if mode == crate::PresentationMode::Mailbox
+            && modes.contains(&vk::PresentModeKHR::MAILBOX)
+        {
+            vk::PresentModeKHR::MAILBOX
         } else {
             vk::PresentModeKHR::FIFO
         };
@@ -162,10 +182,7 @@ impl Window {
                 .image_sharing_mode(vk::SharingMode::CONCURRENT)
                 .queue_family_indices(&families);
         }
-        // Drain before replacing resources. Ordinary frames use only slot fences.
-        unsafe {
-            context.device.device_wait_idle().ok()?;
-        }
+        self.commands.as_ref()?.wait()?;
         self.chain.take();
         let loader = ash::khr::swapchain::Device::new(&context.instance, &context.device);
         let handle = unsafe { loader.create_swapchain(&info, None).ok()? };
@@ -177,6 +194,9 @@ impl Window {
             mode,
             images: Vec::new(),
             ready: Vec::new(),
+            retired: Vec::new(),
+            presented: Vec::new(),
+            in_flight: VecDeque::new(),
         };
         chain.images = unsafe { chain.loader.get_swapchain_images(handle).ok()? }
             .into_iter()
@@ -201,6 +221,13 @@ impl Window {
             })
             .collect();
         for _ in &chain.images {
+            chain.retired.push(unsafe {
+                context
+                    .device
+                    .create_fence(&vk::FenceCreateInfo::default(), None)
+                    .ok()?
+            });
+            chain.presented.push(false);
             chain.ready.push(unsafe {
                 context
                     .device
@@ -218,16 +245,31 @@ impl Window {
         &mut self,
         source: ImageInfo,
         desired: vk::Extent2D,
-        interval: u32,
-    ) -> Option<()> {
+        config: crate::PresentationConfig,
+    ) -> Option<bool> {
         if self.failed {
             return None;
         }
+        if self.commands.as_ref()?.slots() != config.frames_in_flight as usize {
+            self.commands = Some(Commands::with_capacity(
+                &self.context,
+                config.frames_in_flight as usize,
+            )?);
+        }
         for _ in 0..2 {
-            if !self.configure(desired, interval)? {
-                return Some(());
+            if !self.configure(desired, config.mode)? {
+                return Some(false);
             }
             let chain = self.chain.as_mut()?;
+            while chain.in_flight.len() >= config.frames_in_flight as usize {
+                let index = chain.in_flight.pop_front()?;
+                unsafe {
+                    self.context
+                        .device
+                        .wait_for_fences(&[chain.retired[index]], true, u64::MAX)
+                        .ok()?;
+                }
+            }
             let commands = self.commands.as_mut()?;
             let (cmd, acquire) = commands.begin()?;
             let acquired = unsafe {
@@ -248,7 +290,7 @@ impl Window {
             let result = (|| {
                 let target = chain.images[index as usize];
                 record_present(
-                    &self.context.device,
+                    &self.context.recorder(),
                     cmd,
                     source,
                     target,
@@ -258,18 +300,43 @@ impl Window {
                 commands.submit(true, Some(ready))?;
                 chain.images[index as usize].layout = vk::ImageLayout::PRESENT_SRC_KHR;
                 let waits = [ready];
-                let chains = [chain.handle];
-                let indices = [index];
-                let present = vk::PresentInfoKHR::default()
-                    .wait_semaphores(&waits)
-                    .swapchains(&chains)
-                    .image_indices(&indices);
-                match unsafe { chain.loader.queue_present(self.present_queue, &present) } {
-                    Ok(outdated) => self.rebuild = suboptimal || outdated,
-                    Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => self.rebuild = true,
+                chain.in_flight.retain(|&prior| prior != index as usize);
+                let fences = [chain.retired[index as usize]];
+                if chain.presented[index as usize] {
+                    unsafe {
+                        self.context
+                            .device
+                            .wait_for_fences(&fences, true, u64::MAX)
+                            .ok()?;
+                        self.context.device.reset_fences(&fences).ok()?;
+                    }
+                    chain.presented[index as usize] = false;
+                }
+                match self.context.command_workers.present(
+                    self.present_queue,
+                    &chain.loader,
+                    chain.handle,
+                    index,
+                    &waits,
+                    fences[0],
+                ) {
+                    Ok(outdated) => {
+                        chain.presented[index as usize] = true;
+                        chain.in_flight.push_back(index as usize);
+                        self.rebuild = suboptimal || outdated;
+                    }
+                    Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                        chain.presented[index as usize] = true;
+                        chain.in_flight.push_back(index as usize);
+                        self.rebuild = true;
+                    }
+                    Err(vk::Result::ERROR_SURFACE_LOST_KHR) => {
+                        chain.presented[index as usize] = true;
+                        return None;
+                    }
                     Err(_) => return None,
                 }
-                Some(())
+                Some(true)
             })();
             if result.is_none() {
                 self.failed = true;
@@ -308,8 +375,8 @@ fn choose_format(
 
 impl Drop for Window {
     fn drop(&mut self) {
-        self.chain.take();
         self.commands.take();
+        self.chain.take();
         unsafe {
             self.surface_loader.destroy_surface(self.surface, None);
         }

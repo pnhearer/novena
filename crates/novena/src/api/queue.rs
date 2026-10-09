@@ -6,10 +6,10 @@ use super::{
     objects::{Object, RecordedCommand, TextureDescription, TextureImage},
     read_u64, succeed, write_u32, Handler,
 };
-use crate::instance::{Instance, Registers, Status};
+use crate::instance::{Registers, Status};
 
 fn builder_update(
-    instance: &Instance,
+    instance: &crate::instance::InstanceState,
     registers: &Registers,
     change: impl FnOnce(&mut Object),
 ) -> Status {
@@ -19,7 +19,11 @@ fn builder_update(
 
 const COPY_CHUNK: usize = 64 * 1024;
 
-fn read_pool_bytes(instance: &Instance, address: u64, size: usize) -> Option<Vec<u8>> {
+fn read_pool_bytes(
+    instance: &crate::instance::InstanceState,
+    address: u64,
+    size: usize,
+) -> Option<Vec<u8>> {
     let resolution = instance.objects.resolve_gpu_address(address).ok()?;
     if size as u64 > resolution.remaining {
         return None;
@@ -47,7 +51,12 @@ fn copy_size(description: &TextureDescription) -> Option<usize> {
     (texels <= CPU_IMAGE_TEXELS).then(|| (texels * 4) as usize)
 }
 
-fn copy_cpu(instance: &Instance, source: u64, destination: u64, data: Vec<u8>) {
+fn copy_cpu(
+    instance: &crate::instance::InstanceState,
+    source: u64,
+    destination: u64,
+    data: Vec<u8>,
+) {
     let Some(Object::Texture { image, description }) = instance.objects.get(destination) else {
         return;
     };
@@ -75,7 +84,7 @@ fn copy_cpu(instance: &Instance, source: u64, destination: u64, data: Vec<u8>) {
 /// Largest CPU image, in texels: 4096 by 4096.
 const CPU_IMAGE_TEXELS: u64 = 4096 * 4096;
 
-pub(crate) fn signal_event(instance: &Instance, event: u64, new_value: u32) {
+pub(crate) fn signal_event(instance: &crate::instance::InstanceState, event: u64, new_value: u32) {
     let mut storage = 0;
     instance.objects.update(event, |object| {
         if let Object::Event { value, storage: at } = object {
@@ -86,6 +95,375 @@ pub(crate) fn signal_event(instance: &Instance, event: u64, new_value: u32) {
     if storage != 0 {
         write_u32(instance, storage, new_value);
     }
+}
+
+pub(crate) fn execute(
+    instance: &crate::instance::InstanceState,
+    buffers: Vec<(u64, Vec<RecordedCommand>)>,
+) -> Status {
+    for program in instance.pending_programs() {
+        crate::api::resources::retry_pending(instance, program, "submit");
+    }
+    // Only textures a window presents get a CPU image. A program
+    // clears thousands of other render targets, and filling CPU
+    // copies of all of them stalled the program it was tried on.
+    let presented = instance.objects.window_textures();
+    #[cfg(feature = "vulkan")]
+    let mut gpu = instance.gpu.lock().unwrap_or_else(|p| p.into_inner());
+    #[cfg(feature = "vulkan")]
+    if let Some(backend) = gpu.as_mut() {
+        backend.set_parallel_recording(buffers.len() > 1);
+    }
+    #[cfg(feature = "vulkan")]
+    if let Some(memory) = gpu
+        .as_mut()
+        .and_then(|backend| backend.global_memory.as_mut())
+    {
+        if !memory.upload(|address, bytes| instance.read_memory(address, bytes)) {
+            return Status::BadArgument;
+        }
+    }
+    let submitted = (|| {
+        for (handle, commands) in buffers {
+            #[cfg(feature = "vulkan")]
+            if let Some(backend) = gpu.as_mut() {
+                backend.reserve_draws(commands.len());
+            }
+            let mut targets = Vec::new();
+            let mut depth_target = 0;
+            let mut target_views = [0, 0];
+            #[cfg(feature = "vulkan")]
+            let mut draw_state = super::drawing::State::default();
+            let mut commands = commands;
+            for command in commands.drain(..) {
+                #[cfg(feature = "vulkan")]
+                if !matches!(
+                    &command,
+                    RecordedCommand::DrawArrays { .. }
+                        | RecordedCommand::DrawElementsBaseVertex { .. }
+                        | RecordedCommand::SetViewport(_)
+                        | RecordedCommand::SetScissor(_)
+                        | RecordedCommand::SetDepthRange(_)
+                        | RecordedCommand::BindProgram(_)
+                        | RecordedCommand::BindState { .. }
+                        | RecordedCommand::State(_)
+                ) {
+                    if let Some(backend) = gpu.as_mut() {
+                        if backend.finish_draws().is_none() {
+                            return Status::InternalError;
+                        }
+                    }
+                }
+                match command {
+                    RecordedCommand::SetRenderTargets {
+                        colors,
+                        depth,
+                        views,
+                    } => {
+                        targets = colors;
+                        depth_target = depth;
+                        target_views = views;
+                    }
+                    RecordedCommand::ClearColor { index, color, mask } => {
+                        let Some(texture) = targets.get(index as usize).copied() else {
+                            continue;
+                        };
+                        let Some(Object::Texture { description, image }) =
+                            instance.objects.get(texture)
+                        else {
+                            return Status::BadArgument;
+                        };
+                        #[cfg(feature = "vulkan")]
+                        if let Some(backend) = gpu.as_mut() {
+                            if !backend.ensure_texture(texture, &description, false) {
+                                return Status::BadArgument;
+                            }
+                            if !backend.clear_color(texture, color, mask) {
+                                return Status::InternalError;
+                            }
+                            continue;
+                        }
+                        if !presented.contains(&texture) {
+                            continue;
+                        }
+                        // Only the first layer of the base level is kept on the
+                        // CPU, and only for sizes a screen can have: a game
+                        // clears large arrays and volumes every frame, and
+                        // copying those on the CPU stalled it. novena's own
+                        // limit, until clears run on the GPU.
+                        let (width, height) = (description.width.max(1), description.height.max(1));
+                        if width * height > CPU_IMAGE_TEXELS {
+                            continue;
+                        }
+                        let mut image = image.lock().unwrap_or_else(|p| p.into_inner());
+                        let image = image.get_or_insert_with(|| TextureImage {
+                            width: width as u32,
+                            height: height as u32,
+                            depth: 1,
+                            pixels: vec![0; (width * height * 4) as usize],
+                        });
+                        // Bits 0..3 mean red, green, blue and alpha. This is novena's own choice.
+                        let values = color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+                        for pixel in image.pixels.as_chunks_mut::<4>().0 {
+                            for c in 0..4 {
+                                if mask & (1 << c) != 0 {
+                                    pixel[c] = values[c];
+                                }
+                            }
+                        }
+                    }
+                    RecordedCommand::ClearDepthStencil {
+                        depth,
+                        depth_write,
+                        stencil,
+                        stencil_mask,
+                    } => {
+                        #[cfg(not(feature = "vulkan"))]
+                        let _ = (depth, depth_write, stencil, stencil_mask, depth_target);
+                        let _ = stencil;
+                        #[cfg(feature = "vulkan")]
+                        if let Some(backend) = gpu.as_mut() {
+                            if stencil_mask != 0 {
+                                return Status::Unimplemented;
+                            }
+                            if depth_write == 0 || depth_target == 0 {
+                                continue;
+                            }
+                            let Some(Object::Texture { description, .. }) =
+                                instance.objects.get(depth_target)
+                            else {
+                                return Status::BadArgument;
+                            };
+                            if !backend.ensure_texture(depth_target, &description, true) {
+                                return Status::BadArgument;
+                            }
+                            if !backend.clear_depth(depth_target, depth, 0) {
+                                return Status::InternalError;
+                            }
+                        }
+                    }
+                    RecordedCommand::CopyBufferToTexture { buffer, texture } => {
+                        let Some(Object::Texture { description, .. }) =
+                            instance.objects.get(texture)
+                        else {
+                            return Status::BadArgument;
+                        };
+                        #[cfg(feature = "vulkan")]
+                        if let Some(backend) = gpu.as_mut() {
+                            let size = if backend.has_image_contract() {
+                                let Some(r) = backend.resolved_image(&description) else {
+                                    return Status::BadArgument;
+                                };
+                                r.packing.linear_size()
+                            } else {
+                                let Some(size) = copy_size(&description) else {
+                                    return Status::BadArgument;
+                                };
+                                size
+                            };
+                            if !backend.ensure_texture(texture, &description, false) {
+                                return Status::BadArgument;
+                            }
+                            let Ok(source) = instance.objects.resolve_gpu_address(buffer) else {
+                                return Status::BadArgument;
+                            };
+                            if size as u64 > source.remaining {
+                                return Status::BadArgument;
+                            }
+                            if !backend.copy_from_arena(texture, source.pool, source.offset, size) {
+                                return Status::InternalError;
+                            }
+                            continue;
+                        }
+                        let Some(size) = copy_size(&description) else {
+                            return Status::BadArgument;
+                        };
+                        let Some(data) = read_pool_bytes(instance, buffer, size) else {
+                            return Status::BadArgument;
+                        };
+                        copy_cpu(instance, buffer, texture, data);
+                    }
+                    RecordedCommand::CopyTextureToTexture {
+                        source,
+                        destination,
+                        arguments,
+                    } => {
+                        #[cfg(not(feature = "vulkan"))]
+                        let _ = arguments;
+                        #[cfg(feature = "vulkan")]
+                        if let Some(backend) = gpu.as_mut() {
+                            if let Some(decoder) = &backend.copy_decoder {
+                                let Some(operation) = decoder(arguments) else {
+                                    return Status::Unimplemented;
+                                };
+                                use crate::gpu::image_layout::CopyOperation;
+                                let (src, dst) = match operation {
+                                    CopyOperation::Copy {
+                                        source,
+                                        destination,
+                                        ..
+                                    }
+                                    | CopyOperation::Blit {
+                                        source,
+                                        destination,
+                                        ..
+                                    } => (source, destination),
+                                };
+                                for texture in [src, dst] {
+                                    let Some(Object::Texture { description, .. }) =
+                                        instance.objects.get(texture)
+                                    else {
+                                        return Status::BadArgument;
+                                    };
+                                    if !backend.ensure_texture(texture, &description, false) {
+                                        return Status::BadArgument;
+                                    }
+                                }
+                                let ok = match operation {
+                                    CopyOperation::Copy { from, to, .. } => {
+                                        backend.copy_region(dst, src, from, to)
+                                    }
+                                    CopyOperation::Blit {
+                                        from, to, filter, ..
+                                    } => backend.blit_region(dst, src, from, to, filter),
+                                };
+                                if !ok {
+                                    return Status::Unimplemented;
+                                }
+                                continue;
+                            }
+                            for texture in [source, destination] {
+                                let Some(Object::Texture { description, .. }) =
+                                    instance.objects.get(texture)
+                                else {
+                                    return Status::BadArgument;
+                                };
+                                if !backend.ensure_texture(texture, &description, false) {
+                                    return Status::BadArgument;
+                                }
+                            }
+                            if !backend.copy(destination, source) {
+                                return Status::InternalError;
+                            }
+                            continue;
+                        }
+                        let Some(Object::Texture { image, .. }) = instance.objects.get(source)
+                        else {
+                            return Status::BadArgument;
+                        };
+                        let Some(data) = image
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .as_ref()
+                            .map(|i| i.pixels.clone())
+                        else {
+                            return Status::BadArgument;
+                        };
+                        copy_cpu(instance, source, destination, data);
+                    }
+                    RecordedCommand::DrawArrays {
+                        primitive,
+                        first,
+                        count,
+                    } => {
+                        #[cfg(feature = "vulkan")]
+                        if let Some(backend) = gpu.as_mut() {
+                            if let Err(status) = draw_state.execute(
+                                instance,
+                                backend,
+                                super::drawing::Request {
+                                    targets: &targets,
+                                    depth: depth_target,
+                                    views: target_views,
+                                    primitive,
+                                    vertices: super::drawing::Vertices::Arrays { first },
+                                    count,
+                                },
+                            ) {
+                                return status;
+                            }
+                            continue;
+                        }
+                        let _ = (primitive, first, count, target_views);
+                        return Status::Unimplemented;
+                    }
+                    RecordedCommand::DrawElementsBaseVertex {
+                        primitive,
+                        index_type,
+                        count,
+                        indices,
+                        base_vertex,
+                    } => {
+                        #[cfg(feature = "vulkan")]
+                        if let Some(backend) = gpu.as_mut() {
+                            if let Err(status) = draw_state.execute(
+                                instance,
+                                backend,
+                                super::drawing::Request {
+                                    targets: &targets,
+                                    depth: depth_target,
+                                    views: target_views,
+                                    primitive,
+                                    count,
+                                    vertices: super::drawing::Vertices::Elements {
+                                        index_type,
+                                        indices,
+                                        base_vertex,
+                                    },
+                                },
+                            ) {
+                                return status;
+                            }
+                            continue;
+                        }
+                        let _ = (
+                            primitive,
+                            index_type,
+                            count,
+                            indices,
+                            base_vertex,
+                            target_views,
+                        );
+                        return Status::Unimplemented;
+                    }
+                    RecordedCommand::DrawArraysInstanced { .. } => return Status::Unimplemented,
+                    command @ (RecordedCommand::SetViewport(_)
+                    | RecordedCommand::SetScissor(_)
+                    | RecordedCommand::SetDepthRange(_)
+                    | RecordedCommand::BindProgram(_)
+                    | RecordedCommand::BindState { .. }
+                    | RecordedCommand::Raw { .. }
+                    | RecordedCommand::State(_)) => {
+                        #[cfg(feature = "vulkan")]
+                        draw_state.record(command);
+                        #[cfg(not(feature = "vulkan"))]
+                        let _ = command;
+                    }
+                }
+            }
+            instance.objects.recycle_recording(handle, commands);
+        }
+        Status::Ok
+    })();
+    #[cfg(feature = "vulkan")]
+    if let Some(backend) = gpu.as_mut() {
+        if backend.finish_draws().is_none() {
+            return Status::InternalError;
+        }
+    }
+    #[cfg(feature = "vulkan")]
+    if let Some(memory) = gpu
+        .as_mut()
+        .and_then(|backend| backend.global_memory.as_mut())
+    {
+        if !memory.download(|address, bytes| instance.write_memory(address, bytes)) {
+            return Status::BadArgument;
+        }
+    }
+    if submitted != Status::Ok {
+        return submitted;
+    }
+    Status::Ok
 }
 
 /// Return the handler for a supported name in this command family.
@@ -145,385 +523,20 @@ pub fn handler(name: &str) -> Option<Handler> {
             succeed(registers)
         },
         "nvnQueueSubmitCommands" => |instance, _, r| {
-            for program in instance.pending_programs() {
-                crate::api::resources::retry_pending(instance, program, "submit");
-            }
-            // Only textures a window presents get a CPU image. A program
-            // clears thousands of other render targets, and filling CPU
-            // copies of all of them stalled the program it was tried on.
-            let presented = instance.objects.window_textures();
-            #[cfg(feature = "vulkan")]
-            let mut gpu = instance.gpu.lock().unwrap_or_else(|p| p.into_inner());
-            #[cfg(feature = "vulkan")]
-            if let Some(memory) = gpu
-                .as_mut()
-                .and_then(|backend| backend.global_memory.as_mut())
-            {
-                if !memory.upload(|address, bytes| instance.read_memory(address, bytes)) {
+            let mut buffers = Vec::new();
+            for i in 0..r.x[1].min(1024) {
+                let Some(handle) = read_u64(instance, r.x[2] + i * 8) else {
                     return Status::BadArgument;
+                };
+                if let Some(commands) = instance.objects.recording(handle) {
+                    buffers.push((handle, commands));
                 }
             }
-            let submitted = (|| {
-                for i in 0..r.x[1].min(1024) {
-                    let Some(handle) = read_u64(instance, r.x[2] + i * 8) else {
-                        return Status::BadArgument;
-                    };
-                    let commands = instance.objects.recording(handle);
-                    let Some(commands) = commands else {
-                        continue;
-                    };
-                    #[cfg(feature = "vulkan")]
-                    if let Some(backend) = gpu.as_mut() {
-                        backend.reserve_draws(commands.len());
-                    }
-                    let mut targets = Vec::new();
-                    let mut depth_target = 0;
-                    let mut target_views = [0, 0];
-                    #[cfg(feature = "vulkan")]
-                    let mut draw_state = super::drawing::State::default();
-                    let mut commands = commands;
-                    for command in commands.drain(..) {
-                        #[cfg(feature = "vulkan")]
-                        if !matches!(
-                            &command,
-                            RecordedCommand::DrawArrays { .. }
-                                | RecordedCommand::DrawElementsBaseVertex { .. }
-                                | RecordedCommand::SetViewport(_)
-                                | RecordedCommand::SetScissor(_)
-                                | RecordedCommand::SetDepthRange(_)
-                                | RecordedCommand::BindProgram(_)
-                                | RecordedCommand::BindState { .. }
-                                | RecordedCommand::State(_)
-                        ) {
-                            if let Some(backend) = gpu.as_mut() {
-                                if backend.finish_draws().is_none() {
-                                    return Status::InternalError;
-                                }
-                            }
-                        }
-                        match command {
-                            RecordedCommand::SetRenderTargets {
-                                colors,
-                                depth,
-                                views,
-                            } => {
-                                targets = colors;
-                                depth_target = depth;
-                                target_views = views;
-                            }
-                            RecordedCommand::ClearColor { index, color, mask } => {
-                                let Some(texture) = targets.get(index as usize).copied() else {
-                                    continue;
-                                };
-                                let Some(Object::Texture { description, image }) =
-                                    instance.objects.get(texture)
-                                else {
-                                    return Status::BadArgument;
-                                };
-                                #[cfg(feature = "vulkan")]
-                                if let Some(backend) = gpu.as_mut() {
-                                    if !backend.ensure_texture(texture, &description, false) {
-                                        return Status::BadArgument;
-                                    }
-                                    if !backend.clear_color(texture, color, mask) {
-                                        return Status::InternalError;
-                                    }
-                                    continue;
-                                }
-                                if !presented.contains(&texture) {
-                                    continue;
-                                }
-                                // Only the first layer of the base level is kept on the
-                                // CPU, and only for sizes a screen can have: a game
-                                // clears large arrays and volumes every frame, and
-                                // copying those on the CPU stalled it. novena's own
-                                // limit, until clears run on the GPU.
-                                let (width, height) =
-                                    (description.width.max(1), description.height.max(1));
-                                if width * height > CPU_IMAGE_TEXELS {
-                                    continue;
-                                }
-                                let mut image = image.lock().unwrap_or_else(|p| p.into_inner());
-                                let image = image.get_or_insert_with(|| TextureImage {
-                                    width: width as u32,
-                                    height: height as u32,
-                                    depth: 1,
-                                    pixels: vec![0; (width * height * 4) as usize],
-                                });
-                                // Bits 0..3 mean red, green, blue and alpha. This is novena's own choice.
-                                let values =
-                                    color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
-                                for pixel in image.pixels.as_chunks_mut::<4>().0 {
-                                    for c in 0..4 {
-                                        if mask & (1 << c) != 0 {
-                                            pixel[c] = values[c];
-                                        }
-                                    }
-                                }
-                            }
-                            RecordedCommand::ClearDepthStencil {
-                                depth,
-                                depth_write,
-                                stencil,
-                                stencil_mask,
-                            } => {
-                                #[cfg(not(feature = "vulkan"))]
-                                let _ = (depth, depth_write, stencil, stencil_mask, depth_target);
-                                let _ = stencil;
-                                #[cfg(feature = "vulkan")]
-                                if let Some(backend) = gpu.as_mut() {
-                                    if stencil_mask != 0 {
-                                        return Status::Unimplemented;
-                                    }
-                                    if depth_write == 0 || depth_target == 0 {
-                                        continue;
-                                    }
-                                    let Some(Object::Texture { description, .. }) =
-                                        instance.objects.get(depth_target)
-                                    else {
-                                        return Status::BadArgument;
-                                    };
-                                    if !backend.ensure_texture(depth_target, &description, true) {
-                                        return Status::BadArgument;
-                                    }
-                                    if !backend.clear_depth(depth_target, depth, 0) {
-                                        return Status::InternalError;
-                                    }
-                                }
-                            }
-                            RecordedCommand::CopyBufferToTexture { buffer, texture } => {
-                                let Some(Object::Texture { description, .. }) =
-                                    instance.objects.get(texture)
-                                else {
-                                    return Status::BadArgument;
-                                };
-                                #[cfg(feature = "vulkan")]
-                                if let Some(backend) = gpu.as_mut() {
-                                    let size = if backend.has_image_contract() {
-                                        let Some(r) = backend.resolved_image(&description) else {
-                                            return Status::BadArgument;
-                                        };
-                                        r.packing.linear_size()
-                                    } else {
-                                        let Some(size) = copy_size(&description) else {
-                                            return Status::BadArgument;
-                                        };
-                                        size
-                                    };
-                                    if !backend.ensure_texture(texture, &description, false) {
-                                        return Status::BadArgument;
-                                    }
-                                    let Ok(source) = instance.objects.resolve_gpu_address(buffer)
-                                    else {
-                                        return Status::BadArgument;
-                                    };
-                                    if size as u64 > source.remaining {
-                                        return Status::BadArgument;
-                                    }
-                                    if !backend.copy_from_arena(
-                                        texture,
-                                        source.pool,
-                                        source.offset,
-                                        size,
-                                    ) {
-                                        return Status::InternalError;
-                                    }
-                                    continue;
-                                }
-                                let Some(size) = copy_size(&description) else {
-                                    return Status::BadArgument;
-                                };
-                                let Some(data) = read_pool_bytes(instance, buffer, size) else {
-                                    return Status::BadArgument;
-                                };
-                                copy_cpu(instance, buffer, texture, data);
-                            }
-                            RecordedCommand::CopyTextureToTexture {
-                                source,
-                                destination,
-                                arguments,
-                            } => {
-                                #[cfg(not(feature = "vulkan"))]
-                                let _ = arguments;
-                                #[cfg(feature = "vulkan")]
-                                if let Some(backend) = gpu.as_mut() {
-                                    if let Some(decoder) = &backend.copy_decoder {
-                                        let Some(operation) = decoder(arguments) else {
-                                            return Status::Unimplemented;
-                                        };
-                                        use crate::gpu::image_layout::CopyOperation;
-                                        let (src, dst) = match operation {
-                                            CopyOperation::Copy {
-                                                source,
-                                                destination,
-                                                ..
-                                            }
-                                            | CopyOperation::Blit {
-                                                source,
-                                                destination,
-                                                ..
-                                            } => (source, destination),
-                                        };
-                                        for texture in [src, dst] {
-                                            let Some(Object::Texture { description, .. }) =
-                                                instance.objects.get(texture)
-                                            else {
-                                                return Status::BadArgument;
-                                            };
-                                            if !backend.ensure_texture(texture, &description, false)
-                                            {
-                                                return Status::BadArgument;
-                                            }
-                                        }
-                                        let ok = match operation {
-                                            CopyOperation::Copy { from, to, .. } => {
-                                                backend.copy_region(dst, src, from, to)
-                                            }
-                                            CopyOperation::Blit {
-                                                from, to, filter, ..
-                                            } => backend.blit_region(dst, src, from, to, filter),
-                                        };
-                                        if !ok {
-                                            return Status::Unimplemented;
-                                        }
-                                        continue;
-                                    }
-                                    for texture in [source, destination] {
-                                        let Some(Object::Texture { description, .. }) =
-                                            instance.objects.get(texture)
-                                        else {
-                                            return Status::BadArgument;
-                                        };
-                                        if !backend.ensure_texture(texture, &description, false) {
-                                            return Status::BadArgument;
-                                        }
-                                    }
-                                    if !backend.copy(destination, source) {
-                                        return Status::InternalError;
-                                    }
-                                    continue;
-                                }
-                                let Some(Object::Texture { image, .. }) =
-                                    instance.objects.get(source)
-                                else {
-                                    return Status::BadArgument;
-                                };
-                                let Some(data) = image
-                                    .lock()
-                                    .unwrap_or_else(|p| p.into_inner())
-                                    .as_ref()
-                                    .map(|i| i.pixels.clone())
-                                else {
-                                    return Status::BadArgument;
-                                };
-                                copy_cpu(instance, source, destination, data);
-                            }
-                            RecordedCommand::DrawArrays {
-                                primitive,
-                                first,
-                                count,
-                            } => {
-                                #[cfg(feature = "vulkan")]
-                                if let Some(backend) = gpu.as_mut() {
-                                    if let Err(status) = draw_state.execute(
-                                        instance,
-                                        backend,
-                                        super::drawing::Request {
-                                            targets: &targets,
-                                            depth: depth_target,
-                                            views: target_views,
-                                            primitive,
-                                            vertices: super::drawing::Vertices::Arrays { first },
-                                            count,
-                                        },
-                                    ) {
-                                        return status;
-                                    }
-                                    continue;
-                                }
-                                let _ = (primitive, first, count, target_views);
-                                return Status::Unimplemented;
-                            }
-                            RecordedCommand::DrawElementsBaseVertex {
-                                primitive,
-                                index_type,
-                                count,
-                                indices,
-                                base_vertex,
-                            } => {
-                                #[cfg(feature = "vulkan")]
-                                if let Some(backend) = gpu.as_mut() {
-                                    if let Err(status) = draw_state.execute(
-                                        instance,
-                                        backend,
-                                        super::drawing::Request {
-                                            targets: &targets,
-                                            depth: depth_target,
-                                            views: target_views,
-                                            primitive,
-                                            count,
-                                            vertices: super::drawing::Vertices::Elements {
-                                                index_type,
-                                                indices,
-                                                base_vertex,
-                                            },
-                                        },
-                                    ) {
-                                        return status;
-                                    }
-                                    continue;
-                                }
-                                let _ = (
-                                    primitive,
-                                    index_type,
-                                    count,
-                                    indices,
-                                    base_vertex,
-                                    target_views,
-                                );
-                                return Status::Unimplemented;
-                            }
-                            RecordedCommand::DrawArraysInstanced { .. } => {
-                                return Status::Unimplemented
-                            }
-                            command @ (RecordedCommand::SetViewport(_)
-                            | RecordedCommand::SetScissor(_)
-                            | RecordedCommand::SetDepthRange(_)
-                            | RecordedCommand::BindProgram(_)
-                            | RecordedCommand::BindState { .. }
-                            | RecordedCommand::Raw { .. }
-                            | RecordedCommand::State(_)) => {
-                                #[cfg(feature = "vulkan")]
-                                draw_state.record(command);
-                                #[cfg(not(feature = "vulkan"))]
-                                let _ = command;
-                            }
-                        }
-                    }
-                    instance.objects.recycle_recording(handle, commands);
-                }
-                Status::Ok
-            })();
-            #[cfg(feature = "vulkan")]
-            if let Some(backend) = gpu.as_mut() {
-                if backend.finish_draws().is_none() {
-                    return Status::InternalError;
-                }
+            let status = instance.queue.submit(buffers);
+            if status == Status::Ok {
+                r.x[0] = 0;
             }
-            #[cfg(feature = "vulkan")]
-            if let Some(memory) = gpu
-                .as_mut()
-                .and_then(|backend| backend.global_memory.as_mut())
-            {
-                if !memory.download(|address, bytes| instance.write_memory(address, bytes)) {
-                    return Status::BadArgument;
-                }
-            }
-            if submitted != Status::Ok {
-                return submitted;
-            }
-            r.x[0] = 0;
-            Status::Ok
+            status
         },
         "nvnQueueFlush" => |instance, _, registers| {
             for program in instance.pending_programs() {
@@ -536,6 +549,10 @@ pub fn handler(name: &str) -> Option<Handler> {
             )
         },
         "nvnQueueFinish" => |instance, _, registers| {
+            let status = instance.poll_presentations(true);
+            if status != Status::Ok {
+                return status;
+            }
             #[cfg(feature = "vulkan")]
             if instance
                 .gpu
@@ -556,6 +573,7 @@ pub fn handler(name: &str) -> Option<Handler> {
             )
         },
         "nvnQueuePresentTexture" => |instance, _, r| {
+            let started = std::time::Instant::now();
             let window = r.x[1];
             let Some(Object::Window {
                 textures,
@@ -577,74 +595,78 @@ pub fn handler(name: &str) -> Option<Handler> {
                 r.x[0] = 0;
                 return Status::Ok;
             };
-            if let Some(wait) = host.wait_vblank {
-                unsafe {
-                    wait(host.user);
-                }
-            }
-            #[cfg(feature = "vulkan")]
-            if let Some(backend) = instance
-                .gpu
+            let mut pacing = instance
+                .presentation
                 .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .as_mut()
-            {
-                if !backend.ensure_texture(texture, &description, false) {
-                    return Status::BadArgument;
-                }
-                if !host.vulkan.is_null() {
-                    if backend
-                        .present_window(host, window, texture, present_interval)
-                        .is_none()
-                    {
-                        return Status::InternalError;
-                    }
-                    r.x[0] = 0;
-                    return Status::Ok;
-                }
-                if let Some(present) = host.present {
-                    let Some((width, height, pixels)) =
-                        backend.present_callback(texture, description.width, description.height)
-                    else {
-                        return Status::InternalError;
-                    };
-                    unsafe {
-                        present(
-                            host.user,
-                            window,
-                            width,
-                            height,
-                            pixels.as_ptr(),
-                            u64::from(width) * 4,
-                        );
-                    }
-                }
-                r.x[0] = 0;
-                return Status::Ok;
+                .unwrap_or_else(|p| p.into_inner());
+            if pacing.config.mode == crate::PresentationMode::Mailbox {
+                pacing.drop_pending(window);
             }
-            let _ = present_interval;
-            if !host.vulkan.is_null() {
-                return Status::InternalError;
+            if pacing.pending.len() == pacing.config.frames_in_flight as usize {
+                if let Err(status) = pacing.deliver_one(instance, host, true) {
+                    pacing.failed();
+                    return status;
+                }
             }
-            if let Some(present) = host.present {
-                let image = image
+            let slot = pacing.begin();
+            let prepare = (|| {
+                #[cfg(feature = "vulkan")]
+                if let Some(backend) = instance
+                    .gpu
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
-                    .as_ref()
-                    .cloned();
-                let Some(image) = image else {
-                    return Status::BadArgument;
-                };
-                unsafe {
-                    present(
-                        host.user,
-                        window,
-                        image.width,
-                        image.height,
-                        image.pixels.as_ptr(),
-                        u64::from(image.width) * 4,
-                    );
+                    .as_mut()
+                {
+                    if !backend.ensure_texture(texture, &description, false) {
+                        return Err(Status::BadArgument);
+                    }
+                    if !host.vulkan.is_null() {
+                        let handed = backend
+                            .present_window(host, window, texture, present_interval, pacing.config)
+                            .ok_or(Status::InternalError)?;
+                        if handed {
+                            pacing.delivered(started);
+                        } else {
+                            pacing.skipped();
+                        }
+                        return Ok(());
+                    }
+                    if host.present.is_some() {
+                        backend
+                            .enqueue_callback(slot, texture, description.width, description.height)
+                            .ok_or(Status::InternalError)?;
+                        pacing.push(crate::presentation::Frame {
+                            window,
+                            started,
+                            slot,
+                            pixels: None,
+                        });
+                    }
+                    return Ok(());
                 }
+                let _ = present_interval;
+                if !host.vulkan.is_null() {
+                    return Err(Status::InternalError);
+                }
+                if host.present.is_some() {
+                    let image = image
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .as_ref()
+                        .cloned()
+                        .ok_or(Status::BadArgument)?;
+                    pacing.push(crate::presentation::Frame {
+                        window,
+                        started,
+                        slot,
+                        pixels: Some((image.width, image.height, image.pixels)),
+                    });
+                }
+                Ok(())
+            })();
+            if let Err(status) = prepare {
+                pacing.failed();
+                return status;
             }
             r.x[0] = 0;
             Status::Ok
@@ -793,6 +815,10 @@ pub fn handler(name: &str) -> Option<Handler> {
             succeed(registers)
         },
         "nvnWindowFinalize" => |instance, _, registers| {
+            let status = instance.poll_presentations(true);
+            if status != Status::Ok {
+                return status;
+            }
             #[cfg(feature = "vulkan")]
             if let Some(backend) = instance
                 .gpu
@@ -856,6 +882,7 @@ pub fn handler(name: &str) -> Option<Handler> {
 mod tests {
     use super::*;
     use crate::Host;
+    use crate::Instance;
     use std::ffi::c_void;
 
     unsafe extern "C" fn read(_user: *mut c_void, address: u64, out: *mut u8, size: u64) -> i32 {

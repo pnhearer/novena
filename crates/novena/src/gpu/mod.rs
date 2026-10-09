@@ -6,8 +6,9 @@
 use ash::{vk, Device, Entry, Instance};
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+mod command_workers;
 mod commands;
 pub mod graphics;
 pub mod image_enums;
@@ -17,6 +18,8 @@ mod memory;
 mod pipeline_disk;
 mod pipeline_workers;
 mod present;
+mod readbacks;
+mod recording_device;
 pub mod texture_transfer;
 pub mod textures;
 pub mod uniforms;
@@ -96,6 +99,20 @@ pub struct Context {
     swapchain: bool,
     pub(crate) push_descriptors: Option<ash::khr::push_descriptor::Device>,
     pub(crate) max_push_descriptors: u32,
+    command_workers: command_workers::Runtime,
+    completion: Mutex<QueueCompletion>,
+}
+
+struct QueueCompletion {
+    semaphore: vk::Semaphore,
+    value: u64,
+    position: u64,
+}
+
+struct CoherentImage {
+    revision: u64,
+    binding: (u64, u64, usize),
+    packing: Option<crate::tiling::Layout>,
 }
 
 /// Vulkan images, presentation, pipelines, and lazily allocated arena storage.
@@ -110,12 +127,14 @@ pub struct Backend {
     pub(crate) graphics: graphics::GraphicsPipelines,
     windows: HashMap<u64, Window>,
     offscreen: Option<Image>,
+    readbacks: readbacks::Readbacks,
     images: Images,
     pending_draws: Vec<graphics::PendingDraw>,
     draw_targets: Vec<u64>,
     draw_depth: Option<u64>,
     bindings: HashMap<u64, (u64, u64, usize)>,
     tiled: HashMap<u64, crate::tiling::Layout>,
+    coherent_images: HashMap<u64, CoherentImage>,
     /// Flat mapped arena, present after the first successful pool allocation.
     pub global_memory: Option<GlobalMemory>,
     context: Arc<Context>,
@@ -141,12 +160,14 @@ impl Backend {
             graphics: graphics::GraphicsPipelines::new(&context)?,
             windows: HashMap::new(),
             offscreen: None,
+            readbacks: readbacks::Readbacks::new(&context),
             images,
             pending_draws: Vec::new(),
             draw_targets: Vec::new(),
             draw_depth: None,
             bindings: HashMap::new(),
             tiled: HashMap::new(),
+            coherent_images: HashMap::new(),
             context,
             scale: scale.max(1.0),
             global_memory: None,
@@ -372,6 +393,7 @@ impl Backend {
 
     fn sync_texture(&mut self, key: u64, load: bool) -> Option<()> {
         if let Some(&(pool, offset, bytes)) = self.bindings.get(&key) {
+            let binding = (pool, offset, bytes);
             let (buffer, offset) = self
                 .global_memory
                 .as_ref()?
@@ -386,6 +408,28 @@ impl Backend {
                 self.images.tiled_transfer(key, address, packing, load)?;
             } else {
                 self.images.arena_transfer(key, buffer, offset, load)?;
+            }
+            {
+                let memory = self.global_memory.as_ref()?;
+                if !load {
+                    memory.mark_written();
+                }
+                if let Some(revision) = memory.revision() {
+                    let packing = self.tiled.get(&key);
+                    let stored = self
+                        .coherent_images
+                        .entry(key)
+                        .or_insert_with(|| CoherentImage {
+                            revision,
+                            binding,
+                            packing: packing.cloned(),
+                        });
+                    stored.revision = revision;
+                    if stored.binding != binding || stored.packing.as_ref() != packing {
+                        stored.binding = binding;
+                        stored.packing = packing.cloned();
+                    }
+                }
             }
         }
         Some(())
@@ -466,6 +510,7 @@ impl Backend {
 
     /// Upload a whole typed image in packed-linear order; return false on failure.
     pub fn upload_image(&mut self, key: u64, bytes: &[u8]) -> bool {
+        self.coherent_images.remove(&key);
         self.images.upload(key, bytes).is_some()
     }
 
@@ -525,7 +570,15 @@ impl Backend {
             .checked_add(at)?;
             ranges.push((key, address, packing));
         }
-        self.images.tiled_batch(&ranges, load)
+        self.images.tiled_batch(&ranges, load)?;
+        if load {
+            for &(key, ..) in resources {
+                self.coherent_images.remove(&key);
+            }
+        } else {
+            memory.mark_written();
+        }
+        Some(())
     }
 
     fn transfer_tiled(
@@ -549,7 +602,13 @@ impl Backend {
                 .get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(buffer))
         }
         .checked_add(at)?;
-        self.images.tiled_transfer(key, address, packing, load)
+        self.images.tiled_transfer(key, address, packing, load)?;
+        if load {
+            self.coherent_images.remove(&key);
+        } else {
+            self.global_memory.as_ref()?.mark_written();
+        }
+        Some(())
     }
 
     /// Copy packed linear arena images in one submission, without conversion.
@@ -582,7 +641,15 @@ impl Backend {
             let (buffer, at) = memory.image_region(pool, offset, packing.linear_size())?;
             ranges.push((key, buffer, at, packing));
         }
-        self.images.linear_batch(&ranges, load)
+        self.images.linear_batch(&ranges, load)?;
+        if load {
+            for &(key, ..) in resources {
+                self.coherent_images.remove(&key);
+            }
+        } else {
+            memory.mark_written();
+        }
+        Some(())
     }
 
     /// Complete all transfers before CPU access to shared arena storage.
@@ -592,6 +659,7 @@ impl Backend {
 
     /// Remove the image and arena binding for a texture key.
     pub fn release_texture(&mut self, key: u64) {
+        self.coherent_images.remove(&key);
         self.graphics.invalidate_descriptors();
         self.images.remove(key);
         self.bindings.remove(&key);
@@ -619,6 +687,10 @@ impl Backend {
             self.sync_texture(key, false)
         })()
         .is_some()
+    }
+
+    pub(crate) fn set_parallel_recording(&mut self, enabled: bool) {
+        self.images.set_parallel_recording(enabled);
     }
 
     pub(crate) fn reserve_draws(&mut self, count: usize) {
@@ -671,6 +743,7 @@ impl Backend {
             if let Some(depth) = depth {
                 self.sync_texture(depth, true)?;
             }
+            self.global_memory.as_ref()?.mark_written();
             self.images
                 .draw(&targets, depth, self.global_memory.as_ref()?, &draws)?;
             for &texture in &targets {
@@ -807,8 +880,9 @@ impl Backend {
         host: &crate::Host,
         window: u64,
         texture: u64,
-        interval: u32,
-    ) -> Option<()> {
+        _interval: u32,
+        config: crate::PresentationConfig,
+    ) -> Option<bool> {
         let mut extent = vk::Extent2D::default();
         let surface_host = unsafe { &*host.vulkan };
         unsafe {
@@ -821,7 +895,7 @@ impl Backend {
         }
         self.windows
             .get_mut(&window)?
-            .present(source, extent, interval)
+            .present(source, extent, config)
     }
 
     /// Offscreen presentation uses the same blit and barriers as a swapchain.
@@ -859,23 +933,131 @@ impl Backend {
         Some((width, height, self.images.read_image(target)?))
     }
 
-    pub(crate) fn present_callback(
+    pub(crate) fn enqueue_callback(
         &mut self,
+        slot: usize,
         texture: u64,
         width: u64,
         height: u64,
-    ) -> Option<(u32, u32, Vec<u8>)> {
+    ) -> Option<()> {
         let width = (width.max(1) as f32 * self.scale).round() as u32;
         let height = (height.max(1) as f32 * self.scale).round() as u32;
-        self.present_offscreen(texture, vk::Format::R8G8B8A8_UNORM, width, height)
+        let current = self.coherent_images.get(&texture).is_some_and(|stored| {
+            self.global_memory.as_ref().and_then(GlobalMemory::revision) == Some(stored.revision)
+                && self.bindings.get(&texture) == Some(&stored.binding)
+                && self.tiled.get(&texture) == stored.packing.as_ref()
+        });
+        let source = self.images.info(texture)?;
+        if !self.tiled.contains_key(&texture)
+            && source.format == vk::Format::R8G8B8A8_UNORM
+            && source.shape.kind == crate::tiling::ImageKind::D2
+            && source.extent
+                == (vk::Extent3D {
+                    width,
+                    height,
+                    depth: 1,
+                })
+        {
+            if let Some(&(pool, offset, bytes)) = self.bindings.get(&texture) {
+                let size = (width as usize)
+                    .checked_mul(height as usize)?
+                    .checked_mul(4)?;
+                if size <= bytes {
+                    let (buffer, offset) = self
+                        .global_memory
+                        .as_ref()?
+                        .image_region(pool, offset, size)?;
+                    self.readbacks
+                        .submit_buffer(slot, buffer, offset, width, height)?;
+                    if !current {
+                        self.sync_texture(texture, true)?;
+                    }
+                    return Some(());
+                }
+            }
+        }
+        if !current {
+            self.sync_texture(texture, true)?;
+        }
+        self.images.readback_source(texture, |source| {
+            if source.format != vk::Format::R8G8B8A8_UNORM {
+                return None;
+            }
+            self.readbacks.submit(slot, source, width, height)
+        })
+    }
+
+    pub(crate) fn read_callback(
+        &self,
+        slot: usize,
+        wait: bool,
+    ) -> Option<Option<(u32, u32, Vec<u8>)>> {
+        self.readbacks.read(slot, wait)
+    }
+
+    pub(crate) fn reset_presentations(&mut self) {
+        self.readbacks = readbacks::Readbacks::new(&self.context);
     }
 
     pub(crate) fn finish(&self) -> bool {
-        unsafe { self.context.device.device_wait_idle().is_ok() }
+        self.images.wait().is_some()
+            && self.readbacks.wait().is_some()
+            && self.windows.values().all(Window::wait)
     }
 }
 
 impl Context {
+    /// Retire preceding work on the execution queue at a timeline checkpoint.
+    /// Queue access must be serialized with submissions by the caller.
+    pub(crate) fn wait_queue(&self) -> Option<()> {
+        let mut completion = self.completion.lock().unwrap_or_else(|p| p.into_inner());
+        if self.command_workers.unchanged_since(completion.position)? {
+            return Some(());
+        }
+        if let Some(latest) = self.command_workers.latest_timeline() {
+            let semaphores = [latest.timeline.semaphore()];
+            let values = [latest.value];
+            let info = vk::SemaphoreWaitInfo::default()
+                .semaphores(&semaphores)
+                .values(&values);
+            loop {
+                self.command_workers.healthy()?;
+                if !latest.timeline.wait_posted(latest.value) {
+                    continue;
+                }
+                match unsafe { self.device.wait_semaphores(&info, 100_000_000) } {
+                    Ok(()) => {
+                        self.command_workers.retire(latest.position);
+                        completion.position = latest.position;
+                        return Some(());
+                    }
+                    Err(vk::Result::TIMEOUT) => {}
+                    Err(_) => return None,
+                }
+            }
+        }
+        let value = completion.value.checked_add(1)?;
+        let semaphores = [completion.semaphore];
+        let values = [value];
+        unsafe {
+            let position = self
+                .command_workers
+                .checkpoint(completion.semaphore, value)
+                .ok()?;
+            completion.value = value;
+            self.device
+                .wait_semaphores(
+                    &vk::SemaphoreWaitInfo::default()
+                        .semaphores(&semaphores)
+                        .values(&values),
+                    u64::MAX,
+                )
+                .ok()?;
+            completion.position = position;
+            Some(())
+        }
+    }
+
     /// Create a module after checking the optional global memory features.
     /// The caller still validates SPIR-V and owns the returned Vulkan module.
     pub fn create_global_shader_module(&self, words: &[u32]) -> Result<vk::ShaderModule, String> {
@@ -903,6 +1085,22 @@ impl Context {
             .application_name(&app)
             .engine_name(&app)
             .api_version(vk::API_VERSION_1_2);
+        let mut extensions = extensions.to_vec();
+        if swapchain {
+            let supported = unsafe { entry.enumerate_instance_extension_properties(None).ok()? };
+            for name in [
+                ash::khr::get_surface_capabilities2::NAME,
+                ash::ext::surface_maintenance1::NAME,
+            ] {
+                if !supported.iter().any(|extension| unsafe { std::ffi::CStr::from_ptr(extension.extension_name.as_ptr()) } == name) { return None; }
+                if !extensions
+                    .iter()
+                    .any(|existing| existing.as_c_str() == name)
+                {
+                    extensions.push(name.to_owned());
+                }
+            }
+        }
         let pointers: Vec<_> = extensions.iter().map(|name| name.as_ptr()).collect();
         let create = vk::InstanceCreateInfo::default()
             .application_info(&info)
@@ -932,12 +1130,30 @@ impl Context {
                 instance.get_physical_device_properties2(pick, &mut properties);
             }
         }
+        let mut ty =
+            vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
+        let semaphore = unsafe {
+            device.create_semaphore(&vk::SemaphoreCreateInfo::default().push_next(&mut ty), None)
+        };
+        let Ok(semaphore) = semaphore else {
+            unsafe {
+                device.destroy_device(None);
+                instance.destroy_instance(None);
+            }
+            return None;
+        };
         Some(Self {
             push_descriptors,
             max_push_descriptors: push.max_push_descriptors,
+            completion: Mutex::new(QueueCompletion {
+                semaphore,
+                value: 0,
+                position: 0,
+            }),
             entry,
             instance,
             physical_device: pick,
+            command_workers: command_workers::Runtime::new(&device, queue, family),
             device,
             queue,
             queue_family: family,
@@ -957,6 +1173,10 @@ impl Context {
         })
     }
 
+    fn recorder(&self) -> recording_device::RecordingDevice<'_> {
+        recording_device::RecordingDevice::new(&self.device)
+    }
+
     fn create_device(
         instance: &Instance,
         swapchain: bool,
@@ -971,9 +1191,16 @@ impl Context {
             if swapchain {
                 let supported =
                     unsafe { instance.enumerate_device_extension_properties(pick) }.ok()?;
-                if !supported.iter().any(|extension| {
-                    (unsafe { std::ffi::CStr::from_ptr(extension.extension_name.as_ptr()) })
-                        == ash::khr::swapchain::NAME
+                if ![
+                    ash::khr::swapchain::NAME,
+                    ash::ext::swapchain_maintenance1::NAME,
+                ]
+                .iter()
+                .all(|name| {
+                    supported.iter().any(|extension| {
+                        (unsafe { std::ffi::CStr::from_ptr(extension.extension_name.as_ptr()) })
+                            == *name
+                    })
                 }) {
                     continue;
                 }
@@ -992,14 +1219,24 @@ impl Context {
                 continue;
             };
             let family = family as u32;
+            let mut maintenance = vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default();
             let mut v11 = vk::PhysicalDeviceVulkan11Features::default();
             let mut v12 = vk::PhysicalDeviceVulkan12Features::default();
             let mut features = vk::PhysicalDeviceFeatures2::default()
                 .push_next(&mut v11)
                 .push_next(&mut v12);
+            if swapchain {
+                features = features.push_next(&mut maintenance);
+            }
             unsafe { instance.get_physical_device_features2(pick, &mut features) };
             let core = features.features;
-            if core.shader_int64 == vk::FALSE || v12.buffer_device_address == vk::FALSE {
+            if swapchain && maintenance.swapchain_maintenance1 == vk::FALSE {
+                continue;
+            }
+            if core.shader_int64 == vk::FALSE
+                || v12.buffer_device_address == vk::FALSE
+                || v12.timeline_semaphore == vk::FALSE
+            {
                 continue;
             }
             let shader_features = ShaderFeatures {
@@ -1022,6 +1259,7 @@ impl Context {
                 .storage_buffer16_bit_access(shader_features.storage_buffer16_bit_access);
             let mut enabled12 = vk::PhysicalDeviceVulkan12Features::default()
                 .buffer_device_address(true)
+                .timeline_semaphore(true)
                 .storage_buffer8_bit_access(shader_features.storage_buffer8_bit_access)
                 .shader_int8(shader_features.shader_int8);
             let priority = [1.0_f32];
@@ -1038,16 +1276,23 @@ impl Context {
             let mut extensions = Vec::new();
             if swapchain {
                 extensions.push(ash::khr::swapchain::NAME.as_ptr());
+                extensions.push(ash::ext::swapchain_maintenance1::NAME.as_ptr());
             }
             if Self::supports_push(instance, pick) {
                 extensions.push(ash::khr::push_descriptor::NAME.as_ptr());
             }
-            let device_info = vk::DeviceCreateInfo::default()
+            let mut device_info = vk::DeviceCreateInfo::default()
                 .queue_create_infos(&queue_info)
                 .enabled_extension_names(&extensions)
                 .enabled_features(&enabled)
                 .push_next(&mut enabled11)
                 .push_next(&mut enabled12);
+            let mut enabled_maintenance =
+                vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default()
+                    .swapchain_maintenance1(true);
+            if swapchain {
+                device_info = device_info.push_next(&mut enabled_maintenance);
+            }
             // SAFETY: the selected family supports graphics and the create info is valid.
             if let Ok(device) = unsafe { instance.create_device(pick, &device_info, None) } {
                 return Some((pick, device, family, shader_features));
@@ -1059,10 +1304,13 @@ impl Context {
 
 impl Drop for Context {
     fn drop(&mut self) {
+        let _ = self.wait_queue();
+        self.command_workers.shutdown();
         // SAFETY: all work submitted by this small context is complete before
         // it is dropped by the owning instance.
         unsafe {
-            let _ = self.device.device_wait_idle();
+            let completion = self.completion.get_mut().unwrap_or_else(|p| p.into_inner());
+            self.device.destroy_semaphore(completion.semaphore, None);
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);
         }
@@ -1086,6 +1334,47 @@ fn find_memory_type(context: &Context, bits: u32, flags: vk::MemoryPropertyFlags
 #[cfg(test)]
 mod tests {
     use super::{Backend, ShaderFeatures};
+
+    #[test]
+    #[ignore = "requires a Vulkan device"]
+    fn callback_source_reuse_observes_cpu_writes_and_aliased_image_stores() {
+        let mut backend = Backend::new(1.0).expect("Vulkan device required");
+        backend.allocate_pool(10, 0, 64).unwrap();
+        for key in [1, 2] {
+            assert!(backend.ensure(key, 4, 4, false));
+            backend.bindings.insert(key, (10, 0, 64));
+        }
+        assert!(backend.clear_color(1, [1.0, 0.0, 0.0, 1.0], 0xf));
+        backend.enqueue_callback(0, 1, 4, 4).unwrap();
+        assert_eq!(
+            &backend.read_callback(0, true).unwrap().unwrap().2[..4],
+            &[255, 0, 0, 255]
+        );
+        assert!(backend.clear_color(2, [0.0, 0.0, 1.0, 1.0], 0xf));
+        backend.enqueue_callback(0, 1, 4, 4).unwrap();
+        assert_eq!(
+            &backend.read_callback(0, true).unwrap().unwrap().2[..4],
+            &[0, 0, 255, 255]
+        );
+        backend
+            .global_memory
+            .as_mut()
+            .unwrap()
+            .write_pool(10, 0, &[0, 255, 0, 255].repeat(16))
+            .unwrap();
+        backend.enqueue_callback(0, 1, 4, 4).unwrap();
+        assert_eq!(
+            &backend.read_callback(0, true).unwrap().unwrap().2[..4],
+            &[0, 255, 0, 255]
+        );
+        assert!(backend.clear_color(1, [1.0, 0.0, 0.0, 1.0], 0xf));
+        assert!(backend.upload_image(1, &[0, 0, 255, 255].repeat(16)));
+        backend.enqueue_callback(0, 1, 4, 4).unwrap();
+        assert_eq!(
+            &backend.read_callback(0, true).unwrap().unwrap().2[..4],
+            &[255, 0, 0, 255]
+        );
+    }
 
     #[test]
     fn rejects_unavailable_narrow_capabilities_before_module_creation() {
@@ -1130,8 +1419,10 @@ mod tests {
         };
         assert!(backend.ensure(1, 2, 1, false));
         assert!(backend.clear_color(1, [0.0, 0.0, 1.0, 1.0], 0xf));
+        backend.enqueue_callback(0, 1, 2, 1).unwrap();
         let (width, height, pixels) = backend
-            .present_callback(1, 2, 1)
+            .read_callback(0, true)
+            .flatten()
             .expect("Vulkan presentation");
         assert_eq!((width, height), (4, 2));
         assert_eq!(&pixels[..4], &[0, 0, 255, 255]);

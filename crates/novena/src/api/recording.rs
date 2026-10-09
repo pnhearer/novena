@@ -17,10 +17,6 @@ pub fn handler(name: &str) -> Option<Handler> {
                     device: registers.x[1],
                     command_memory: Vec::new(),
                     control_memory: Vec::new(),
-                    recording: false,
-                    recordings: 0,
-                    commands: Vec::new(),
-                    recording_handles: std::collections::HashMap::new(),
                 },
             );
             succeed(registers)
@@ -86,17 +82,9 @@ pub fn handler(name: &str) -> Option<Handler> {
             Status::Ok
         },
         "nvnCommandBufferBeginRecording" => |instance, _, registers| {
-            instance.objects.update(registers.x[0], |object| {
-                if let Object::CommandBuffer {
-                    recording,
-                    commands,
-                    ..
-                } = object
-                {
-                    *recording = true;
-                    commands.clear();
-                }
-            });
+            if !instance.objects.begin_recording(registers.x[0]) {
+                return Status::BadArgument;
+            }
             Status::Ok
         },
         // Returns a handle the program later submits. The command buffer's
@@ -104,27 +92,9 @@ pub fn handler(name: &str) -> Option<Handler> {
         // differ, is novena's choice; signatures 0002 leaves the real value
         // open.
         "nvnCommandBufferEndRecording" => |instance, _, registers| {
-            let mut handle = 0;
-            instance.objects.update(registers.x[0], |object| {
-                if let Object::CommandBuffer {
-                    recording,
-                    recordings,
-                    commands,
-                    recording_handles,
-                    ..
-                } = object
-                {
-                    *recording = false;
-                    *recordings += 1;
-                    handle = registers.x[0] | (*recordings & 0xffff) << 48;
-                    recording_handles.insert(handle, std::mem::take(commands));
-                    // A recording is normally submitted soon after it ends.
-                    // Older ones that never were are dropped, so the object
-                    // (which is copied on every lookup) stays small.
-                    let current = *recordings & 0xffff;
-                    recording_handles.retain(|h, _| current.wrapping_sub(h >> 48) & 0xffff < 64);
-                }
-            });
+            let Some(handle) = instance.objects.end_recording(registers.x[0]) else {
+                return Status::BadArgument;
+            };
             registers.x[0] = handle;
             Status::Ok
         },

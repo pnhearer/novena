@@ -6,7 +6,7 @@ use super::{
     objects::{Object, SamplerDescription, ShaderRecord, ShaderTranslation, TextureDescription},
     read_f32x4, succeed, Handler,
 };
-use crate::instance::{Instance, PendingShader, Registers, Status, SHADER_STAGE_UNKNOWN};
+use crate::instance::{PendingShader, Registers, Status, SHADER_STAGE_UNKNOWN};
 use std::fs;
 
 const MAX_SHADER_BYTES: usize = 64 * 1024;
@@ -53,7 +53,10 @@ fn layout_bytes(memory: &[u8]) -> Result<Vec<u8>, &'static str> {
     Ok(bytes)
 }
 
-fn shader_bytes(instance: &Instance, address: u64) -> Result<Vec<u8>, &'static str> {
+fn shader_bytes(
+    instance: &crate::instance::InstanceState,
+    address: u64,
+) -> Result<Vec<u8>, &'static str> {
     let resolution = instance
         .objects
         .resolve_gpu_address(address)
@@ -111,7 +114,11 @@ fn shader_bytes(instance: &Instance, address: u64) -> Result<Vec<u8>, &'static s
     Ok(bytes)
 }
 
-pub(crate) fn retry_pending(instance: &Instance, program: u64, point: &'static str) {
+pub(crate) fn retry_pending(
+    instance: &crate::instance::InstanceState,
+    program: u64,
+    point: &'static str,
+) {
     let entries = instance.pending_shaders(program);
     for entry in entries {
         if entry.failures >= 64 {
@@ -175,6 +182,7 @@ pub(crate) fn retry_pending(instance: &Instance, program: u64, point: &'static s
 mod tests {
     use super::*;
     use crate::api::{Object, ShaderTranslation};
+    use crate::Instance;
     use crate::{Host, Registers, ShaderStage, ShaderTranslator, SHADER_STAGE_UNKNOWN};
     use std::ffi::c_void;
     use std::fs;
@@ -325,7 +333,7 @@ mod tests {
 }
 
 fn translate_shaders(
-    instance: &Instance,
+    instance: &crate::instance::InstanceState,
     program: u64,
     records: &[ShaderRecord],
 ) -> Vec<super::objects::ShaderTranslation> {
@@ -397,7 +405,7 @@ fn translate_shaders(
 /// and, for every word that resolves to program memory, the bytes from
 /// 0x80 before it to 0x180 after it. Written once per record address. The
 /// output contains program data and belongs in a private directory.
-fn dump_record(instance: &Instance, record: &ShaderRecord) {
+fn dump_record(instance: &crate::instance::InstanceState, record: &ShaderRecord) {
     let Some(directory) = std::env::var_os("NOVENA_RECORD_DUMP_DIR") else {
         return;
     };
@@ -443,7 +451,7 @@ fn dump_record(instance: &Instance, record: &ShaderRecord) {
     let _ = fs::create_dir_all(&directory).and_then(|()| fs::write(path, text));
 }
 
-fn dump_translation(instance: &Instance, words: &[u32]) {
+fn dump_translation(instance: &crate::instance::InstanceState, words: &[u32]) {
     let Some(directory) = instance.shader_dump_directory() else {
         return;
     };
@@ -458,7 +466,7 @@ fn dump_translation(instance: &Instance, words: &[u32]) {
     let _ = fs::create_dir_all(&directory).and_then(|()| fs::write(path, bytes));
 }
 
-fn dump_translation_error(instance: &Instance, error: &str) {
+fn dump_translation_error(instance: &crate::instance::InstanceState, error: &str) {
     let Some(directory) = instance.shader_dump_directory() else {
         return;
     };
@@ -472,7 +480,7 @@ fn dump_translation_error(instance: &Instance, error: &str) {
 }
 
 fn texture_builder_update(
-    instance: &Instance,
+    instance: &crate::instance::InstanceState,
     registers: &Registers,
     change: impl FnOnce(&mut TextureDescription),
 ) -> Status {
@@ -485,7 +493,7 @@ fn texture_builder_update(
 }
 
 fn sampler_builder_update(
-    instance: &Instance,
+    instance: &crate::instance::InstanceState,
     registers: &Registers,
     change: impl FnOnce(&mut SamplerDescription),
 ) -> Status {
@@ -498,7 +506,7 @@ fn sampler_builder_update(
 }
 
 fn texture_field(
-    instance: &Instance,
+    instance: &crate::instance::InstanceState,
     address: u64,
     pick: impl FnOnce(&TextureDescription) -> u64,
 ) -> Option<u64> {
@@ -986,7 +994,7 @@ pub fn handler(name: &str) -> Option<Handler> {
 }
 
 fn texture_answer(
-    instance: &Instance,
+    instance: &crate::instance::InstanceState,
     registers: &mut Registers,
     pick: impl FnOnce(&TextureDescription) -> u64,
 ) -> Status {

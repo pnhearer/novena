@@ -865,6 +865,7 @@ fn recorded_tiled_copies_and_blits_update_arena_bytes() {
         let handle = call(&instance, "CommandBufferEndRecording", &[7]);
         memory.lock().unwrap()[0x100..0x108].copy_from_slice(&handle.to_le_bytes());
         call(&instance, "QueueSubmitCommands", &[0, 1, 0x100]);
+        call(&instance, "QueueFinish", &[0]);
         let bytes = memory.lock().unwrap();
         let mut decoded = vec![0; layout.linear_size()];
         layout

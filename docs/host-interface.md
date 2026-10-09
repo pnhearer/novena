@@ -67,7 +67,22 @@ Results come back in `x[0]`, `x[1]` and `d[0]`.
 
 Many arguments are pointers into the program's memory. novena never dereferences them directly, because the program may not share the host's address space. It calls the host's `read_memory` and `write_memory` callbacks. A host whose program does share its address space can implement them as plain copies.
 
-The callbacks can be called from any thread on which the program calls the graphics API.
+Memory callbacks may run on guest threads or on the library's execution thread.
+The host context and callbacks must remain valid until instance destruction
+returns. Queued submissions drain before that return. A callback must not wait
+for completion on its own instance. A call that would drain its own execution
+thread returns an internal error.
+
+Guest submission copies the handle array and claims the finished recordings
+before returning. Interpretation and host memory transfers run in submission
+order. Memory used by submitted commands must stay valid and must not be
+modified until completion. Explicit finish, presentation, and resource changes
+drain earlier work. Completion reports the first pending execution error.
+Validation errors clear after that report; driver failures remain fatal.
+A submitted recording is consumed once. Independent command buffers record
+without a shared recording mutex. A recording may move between threads when
+the caller transfers ownership. Simultaneous calls on the same buffer fail
+immediately rather than waiting for its current owner.
 
 ## What happens today
 
@@ -109,3 +124,48 @@ observations used for that work. This is how signatures are worked out. See
 ## Versioning
 
 `novena_host_interface_version` returns the version the library was built with. A host compares it with `NOVENA_HOST_INTERFACE_VERSION` from the header it was compiled against and stops if they differ. The version changes whenever an existing declaration changes meaning or layout, or a function id changes.
+
+## Queued presentation
+
+The host selects FIFO or mailbox ordering with
+`novena_instance_set_presentation`. Capacity is one through sixteen frames.
+The default is two frames and FIFO. The host struct layout and interface
+version remain unchanged. The new functions are additive.
+
+Callback presentation queues an immutable image snapshot. FIFO delivers every
+frame in order. When the queue reaches capacity, another present waits for
+and delivers the oldest frame before taking its slot. Mailbox replaces pending
+frames for the same window. It preserves frames belonging to other windows.
+Replacing a frame does not cancel its GPU copy. Its storage is reused only
+after the slot timeline signals completion.
+
+Call `novena_instance_poll_presentations` with zero to deliver one ready frame.
+This poll does not wait for GPU completion. With one, it waits for and drains
+all pending callbacks. A host event loop should poll at its display tick.
+Queue finish, window finalization, policy changes and instance destruction also
+drain callbacks. Callback bytes remain valid until the callback returns.
+Presentation and vblank callbacks must not reenter the library.
+
+The vblank callback runs once immediately before each delivered callback
+frame, after GPU completion. Replaced frames do not consume a vblank callback.
+The host supplies the display clock. Headless operation without that callback
+has ordering and backpressure, but no simulated refresh period.
+
+Native presentation requests FIFO or mailbox from the surface. Mailbox falls
+back to FIFO when unavailable. Host policy controls this choice; the recorded
+guest interval does not override it. Command reuse waits on timeline values.
+Native resource retirement uses presentation fences and requires the
+presentation maintenance extension and its surface dependencies. Unsupported
+native devices fail setup. A zero drawable extent skips the request.
+
+`novena_instance_frame_statistics` returns cumulative submitted, delivered,
+replaced, skipped and failed counts, pending callback count, peak callback queue
+depth, last latency, mean latency and population variance. Latency runs from
+guest present handler entry to callback entry. It includes backpressure, GPU
+completion and the host vblank wait. Native latency ends at presentation-engine
+handoff. Native replacement and display scanout are not observable through
+these counters. A callback frame remains pending until the host polls or a
+drain boundary runs. Statistics do not reset when policy changes.
+
+See [presentation timing and pacing](provenance/0034-presentation-timing.md)
+for the source record, synthetic measurements and verification.

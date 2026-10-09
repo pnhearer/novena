@@ -458,14 +458,6 @@ pub enum Object {
         command_memory: Vec<(u64, u64, u64)>,
         /// Registered control-memory address and byte size pairs.
         control_memory: Vec<(u64, u64)>,
-        /// Whether a recording is currently open.
-        recording: bool,
-        /// Number of completed recordings used to allocate handles.
-        recordings: u64,
-        /// Commands in the current recording.
-        commands: Vec<RecordedCommand>,
-        /// Saved command lists keyed by recording handle.
-        recording_handles: HashMap<u64, Vec<RecordedCommand>>,
     },
 }
 
@@ -537,9 +529,10 @@ pub struct SamplerDescription {
 }
 
 /// Thread-safe object table keyed by program object address.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Objects {
-    map: Mutex<HashMap<u64, Object>>,
+    map: Arc<Mutex<HashMap<u64, Object>>>,
+    recordings: Arc<super::recordings::Recordings>,
 }
 
 /// Resolved GPU address and its corresponding host-managed storage range.
@@ -582,7 +575,13 @@ impl Objects {
     /// Replace whatever was at `address` with `object`. A builder's
     /// SetDefaults call and every Initialize call start an object afresh.
     pub fn put(&self, address: u64, object: Object) {
-        self.lock().insert(address, object);
+        let mut map = self.lock();
+        if matches!(object, Object::CommandBuffer { .. }) {
+            self.recordings.initialize(address);
+        } else {
+            self.recordings.finalize(address);
+        }
+        map.insert(address, object);
     }
 
     /// Return a cloned object record, or None if the key is absent.
@@ -592,7 +591,9 @@ impl Objects {
 
     /// Remove and return an object record, or None if the key is absent.
     pub fn remove(&self, address: u64) -> Option<Object> {
-        self.lock().remove(&address)
+        let mut map = self.lock();
+        self.recordings.finalize(address);
+        map.remove(&address)
     }
 
     /// Change the object at `address` in place. Returns false when there is
@@ -671,19 +672,8 @@ impl Objects {
         )
     }
 
-    pub(crate) fn recycle_recording(&self, handle: u64, mut consumed: Vec<RecordedCommand>) {
-        consumed.clear();
-        let owner = handle & ((1 << 48) - 1);
-        if let Some(Object::CommandBuffer {
-            commands,
-            recording: false,
-            ..
-        }) = self.lock().get_mut(&owner)
-        {
-            if commands.capacity() < consumed.capacity() {
-                *commands = consumed;
-            }
-        }
+    pub(crate) fn recycle_recording(&self, handle: u64, consumed: Vec<RecordedCommand>) {
+        self.recordings.recycle(handle, consumed);
     }
 
     /// Every texture some window presents.
@@ -698,18 +688,29 @@ impl Objects {
             .collect()
     }
 
-    /// Take the commands of a submitted recording. A recording handle
-    /// carries its command buffer's address in its low 48 bits (see
-    /// EndRecording), so the lookup is direct. A recording is executed once
-    /// and then dropped, so finished recordings do not pile up.
+    /// Start a recording without touching the shared object table.
+    pub fn begin_recording(&self, address: u64) -> bool {
+        self.recordings.begin(address)
+    }
+
+    /// Append using an atomic per-buffer ownership transfer.
+    pub fn record_command(&self, address: u64, command: RecordedCommand) -> bool {
+        self.recordings.push(address, command)
+    }
+
+    /// Publish an owned command list and return its one-shot handle.
+    pub fn end_recording(&self, address: u64) -> Option<u64> {
+        self.recordings.end(address)
+    }
+
+    /// Claim a completed recording once, independently of other buffers.
     pub fn recording(&self, handle: u64) -> Option<Vec<RecordedCommand>> {
-        let owner = handle & ((1 << 48) - 1);
-        match self.lock().get_mut(&owner) {
-            Some(Object::CommandBuffer {
-                recording_handles, ..
-            }) => recording_handles.remove(&handle),
-            _ => None,
-        }
+        self.recordings.take(handle)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn recording_len(&self, handle: u64) -> Option<usize> {
+        self.recordings.len(handle)
     }
 }
 
