@@ -1,14 +1,143 @@
-//! Vulkan backing for the flat address space. Provenance: 0022-flat-global-memory and 0038.
+//! Vulkan backing for the flat address space. Provenance: 0022-flat-global-memory, 0038 and 0039.
 
+use super::commands::Submission;
 use super::Context;
+use crate::dirty_ranges::Ranges;
 use crate::global_memory::{
     AddressMap, Allocator, GUEST_BASE, PUSH_GLOBAL_DELTA_OFFSET, PUSH_GLOBAL_DELTA_SIZE,
 };
 use ash::{vk, Device};
-use std::{cell::Cell, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeMap,
+    ops::Range,
+    sync::Arc,
+};
+
+const PAGE_SIZE: u64 = 4096;
+
+#[derive(Default)]
+struct PoolSync {
+    tracked: bool,
+    direct: bool,
+    size: u64,
+}
+
+struct Access {
+    range: Range<u64>,
+    write: bool,
+    submission: Submission,
+}
+
+// Physical pointers have no descriptor bound. Keep their writeback conservative.
+pub(super) fn physical_writes(words: &[u32]) -> bool {
+    writes_to_storage(words, &[5349])
+}
+
+pub(super) fn storage_writes(words: &[u32]) -> bool {
+    writes_to_storage(words, &[2, 12])
+}
+
+fn writes_to_storage(words: &[u32], classes: &[u32]) -> bool {
+    use std::collections::BTreeSet;
+    let mut instructions = Vec::new();
+    let mut at = 5;
+    while at < words.len() {
+        let length = (words[at] >> 16) as usize;
+        if length == 0 || at + length > words.len() {
+            return true;
+        }
+        instructions.push(&words[at..at + length]);
+        at += length;
+    }
+    let types: BTreeSet<_> = instructions
+        .iter()
+        .filter(|w| w[0] & 0xffff == 32 && w.len() >= 4 && classes.contains(&w[2]))
+        .map(|w| w[1])
+        .collect();
+    let pointers: BTreeSet<_> = instructions
+        .iter()
+        .filter(|w| w.len() >= 3 && types.contains(&w[1]))
+        .map(|w| w[2])
+        .collect();
+    instructions.iter().any(|w| {
+        let op = w[0] & 0xffff;
+        match op {
+            62..=64 | 228 | 319 => w.get(1).is_some_and(|id| pointers.contains(id)),
+            229..=242 | 318 => w.get(3).is_some_and(|id| pointers.contains(id)),
+            _ => false,
+        }
+    })
+}
+
+pub(super) fn descriptor_writable(words: &[u32], set: u32, binding: u32) -> bool {
+    if !storage_writes(words) {
+        return false;
+    }
+    let mut ops = Vec::new();
+    let mut at = 5;
+    while at < words.len() {
+        let size = (words[at] >> 16) as usize;
+        if size == 0 || at + size > words.len() {
+            return true;
+        }
+        ops.push(&words[at..at + size]);
+        at += size;
+    }
+    let matches = |id, decoration, value| {
+        ops.iter().any(|w| {
+            w.len() >= 4 && w[0] & 0xffff == 71 && w[1] == id && w[2] == decoration && w[3] == value
+        })
+    };
+    let Some(variable) = ops.iter().find(|w| {
+        w.len() >= 4 && w[0] & 0xffff == 59 && matches(w[2], 34, set) && matches(w[2], 33, binding)
+    }) else {
+        return true;
+    };
+    if ops
+        .iter()
+        .any(|w| w.len() >= 3 && w[0] & 0xffff == 71 && w[1] == variable[2] && w[2] == 24)
+    {
+        return false;
+    }
+    let Some(pointer) = ops
+        .iter()
+        .find(|w| w.len() >= 4 && w[0] & 0xffff == 32 && w[1] == variable[1])
+    else {
+        return true;
+    };
+    let Some(structure) = ops
+        .iter()
+        .find(|w| w.len() >= 2 && w[0] & 0xffff == 30 && w[1] == pointer[3])
+    else {
+        return true;
+    };
+    !(0..structure.len() - 2).all(|member| {
+        ops.iter().any(|w| {
+            w.len() >= 4
+                && w[0] & 0xffff == 72
+                && w[1] == structure[1]
+                && w[2] == member as u32
+                && w[3] == 24
+        })
+    })
+}
+
+/// Payload bytes moved between guest storage and the mapped arena.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TransferStatistics {
+    /// Bytes copied into the arena, excluding direct host writes.
+    pub uploaded: u64,
+    /// Bytes copied out of the arena, excluding direct host reads.
+    pub downloaded: u64,
+    /// Bytes inspected through callbacks for hosts without write notifications.
+    pub inspected: u64,
+}
 
 /// One buffer and one stable device address for every live guest pool.
 /// Methods require exclusive access, including across queue submission and readback.
+/// Raw external submissions must finish before host access or release. Backend
+/// submissions register their ranges and completion tokens here.
 pub struct GlobalMemory {
     context: Arc<Context>,
     device: Device,
@@ -18,6 +147,12 @@ pub struct GlobalMemory {
     addresses: AddressMap,
     allocator: Allocator,
     revision: Cell<Option<u64>>,
+    host_dirty: Ranges,
+    device_dirty: RefCell<Ranges>,
+    pending: RefCell<Vec<Access>>,
+    pools: BTreeMap<u64, PoolSync>,
+    submission_tracking: bool,
+    statistics: TransferStatistics,
 }
 
 impl GlobalMemory {
@@ -122,6 +257,12 @@ impl GlobalMemory {
             addresses,
             allocator: Allocator::new(size),
             revision: Cell::new(Some(1)),
+            host_dirty: Ranges::default(),
+            device_dirty: RefCell::default(),
+            pending: RefCell::default(),
+            pools: BTreeMap::new(),
+            submission_tracking: false,
+            statistics: TransferStatistics::default(),
         })
     }
 
@@ -132,6 +273,160 @@ impl GlobalMemory {
     pub(crate) fn mark_written(&self) {
         self.revision
             .set(self.revision.get().and_then(|value| value.checked_add(1)));
+    }
+
+    /// Cumulative transfer payload and legacy inspection counts.
+    pub fn transfer_statistics(&self) -> TransferStatistics {
+        self.statistics
+    }
+
+    pub(crate) fn notify_storage_write(&mut self, address: u64, size: u64) {
+        let Some(end) = address.checked_add(size) else {
+            return;
+        };
+        let pools: Vec<_> = self
+            .allocator
+            .pools
+            .iter()
+            .map(|(&key, &pool)| (key, pool))
+            .collect();
+        for (key, pool) in pools {
+            let start = address.max(pool.storage);
+            let limit = end.min(pool.storage + pool.size);
+            if start < limit {
+                let _ = self.notify_host_write(key, start - pool.storage, limit - start);
+            }
+        }
+    }
+
+    pub(crate) fn track_submissions(&mut self) {
+        self.submission_tracking = true;
+    }
+
+    /// Enable page tracking for a pool and its aliases. The initial upload is retained.
+    /// The host must report every subsequent storage write before submission.
+    pub fn track_host_writes(&mut self, key: u64) -> Option<()> {
+        let pool = *self.allocator.pools.get(&key)?;
+        if self.pools.get(&pool.block)?.tracked {
+            return Some(());
+        }
+        self.pools.get_mut(&pool.block)?.tracked = true;
+        for alias in self
+            .allocator
+            .pools
+            .values()
+            .filter(|p| p.block == pool.block)
+        {
+            self.host_dirty
+                .insert(alias.offset..alias.offset + alias.size);
+        }
+        Some(())
+    }
+
+    /// Mark a changed host range. Dirty pages are clipped to the pool and coalesced.
+    pub fn notify_host_write(&mut self, key: u64, offset: u64, size: u64) -> Option<()> {
+        let pool = *self.allocator.pools.get(&key)?;
+        if offset.checked_add(size)? > pool.size {
+            return None;
+        }
+        if size == 0 {
+            return Some(());
+        }
+        let start = pool.offset + offset;
+        let end = start + size;
+        if self.pools.get(&pool.block)?.direct {
+            self.wait_range(start..end, true)?;
+            self.mark_written();
+        } else {
+            self.host_dirty.insert(
+                (start & !(PAGE_SIZE - 1)).max(pool.offset)
+                    ..((end + PAGE_SIZE - 1) & !(PAGE_SIZE - 1)).min(pool.offset + pool.size),
+            );
+        }
+        Some(())
+    }
+
+    /// Return coherent backing for host-managed storage without boundary copies.
+    /// Initialize the contents before use. Aliases share this choice.
+    ///
+    /// # Safety
+    /// The pointer is valid until the last alias is released. Host callbacks must
+    /// use this backing. Before each host access call wait_pool; before a host
+    /// write also call notify_host_write. Do not access it during submission.
+    pub unsafe fn map_pool(&mut self, key: u64) -> Option<*mut u8> {
+        let pool = *self.allocator.pools.get(&key)?;
+        self.wait_range(pool.offset..pool.offset + pool.size, true)?;
+        self.pools.get_mut(&pool.block)?.direct = true;
+        self.host_dirty.remove(pool.offset..pool.offset + pool.size);
+        Some(unsafe { (self.mapped as *mut u8).add(pool.offset as usize) })
+    }
+
+    /// Wait for submissions that overlap a host access. Writes also wait for readers.
+    pub fn wait_pool(&self, key: u64, offset: u64, size: usize, write: bool) -> Option<()> {
+        let at = self.pool_offset(key, offset, size)?;
+        self.wait_range(at..at + size as u64, write)
+    }
+
+    fn wait_range(&self, range: Range<u64>, write: bool) -> Option<()> {
+        if range.is_empty() {
+            return Some(());
+        }
+        let mut pending = self.pending.borrow_mut();
+        for access in pending.iter() {
+            if (write || access.write)
+                && range.start < access.range.end
+                && access.range.start < range.end
+            {
+                access.submission.wait()?;
+            }
+        }
+        let mut kept = Vec::with_capacity(pending.len());
+        for access in pending.drain(..) {
+            if !access.submission.ready()? {
+                kept.push(access);
+            }
+        }
+        *pending = kept;
+        Some(())
+    }
+
+    pub(crate) fn device_written(&self, offset: u64, size: u64) {
+        self.mark_written();
+        self.device_dirty.borrow_mut().insert(offset..offset + size);
+    }
+
+    pub(super) fn submitted(&self, offset: u64, size: u64, write: bool, submission: Submission) {
+        if write {
+            self.device_written(offset, size);
+        }
+        let mut pending = self.pending.borrow_mut();
+        pending.retain(|access| access.submission.ready() != Some(true));
+        pending.push(Access {
+            range: offset..offset + size,
+            write,
+            submission,
+        });
+    }
+
+    pub(super) fn submitted_all(&self, write: bool, submission: Submission) {
+        for pool in self.allocator.pools.values() {
+            self.submitted(pool.offset, pool.size, write, submission.clone());
+        }
+    }
+
+    // Sort aliases together and visit each arena byte through only one callback.
+    fn live_ranges(&self) -> Vec<(Range<u64>, u64, u64)> {
+        let mut pools: Vec<_> = self.allocator.pools.values().copied().collect();
+        pools.sort_by_key(|p| (p.offset, std::cmp::Reverse(p.size)));
+        let mut end = 0;
+        pools
+            .into_iter()
+            .filter_map(|p| {
+                let start = p.offset.max(end);
+                end = end.max(p.offset + p.size);
+                (start < end).then(|| (start..end, p.storage + start - p.offset, p.block))
+            })
+            .collect()
     }
 
     /// Return the checked guest-to-device address mapping for the arena.
@@ -240,12 +535,20 @@ impl GlobalMemory {
         });
         let pool = self.allocator.allocate(key, storage, size)?;
         self.mark_written();
+        self.pools.entry(pool.block).or_insert(PoolSync {
+            size: (size + 15) & !15,
+            ..PoolSync::default()
+        });
+        self.host_dirty.insert(pool.offset..pool.offset + pool.size);
         if !aliased {
             let reserved = (size + 15) & !15;
             // SAFETY: this new block is within the buffer. New or recycled bytes
             // and the complete-word padding start zeroed before use.
             unsafe {
-                if self.context.wait_queue().is_none() {
+                if self
+                    .wait_range(pool.offset..pool.offset + reserved, true)
+                    .is_none()
+                {
                     self.allocator.release(key);
                     return None;
                 }
@@ -261,13 +564,25 @@ impl GlobalMemory {
 
     /// Release a pool range; return false if its key is unknown.
     pub fn release_pool(&mut self, key: u64) -> bool {
-        // SAFETY: this backend serializes queue use. Waiting also protects callers
-        // that submitted work directly through Context before finalizing a pool.
-        if self.context.wait_queue().is_none() {
+        let Some(pool) = self.allocator.pools.get(&key).copied() else {
+            return false;
+        };
+        if self
+            .wait_range(pool.block..pool.block + self.pools[&pool.block].size, true)
+            .is_none()
+        {
             return false;
         }
         self.mark_written();
-        self.allocator.release(key)
+        self.allocator.release(key);
+        if !self.allocator.pools.values().any(|p| p.block == pool.block) {
+            let sync = self.pools.remove(&pool.block).expect("live block");
+            self.host_dirty.remove(pool.block..pool.block + sync.size);
+            self.device_dirty
+                .borrow_mut()
+                .remove(pool.block..pool.block + sync.size);
+        }
+        true
     }
 
     fn pool_offset(&self, key: u64, offset: u64, size: usize) -> Option<u64> {
@@ -287,8 +602,8 @@ impl GlobalMemory {
         // SAFETY: the range is inside the mapped buffer, coherent memory needs no
         // flush, and exclusive access prevents simultaneous host or queue writes.
         unsafe {
-            self.context.wait_queue()?;
-            self.mark_written();
+            self.wait_range(offset..offset + bytes.len() as u64, true)?;
+            self.device_written(offset, bytes.len() as u64);
             std::ptr::copy_nonoverlapping(
                 bytes.as_ptr(),
                 (self.mapped as *mut u8).add(offset as usize),
@@ -308,7 +623,7 @@ impl GlobalMemory {
         // SAFETY: waiting completes submitted writes; the range is inside coherent
         // host-visible memory and the output slice is valid for its length.
         unsafe {
-            self.context.wait_queue()?;
+            self.wait_range(offset..offset + bytes.len() as u64, false)?;
             std::ptr::copy_nonoverlapping(
                 (self.mapped as *const u8).add(offset as usize),
                 bytes.as_mut_ptr(),
@@ -318,80 +633,116 @@ impl GlobalMemory {
         Some(())
     }
 
-    /// Copy through the host callbacks in bounded chunks at submission boundaries.
+    /// Upload dirty pages. Legacy hosts are inspected for changes through bounded reads.
+    /// Failed callbacks retain the unfinished ranges for retry.
     pub fn upload(&mut self, mut read: impl FnMut(u64, &mut [u8]) -> bool) -> bool {
-        let pools: Vec<_> = self
-            .allocator
-            .pools
-            .iter()
-            .map(|(&key, &pool)| (key, pool))
-            .collect();
-        if self.context.wait_queue().is_none() {
-            return false;
-        }
-        self.mark_written();
-        let mut bytes = vec![0; 64 * 1024];
-        for (key, pool) in pools {
-            let mut offset = 0;
-            while offset < pool.size {
-                let length = (pool.size - offset).min(bytes.len() as u64) as usize;
-                if !read(pool.storage + offset, &mut bytes[..length]) {
-                    return false;
+        let mut scratch = Vec::new();
+        for (range, storage, block) in self.live_ranges() {
+            let mode = &self.pools[&block];
+            if mode.direct {
+                continue;
+            }
+            if !mode.tracked {
+                scratch.resize(64 * 1024, 0);
+                let mut at = range.start;
+                while at < range.end {
+                    let end = (at + scratch.len() as u64).min(range.end);
+                    let bytes = &mut scratch[..(end - at) as usize];
+                    if !read(storage + at - range.start, bytes) {
+                        return false;
+                    }
+                    self.statistics.inspected += bytes.len() as u64;
+                    if self.wait_range(at..end, true).is_none() {
+                        return false;
+                    }
+                    for (page, source) in bytes.chunks(PAGE_SIZE as usize).enumerate() {
+                        let start = at + (page as u64 * PAGE_SIZE);
+                        let target = unsafe {
+                            std::slice::from_raw_parts_mut(
+                                (self.mapped as *mut u8).add(start as usize),
+                                source.len(),
+                            )
+                        };
+                        if target != source {
+                            target.copy_from_slice(source);
+                            self.statistics.uploaded += source.len() as u64;
+                            self.mark_written();
+                        }
+                    }
+                    self.host_dirty.remove(at..end);
+                    at = end;
                 }
-                let Some(at) = self.pool_offset(key, offset, length) else {
-                    return false;
-                };
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        bytes.as_ptr(),
-                        (self.mapped as *mut u8).add(at as usize),
-                        length,
-                    );
+            } else {
+                for dirty in self.host_dirty.intersections(range.clone()) {
+                    let mut at = dirty.start;
+                    while at < dirty.end {
+                        let end = (at + 64 * 1024).min(dirty.end);
+                        if self.wait_range(at..end, true).is_none() {
+                            return false;
+                        }
+                        // A staging read preserves the arena if the callback fails.
+                        scratch.resize((end - at) as usize, 0);
+                        if !read(storage + at - range.start, &mut scratch) {
+                            return false;
+                        }
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(
+                                scratch.as_ptr(),
+                                (self.mapped as *mut u8).add(at as usize),
+                                scratch.len(),
+                            );
+                        }
+                        self.statistics.uploaded += end - at;
+                        self.host_dirty.remove(at..end);
+                        self.mark_written();
+                        at = end;
+                    }
                 }
-                offset += length as u64;
             }
         }
         true
     }
 
-    /// As with read_pool, shader writes require a host-read barrier in the submission.
+    /// Download declared device writes after only their overlapping completions.
+    /// Direct mappings need completion but no copy. External raw submissions must
+    /// be completed by their caller before using an untracked arena.
     pub fn download(&mut self, mut write: impl FnMut(u64, &[u8]) -> bool) -> bool {
-        let pools: Vec<_> = self
-            .allocator
-            .pools
-            .iter()
-            .map(|(&key, &pool)| (key, pool))
-            .collect();
-        #[cfg(feature = "draw-metrics")]
-        let wait_span = crate::draw_metrics::PipelineSpan::new(15);
-        if self.context.wait_queue().is_none() {
-            return false;
-        }
-        #[cfg(feature = "draw-metrics")]
-        drop(wait_span);
-        let mut bytes = vec![0; 64 * 1024];
-        for (key, pool) in pools {
-            let mut offset = 0;
-            while offset < pool.size {
-                let length = (pool.size - offset).min(bytes.len() as u64) as usize;
-                let Some(at) = self.pool_offset(key, offset, length) else {
-                    return false;
-                };
+        for (range, storage, block) in self.live_ranges() {
+            let ranges = if self.submission_tracking {
+                self.device_dirty.borrow().intersections(range.clone())
+            } else {
+                vec![range.clone()]
+            };
+            for dirty in ranges {
                 #[cfg(feature = "draw-metrics")]
-                let read_span = crate::draw_metrics::PipelineSpan::new(16);
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        (self.mapped as *const u8).add(at as usize),
-                        bytes.as_mut_ptr(),
-                        length,
-                    );
-                }
-                #[cfg(feature = "draw-metrics")]
-                drop(read_span);
-                if !write(pool.storage + offset, &bytes[..length]) {
+                let wait_span = crate::draw_metrics::PipelineSpan::new(15);
+                if self.wait_range(dirty.clone(), false).is_none() {
                     return false;
                 }
-                offset += length as u64;
+                #[cfg(feature = "draw-metrics")]
+                drop(wait_span);
+                if !self.pools[&block].direct {
+                    let mut at = dirty.start;
+                    while at < dirty.end {
+                        let end = (at + 64 * 1024).min(dirty.end);
+                        #[cfg(feature = "draw-metrics")]
+                        let _span = crate::draw_metrics::PipelineSpan::new(16);
+                        let bytes = unsafe {
+                            std::slice::from_raw_parts(
+                                (self.mapped as *const u8).add(at as usize),
+                                (end - at) as usize,
+                            )
+                        };
+                        if !write(storage + at - range.start, bytes) {
+                            return false;
+                        }
+                        self.statistics.downloaded += end - at;
+                        self.device_dirty.borrow_mut().remove(at..end);
+                        at = end;
+                    }
+                } else {
+                    self.device_dirty.borrow_mut().remove(dirty);
+                }
             }
         }
         true
@@ -429,10 +780,14 @@ impl Drop for GlobalMemory {
         // SAFETY: the owning device outlives this object and all submitted users
         // finish before either the buffer or its memory is freed.
         unsafe {
-            let _ = self.context.wait_queue();
+            let _ = self.wait_range(0..u64::MAX, true);
             self.device.unmap_memory(self.memory);
             self.device.destroy_buffer(self.buffer, None);
             self.device.free_memory(self.memory, None);
         }
     }
 }
+
+#[cfg(test)]
+#[path = "memory_tests.rs"]
+mod tests;

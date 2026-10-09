@@ -769,6 +769,8 @@ pub(crate) struct GraphicsPipeline {
     /// Whether banks use storage buffers.
     pub storage: bool,
     pub batch_safe: bool,
+    global_writes: bool,
+    writes_banks: bool,
     modules: Vec<Arc<ShaderModule>>,
     push_set: Option<u32>,
     resource_owner: Option<Arc<GraphicsPipeline>>,
@@ -928,6 +930,11 @@ impl GraphicsPipeline {
             modules: Vec::new(),
             push_set: None,
             resource_owner: None,
+            writes_banks: key.storage
+                && (super::memory::storage_writes(&key.vertex)
+                    || super::memory::storage_writes(&key.fragment)),
+            global_writes: super::memory::physical_writes(&key.vertex)
+                || super::memory::physical_writes(&key.fragment),
             batch_safe: fixed
                 || [&key.vertex, &key.fragment].iter().all(|words| {
                     instructions(words).is_ok_and(|ops| {
@@ -1246,6 +1253,11 @@ impl GraphicsPipeline {
             banks,
             textures,
             storage: key.storage,
+            writes_banks: key.storage
+                && (super::memory::storage_writes(&key.vertex)
+                    || super::memory::storage_writes(&key.fragment)),
+            global_writes: super::memory::physical_writes(&key.vertex)
+                || super::memory::physical_writes(&key.fragment),
             batch_safe: [&key.vertex, &key.fragment].iter().all(|words| {
                 instructions(words).is_ok_and(|ops| {
                     !ops.iter()
@@ -1397,6 +1409,18 @@ impl GraphicsPipeline {
         cache.entries.push(result.clone());
         cache.ids.insert(key, id);
         Ok(result)
+    }
+
+    pub(crate) fn write_buffers<'a>(&self, draw: &'a Draw) -> &'a [vk::DescriptorBufferInfo] {
+        if self.writes_banks {
+            &draw.descriptors.buffers
+        } else {
+            &[]
+        }
+    }
+
+    pub(crate) fn global_writes(&self) -> bool {
+        self.global_writes
     }
 
     /// Caller owns the active compatible render pass, live arena slice and completion.

@@ -213,6 +213,8 @@ pub struct InstanceState {
     #[cfg(feature = "vulkan")]
     pub(crate) gpu: Mutex<Option<Backend>>,
     #[cfg(feature = "vulkan")]
+    host_writes: Mutex<crate::dirty_ranges::Ranges>,
+    #[cfg(feature = "vulkan")]
     recording_strides: arc_swap::ArcSwap<[Option<u64>; 2]>,
 }
 
@@ -263,6 +265,8 @@ impl InstanceState {
             shader_header_without_code: AtomicU64::new(0),
             #[cfg(feature = "vulkan")]
             gpu: Mutex::new(host.and_then(|h| Backend::with_host(&h))),
+            #[cfg(feature = "vulkan")]
+            host_writes: Mutex::default(),
             #[cfg(feature = "vulkan")]
             recording_strides: arc_swap::ArcSwap::from_pointee([None, None]),
         }
@@ -849,8 +853,90 @@ impl InstanceState {
         unsafe { read(user, address, out.as_mut_ptr(), out.len() as u64) == 0 }
     }
 
+    /// Enable host write notifications for a pool and all its aliases.
+    /// Every subsequent host storage write must be reported before submission.
+    #[cfg(feature = "vulkan")]
+    pub fn track_pool_writes(&self, pool: u64) -> bool {
+        self.gpu
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_mut()
+            .and_then(|b| b.global_memory.as_mut())
+            .and_then(|m| m.track_host_writes(pool))
+            .is_some()
+    }
+
+    /// Report a completed host storage write by byte address and length.
+    /// Do not race notifications or storage writes against submission.
+    #[cfg(feature = "vulkan")]
+    pub fn notify_memory_write(&self, address: u64, size: u64) -> bool {
+        let Some(end) = address.checked_add(size) else {
+            return false;
+        };
+        self.host_writes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(address..end);
+        true
+    }
+
+    #[cfg(feature = "vulkan")]
+    pub(crate) fn take_host_writes(&self) -> crate::dirty_ranges::Ranges {
+        std::mem::take(&mut *self.host_writes.lock().unwrap_or_else(|p| p.into_inner()))
+    }
+
+    /// Adopt coherent arena storage for a registered pool, preserving its contents.
+    ///
+    /// # Safety
+    /// Follow `GlobalMemory::map_pool` for pointer lifetime, callback routing and
+    /// access synchronization. Serialize mapped accesses with submissions.
+    #[cfg(feature = "vulkan")]
+    pub unsafe fn map_pool(&self, pool: u64) -> Option<*mut u8> {
+        let mut gpu = self.gpu.lock().unwrap_or_else(|p| p.into_inner());
+        let memory = gpu.as_mut()?.global_memory.as_mut()?;
+        for range in self.take_host_writes().intersections(0..u64::MAX) {
+            memory.notify_storage_write(range.start, range.end - range.start);
+        }
+        if !memory.upload(|address, out| self.read_memory(address, out)) {
+            return None;
+        }
+        unsafe { memory.map_pool(pool) }
+    }
+
+    /// Wait for overlapping device access before using mapped storage.
+    #[cfg(feature = "vulkan")]
+    pub fn wait_pool(&self, pool: u64, offset: u64, size: usize, write: bool) -> bool {
+        self.gpu
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .and_then(|b| b.global_memory.as_ref())
+            .and_then(|m| m.wait_pool(pool, offset, size, write))
+            .is_some()
+    }
+
+    /// Cumulative payload copies and legacy inspection bytes for this instance.
+    #[cfg(feature = "vulkan")]
+    pub fn transfer_statistics(&self) -> Option<crate::gpu::TransferStatistics> {
+        self.gpu
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .and_then(|b| b.global_memory.as_ref())
+            .map(|m| m.transfer_statistics())
+    }
+
     /// Write program memory through the host.
     pub fn write_memory(&self, address: u64, data: &[u8]) -> bool {
+        if !self.write_memory_untracked(address, data) {
+            return false;
+        }
+        #[cfg(feature = "vulkan")]
+        self.notify_memory_write(address, data.len() as u64);
+        true
+    }
+
+    pub(crate) fn write_memory_untracked(&self, address: u64, data: &[u8]) -> bool {
         let Some(write) = self.host.as_ref().and_then(|host| host.write_memory) else {
             return false;
         };

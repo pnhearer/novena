@@ -29,7 +29,7 @@ pub mod uniforms;
 use images::{Image, Images};
 use present::Window;
 pub mod pipelines;
-pub use memory::GlobalMemory;
+pub use memory::{GlobalMemory, TransferStatistics};
 
 /// Optional device capabilities available to translated global-memory modules.
 #[derive(Clone, Copy, Debug, Default)]
@@ -228,9 +228,9 @@ impl Backend {
                 crate::global_memory::ARENA_SIZE,
             )?);
         }
-        self.global_memory
-            .as_mut()?
-            .allocate_pool(key, storage, size)
+        let memory = self.global_memory.as_mut()?;
+        memory.track_submissions();
+        memory.allocate_pool(key, storage, size)
     }
 
     /// Release a pool and its dependent textures; return whether it existed.
@@ -424,9 +424,7 @@ impl Backend {
             }
             {
                 let memory = self.global_memory.as_ref()?;
-                if !load {
-                    memory.mark_written();
-                }
+                memory.submitted(offset, bytes as u64, !load, self.images.submission()?);
                 if let Some(revision) = memory.revision() {
                     let packing = self.tiled.get(&key);
                     let stored = self
@@ -588,8 +586,11 @@ impl Backend {
             for &(key, ..) in resources {
                 self.coherent_images.remove(&key);
             }
-        } else {
-            memory.mark_written();
+        }
+        for &(_, pool, offset, packing) in resources {
+            let size = packing.tiled_size();
+            let (_, at) = memory.image_region(pool, offset, size)?;
+            memory.submitted(at, size as u64, !load, self.images.submission()?);
         }
         Some(())
     }
@@ -618,9 +619,13 @@ impl Backend {
         self.images.tiled_transfer(key, address, packing, load)?;
         if load {
             self.coherent_images.remove(&key);
-        } else {
-            self.global_memory.as_ref()?.mark_written();
         }
+        self.global_memory.as_ref()?.submitted(
+            at,
+            packing.tiled_size() as u64,
+            !load,
+            self.images.submission()?,
+        );
         Some(())
     }
 
@@ -659,8 +664,11 @@ impl Backend {
             for &(key, ..) in resources {
                 self.coherent_images.remove(&key);
             }
-        } else {
-            memory.mark_written();
+        }
+        for &(_, pool, offset, packing) in resources {
+            let size = packing.linear_size();
+            let (_, at) = memory.image_region(pool, offset, size)?;
+            memory.submitted(at, size as u64, !load, self.images.submission()?);
         }
         Some(())
     }
@@ -748,11 +756,21 @@ impl Backend {
             if let Some(depth) = depth {
                 self.sync_texture(depth, true)?;
             }
-            self.global_memory.as_ref()?.mark_written();
             let query = self.execution.occlusion_query();
             self.images
                 .draw(&targets, depth, self.global_memory.as_ref()?, &draws, query)?;
-            self.execution.collect_occlusion()?;
+            let memory = self.global_memory.as_ref()?;
+            memory.submitted_all(false, self.images.submission()?);
+            for draw in &draws {
+                for info in draw.pipeline.write_buffers(&draw.state) {
+                    memory.submitted(info.offset, info.range, true, self.images.submission()?);
+                }
+            }
+            if draws.iter().any(|d| d.pipeline.global_writes()) {
+                memory.submitted_all(true, self.images.submission()?);
+            }
+            self.execution
+                .collect_occlusion(self.images.submission()?)?;
             for &texture in &targets {
                 self.sync_texture(texture, false)?;
             }
@@ -798,6 +816,12 @@ impl Backend {
                 .as_ref()?
                 .image_region(pool, offset, size)?;
             self.images.arena_transfer(key, buffer, offset, true)?;
+            self.global_memory.as_ref()?.submitted(
+                offset,
+                size as u64,
+                false,
+                self.images.submission()?,
+            );
             self.sync_texture(key, false)
         })()
         .is_some()
@@ -976,6 +1000,12 @@ impl Backend {
                         .image_region(pool, offset, size)?;
                     self.readbacks
                         .submit_buffer(slot, buffer, offset, width, height)?;
+                    self.global_memory.as_ref()?.submitted(
+                        offset,
+                        size as u64,
+                        false,
+                        self.readbacks.submission(slot)?,
+                    );
                     if !current {
                         self.sync_texture(texture, true)?;
                     }

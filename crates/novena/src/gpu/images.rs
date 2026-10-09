@@ -471,6 +471,10 @@ impl Images {
     }
 
     /// Wait for retained command submissions to complete; return None on failure.
+    pub(super) fn submission(&self) -> Option<super::commands::Submission> {
+        self.commands.submission()
+    }
+
     pub fn wait(&self) -> Option<()> {
         self.commands.wait()
     }

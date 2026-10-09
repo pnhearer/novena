@@ -25,6 +25,48 @@ pub(super) struct TransferKey {
     pub packing: crate::tiling::Layout,
 }
 
+#[derive(Clone)]
+pub(super) struct Submission {
+    context: Arc<Context>,
+    timeline: Arc<super::command_workers::Timeline>,
+    value: u64,
+    receipt: (super::command_workers::Completion, u64),
+}
+
+impl Submission {
+    pub fn ready(&self) -> Option<bool> {
+        self.receipt.0.ready()?;
+        let complete = unsafe {
+            self.context
+                .device
+                .get_semaphore_counter_value(self.timeline.semaphore())
+                .ok()?
+                >= self.value
+        };
+        if complete {
+            self.context.command_workers.retire(self.receipt.1);
+        }
+        Some(complete)
+    }
+
+    pub fn wait(&self) -> Option<()> {
+        self.context.command_workers.flush_direct();
+        let semaphores = [self.timeline.semaphore()];
+        let values = [self.value];
+        let info = vk::SemaphoreWaitInfo::default()
+            .semaphores(&semaphores)
+            .values(&values);
+        while !self.ready()? {
+            self.context.command_workers.healthy()?;
+            match unsafe { self.context.device.wait_semaphores(&info, 100_000_000) } {
+                Ok(()) | Err(vk::Result::TIMEOUT) => {}
+                Err(_) => return None,
+            }
+        }
+        Some(())
+    }
+}
+
 struct Frame {
     pool: vk::CommandPool,
     command: vk::CommandBuffer,
@@ -223,6 +265,19 @@ impl Commands {
     /// Wait for retained command submissions to complete; return None on failure.
     pub fn wait(&self) -> Option<()> {
         self.wait_value(self.submitted)
+    }
+
+    pub fn submission(&self) -> Option<Submission> {
+        let frame = self
+            .frames
+            .iter()
+            .find(|f| f.completion == self.submitted)?;
+        Some(Submission {
+            context: self.context.clone(),
+            timeline: self.timeline.as_ref()?.clone(),
+            value: self.submitted,
+            receipt: frame.receipt.as_ref()?.clone(),
+        })
     }
 
     pub fn completion(&self) -> u64 {

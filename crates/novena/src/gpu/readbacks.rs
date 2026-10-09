@@ -137,6 +137,10 @@ impl Readbacks {
         Some(())
     }
 
+    pub(super) fn submission(&self, index: usize) -> Option<super::commands::Submission> {
+        self.slots.get(index)?.as_ref()?.commands.submission()
+    }
+
     pub fn read(&self, index: usize, wait: bool) -> Option<Option<(u32, u32, Vec<u8>)>> {
         let slot = self.slots.get(index)?.as_ref()?;
         let value = slot.commands.completion();

@@ -69,7 +69,7 @@ pub struct PoolAllocation {
     pub size: u64,
     /// Base address of host-managed program storage.
     pub storage: u64,
-    block: u64,
+    pub(crate) block: u64,
 }
 
 /// First-fit ranges with shared backing for contained CPU storage aliases.

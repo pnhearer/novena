@@ -100,6 +100,20 @@ novena_instance *novena_instance_create(const novena_host *host);
  * may be made afterwards. */
 void novena_instance_destroy(novena_instance *instance);
 
+/* Enable notifications for a registered pool and its aliases. Report every
+ * later host storage write before submission. Legacy hosts remain supported. */
+novena_status novena_instance_track_pool_writes(const novena_instance *instance, uint64_t pool);
+novena_status novena_instance_notify_memory_write(const novena_instance *instance,
+                                                  uint64_t address, uint64_t size);
+
+/* Adopt coherent arena storage, preserving contents. The pointer lives until
+ * the last alias is finalized. Host callbacks must route storage through it.
+ * Serialize mapped access with submissions, wait before each access, and report
+ * writes before the next submission. Mapping returns null on failure. */
+uint8_t *novena_instance_map_pool(const novena_instance *instance, uint64_t pool);
+novena_status novena_instance_wait_pool(const novena_instance *instance, uint64_t pool,
+                                       uint64_t offset, uint64_t size, uint32_t write);
+
 /* Host-selected policy. Capacity is 1..16, default 2. Mode is 0 for FIFO,
  * 1 for mailbox. Changing policy drains pending callbacks first.
  * Callback bytes are borrowed and valid until the callback returns.
