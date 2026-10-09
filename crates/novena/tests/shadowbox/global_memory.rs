@@ -326,8 +326,7 @@ fn synthetic_translations_match_novena_push_constants() {
 }
 
 fn validate(words: &[u32]) {
-    let path = std::env::temp_dir()
-        .join(format!("novena-shadowbox-{}.spv", std::process::id()));
+    let path = std::env::temp_dir().join(format!("novena-shadowbox-{}.spv", std::process::id()));
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(
         &path,

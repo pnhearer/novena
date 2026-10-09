@@ -121,3 +121,56 @@ measured children and 40 cache-seeding children. The stored observation parser
 still reports the three evidence files and their 57 selected fields. The
 drawing verification script also passed its four texture and blend checks with
 the configured build and temporary directories.
+
+## Repeat results
+
+A second release run on 2026-10-09 used the same fresh-process timing method.
+It measured 40 cold and 40 warm children after the test and lint jobs finished.
+All 80 measured children and 40 cache-seeding children passed their cache,
+pipeline, diagnostic and exact-pixel assertions. The parent and generated
+fixture both used release mode. Raw samples are in
+[0032-startup-repeat-samples.csv](0032-startup-repeat-samples.csv).
+
+| Startup through completed first draw | Cold | Warm |
+| --- | ---: | ---: |
+| Samples | 40 | 40 |
+| Median | 38.606 ms | 32.433 ms |
+| First quartile | 37.892 ms | 31.515 ms |
+| Third quartile | 41.110 ms | 33.074 ms |
+| Interquartile width | 3.218 ms | 1.559 ms |
+| Minimum | 30.220 ms | 26.855 ms |
+| Maximum | 54.228 ms | 46.598 ms |
+
+Warm startup reduced the median by 6.174 ms, or 16.0%.
+It was faster in 36 of 40 paired trials.
+The median paired reduction was 6.387 ms.
+Resampling whole trial pairs 20,000 times with seed 62026 gives a percentile
+95% interval of 5.785 to 7.006 ms for the difference between group medians.
+The interval for the median paired reduction is 6.119 to 7.425 ms.
+Both intervals are above zero. This repeat supports faster warm startup for
+this synthetic workload and host. It does not establish a speedup for every
+draw or workload. The full ranges overlap, and filesystem and hardware caches
+were not flushed.
+
+Cold workers spent a median 0.510 ms translating. Warm workers did no
+translation. The total startup reduction also includes pipeline scheduling
+and cache reuse.
+
+With the translator crate selected by `NOVENA_SHADOWBOX_PATH`, repeat the
+measurement with:
+
+```sh
+cargo test --workspace --release --all-features --test shadowbox_drawing cold_and_warm_first_draw -- --exact --include-ignored --nocapture --test-threads=1
+```
+
+The default workspace suite and the all-feature suite with ignored tests
+included passed again with exit code 0. The full suite left no executable
+tests ignored and emitted no skip markers or validation errors. Optional
+unsupported compressed formats were reported explicitly. Workspace formatting,
+fixture formatting and warnings-denied clippy passed in both workspace feature
+configurations. The stored observation parser still reports three evidence
+files and 57 selected fields.
+
+The final publication check also replaced a cube-face shader conditional with
+equivalent comparisons. GPU sampling checks cover all six faces and preserve
+the exact pixels. This changes no guest interface behaviour.
