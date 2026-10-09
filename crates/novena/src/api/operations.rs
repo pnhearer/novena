@@ -314,12 +314,10 @@ mod execution {
                             t => t,
                         };
                         match t {
-                            ShaderTranslation::Spirv(w) => stages.push(w),
+                            ShaderTranslation::Spirv(w) => stages.push((w, false)),
                             ShaderTranslation::Cached(r) => match r.wait() {
-                                crate::startup_cache::TranslationStatus::Ready(s)
-                                    if !s.requires_subgroup_size_32 =>
-                                {
-                                    stages.push(s.words.clone())
+                                crate::startup_cache::TranslationStatus::Ready(s) => {
+                                    stages.push((s.words.clone(), s.requires_subgroup_size_32))
                                 }
                                 _ => return Err(Status::Unimplemented),
                             },
@@ -328,12 +326,12 @@ mod execution {
                     }
                     let compute: Vec<_> = stages
                         .iter()
-                        .filter(|s| execution_model(s).ok() == Some(5))
+                        .filter(|s| execution_model(&s.0).ok() == Some(5))
                         .collect();
                     if compute.len() != 1 {
                         return Err(Status::Unimplemented);
                     }
-                    let shader = compute[0];
+                    let (shader, requires_subgroup_size_32) = compute[0];
                     let reflected = crate::gpu::pipelines::compute_bindings(shader)
                         .map_err(|_| Status::Unimplemented)?;
                     let mut resources = Vec::new();
@@ -375,6 +373,7 @@ mod execution {
                         .dispatch(
                             backend.global_memory.as_ref().ok_or(Status::BadArgument)?,
                             shader,
+                            *requires_subgroup_size_32,
                             &resources,
                             groups,
                             indirect,

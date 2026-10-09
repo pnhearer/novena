@@ -174,6 +174,42 @@ impl DiskCache {
         self.write(&Self::translation_name(program), b"NVTRANS\0", &bytes)
     }
 
+    pub(super) fn load_shader(
+        &self,
+        program: &[u8],
+    ) -> io::Result<Option<crate::startup_cache::TranslatedShader>> {
+        let Some(record) = self.load_translation(program)? else {
+            return Ok(None);
+        };
+        let Some((&required, words)) = record.split_first() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "missing subgroup metadata",
+            ));
+        };
+        if required > 1 || words.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid subgroup metadata",
+            ));
+        }
+        Ok(Some(crate::startup_cache::TranslatedShader {
+            key: String::new(),
+            words: words.to_vec(),
+            requires_subgroup_size_32: required == 1,
+        }))
+    }
+
+    pub(super) fn save_shader(
+        &self,
+        program: &[u8],
+        shader: &crate::startup_cache::TranslatedShader,
+    ) -> io::Result<()> {
+        let mut record = vec![u32::from(shader.requires_subgroup_size_32)];
+        record.extend_from_slice(&shader.words);
+        self.save_translation(program, &record)
+    }
+
     fn valid_driver_header(&self, bytes: &[u8]) -> bool {
         bytes.len() >= 32
             && bytes[..4] == 32_u32.to_le_bytes()
@@ -251,6 +287,27 @@ mod tests {
         bytes.extend_from_slice(&[7; 16]);
         bytes.extend_from_slice(b"synthetic driver payload");
         bytes
+    }
+
+    #[test]
+    fn shader_records_preserve_and_validate_subgroup_requirements() {
+        let root = root("subgroup-metadata");
+        let disk = cache(&root, "v1", "", 1, 2);
+        for required in [false, true] {
+            let shader = crate::startup_cache::TranslatedShader {
+                key: String::new(),
+                words: vec![1, 2, 3],
+                requires_subgroup_size_32: required,
+            };
+            disk.save_shader(b"program", &shader).unwrap();
+            let reopened = cache(&root, "v1", "", 1, 2);
+            assert_eq!(reopened.load_shader(b"program").unwrap(), Some(shader));
+        }
+        disk.save_translation(b"program", &[2, 1, 2, 3]).unwrap();
+        assert!(disk.load_shader(b"program").is_err());
+        disk.save_translation(b"program", &[1]).unwrap();
+        assert!(disk.load_shader(b"program").is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

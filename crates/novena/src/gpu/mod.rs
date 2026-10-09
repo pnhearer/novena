@@ -23,6 +23,7 @@ mod pipeline_workers;
 mod present;
 mod readbacks;
 mod recording_device;
+mod subgroups;
 pub mod texture_transfer;
 pub mod textures;
 pub mod uniforms;
@@ -30,10 +31,13 @@ use images::{Image, Images};
 use present::Window;
 pub mod pipelines;
 pub use memory::GlobalMemory;
+pub use subgroups::SubgroupFeatures;
 
 /// Optional device capabilities available to translated global-memory modules.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ShaderFeatures {
+    /// Enabled subgroup controls and stage limits. Evidence: provenance 0041.
+    pub subgroups: SubgroupFeatures,
     /// Whether storage-buffer 8-bit access is enabled.
     pub storage_buffer8_bit_access: bool,
     /// Whether storage-buffer 16-bit access is enabled.
@@ -1087,11 +1091,18 @@ impl Context {
         // SAFETY: loading the system Vulkan loader is the boundary of this
         // optional backend; ash validates the returned function table.
         let entry = unsafe { Entry::load().ok()? };
+        let api_version = unsafe { entry.try_enumerate_instance_version() }
+            .ok()?
+            .unwrap_or(vk::API_VERSION_1_0)
+            .min(vk::API_VERSION_1_3);
+        if api_version < vk::API_VERSION_1_2 {
+            return None;
+        }
         let app = CString::new("novena").ok()?;
         let info = vk::ApplicationInfo::default()
             .application_name(&app)
             .engine_name(&app)
-            .api_version(vk::API_VERSION_1_2);
+            .api_version(api_version);
         let mut extensions = extensions.to_vec();
         if swapchain {
             let supported = unsafe { entry.enumerate_instance_extension_properties(None).ok()? };
@@ -1115,7 +1126,7 @@ impl Context {
         // SAFETY: `create` points only to local, immutable Vulkan structs.
         let instance = unsafe { entry.create_instance(&create, None).ok()? };
         // SAFETY: the instance is live and owns this enumeration.
-        let result = Self::create_device(&instance, swapchain);
+        let result = Self::create_device(&instance, swapchain, api_version);
         let Some((pick, device, family, shader_features, libraries, fast_linking)) = result else {
             // SAFETY: no device was created and the instance is owned here.
             unsafe { instance.destroy_instance(None) };
@@ -1189,6 +1200,7 @@ impl Context {
     fn create_device(
         instance: &Instance,
         swapchain: bool,
+        api_version: u32,
     ) -> Option<(vk::PhysicalDevice, Device, u32, ShaderFeatures, bool, bool)> {
         // SAFETY: instance is live for all enumeration and feature queries below.
         let mut devices = unsafe { instance.enumerate_physical_devices().ok()? };
@@ -1235,6 +1247,29 @@ impl Context {
                     (unsafe { std::ffi::CStr::from_ptr(e.extension_name.as_ptr()) }) == name
                 })
             };
+            let core_subgroups = api_version >= vk::API_VERSION_1_3
+                && unsafe { instance.get_physical_device_properties(pick).api_version }
+                    >= vk::API_VERSION_1_3;
+            let subgroup_extension = supported.iter().find(|e| unsafe { std::ffi::CStr::from_ptr(e.extension_name.as_ptr()) } == ash::ext::subgroup_size_control::NAME);
+            let subgroup_controls = core_subgroups || subgroup_extension.is_some();
+            let legacy_subgroups =
+                !core_subgroups && subgroup_extension.is_some_and(|e| e.spec_version == 1);
+            let mut subgroup_features = vk::PhysicalDeviceSubgroupSizeControlFeatures::default();
+            let mut subgroup_properties =
+                vk::PhysicalDeviceSubgroupSizeControlProperties::default();
+            if subgroup_controls {
+                let mut properties =
+                    vk::PhysicalDeviceProperties2::default().push_next(&mut subgroup_properties);
+                unsafe { instance.get_physical_device_properties2(pick, &mut properties) };
+                if legacy_subgroups {
+                    subgroup_features.subgroup_size_control = vk::TRUE;
+                    subgroup_features.compute_full_subgroups = vk::TRUE;
+                } else {
+                    let mut query =
+                        vk::PhysicalDeviceFeatures2::default().push_next(&mut subgroup_features);
+                    unsafe { instance.get_physical_device_features2(pick, &mut query) };
+                }
+            }
             let available = has(ash::ext::graphics_pipeline_library::NAME)
                 && has(ash::khr::pipeline_library::NAME)
                 && std::env::var_os("NOVENA_DISABLE_PIPELINE_LIBRARIES").is_none();
@@ -1276,6 +1311,10 @@ impl Context {
                 continue;
             }
             let shader_features = ShaderFeatures {
+                subgroups: subgroups::SubgroupFeatures::new(
+                    &subgroup_features,
+                    &subgroup_properties,
+                ),
                 storage_buffer8_bit_access: v12.storage_buffer8_bit_access != vk::FALSE,
                 storage_buffer16_bit_access: v11.storage_buffer16_bit_access != vk::FALSE,
                 shader_int8: v12.shader_int8 != vk::FALSE,
@@ -1311,6 +1350,9 @@ impl Context {
                 })
                 .collect();
             let mut extensions = Vec::new();
+            if subgroup_controls && !core_subgroups {
+                extensions.push(ash::ext::subgroup_size_control::NAME.as_ptr());
+            }
             if swapchain {
                 extensions.push(ash::khr::swapchain::NAME.as_ptr());
                 extensions.push(ash::ext::swapchain_maintenance1::NAME.as_ptr());
@@ -1336,6 +1378,9 @@ impl Context {
                     .swapchain_maintenance1(true);
             if swapchain {
                 device_info = device_info.push_next(&mut enabled_maintenance);
+            }
+            if subgroup_controls && !legacy_subgroups {
+                device_info = device_info.push_next(&mut subgroup_features);
             }
             if libraries {
                 device_info = device_info.push_next(&mut enabled_library);
@@ -1433,6 +1478,7 @@ mod tests {
     #[test]
     fn rejects_unavailable_narrow_capabilities_before_module_creation() {
         let supported = ShaderFeatures {
+            subgroups: Default::default(),
             storage_buffer8_bit_access: true,
             storage_buffer16_bit_access: true,
             shader_int8: true,
