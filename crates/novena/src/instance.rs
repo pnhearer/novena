@@ -27,6 +27,34 @@ pub(crate) struct PendingShader {
 
 pub trait ShaderTranslator: Send + Sync {
     fn translate(&self, stage: ShaderStage, code: &[u8]) -> Result<Vec<u32>, String>;
+
+    /// Return the exact runtime identity from the translator's public cache API.
+    /// None means required translation state is absent. Provenance: 0031.
+    fn translation_cache_key(
+        &self,
+        _stage: ShaderStage,
+        _code: &[u8],
+        _context: &crate::startup_cache::TranslationContext,
+    ) -> Result<Option<String>, String> {
+        Err("translator cache identity is unavailable".into())
+    }
+
+    /// Adapters with state or subgroup requirements must override this method.
+    fn translate_for_context(
+        &self,
+        stage: ShaderStage,
+        code: &[u8],
+        context: &crate::startup_cache::TranslationContext,
+    ) -> Result<crate::startup_cache::TranslatedShader, String> {
+        if *context != crate::startup_cache::TranslationContext::default() {
+            return Err("translator context is unsupported".into());
+        }
+        Ok(crate::startup_cache::TranslatedShader {
+            key: String::new(),
+            words: self.translate(stage, code)?,
+            requires_subgroup_size_32: false,
+        })
+    }
 }
 
 /// What the host provides. The program's memory is the host's to manage, so
@@ -149,6 +177,7 @@ pub struct Instance {
     /// Names the program asked for that are not in the table, with how often.
     unknown_requests: Mutex<BTreeMap<String, u64>>,
     shader_translator: Mutex<Option<Arc<dyn ShaderTranslator>>>,
+    pub(crate) startup_cache: Mutex<Option<crate::startup_cache::StartupCache>>,
     shader_translation_enabled: AtomicBool,
     shader_dump_directory: Mutex<Option<PathBuf>>,
     shader_dump_sequence: AtomicU64,
@@ -197,6 +226,7 @@ impl Instance {
             shapes: (0..count).map(|_| Mutex::default()).collect(),
             unknown_requests: Mutex::new(BTreeMap::new()),
             shader_translator: Mutex::new(None),
+            startup_cache: Mutex::new(None),
             shader_translation_enabled: AtomicBool::new(false),
             shader_dump_directory: Mutex::new(None),
             shader_dump_sequence: AtomicU64::new(0),
@@ -211,6 +241,140 @@ impl Instance {
             #[cfg(feature = "vulkan")]
             gpu: Mutex::new(host.and_then(|h| Backend::with_host(&h))),
         }
+    }
+
+    /// Load translated modules before registration and start bounded workers.
+    /// Cache read errors are diagnostic misses. Worker configuration errors fail.
+    pub fn with_startup_cache(
+        config: crate::startup_cache::StartupCacheConfig,
+        translator: Arc<dyn ShaderTranslator>,
+    ) -> Result<Self, String> {
+        let mut instance = Self::new();
+        instance.configure_startup_cache(config, translator)?;
+        Ok(instance)
+    }
+
+    /// Construct a hosted instance and load its startup caches.
+    ///
+    /// # Safety
+    /// The same callback and lifetime contract as `with_host` applies.
+    pub unsafe fn with_host_startup_cache(
+        host: Host,
+        config: crate::startup_cache::StartupCacheConfig,
+        translator: Arc<dyn ShaderTranslator>,
+    ) -> Result<Self, String> {
+        let mut instance = Self::build(Some(host));
+        instance.configure_startup_cache(config, translator)?;
+        Ok(instance)
+    }
+
+    /// Configure outside calls or submission. Exclusive access prevents replacing
+    /// the translator underneath current owned requests. Existing objects must
+    /// be registered again if translation inputs change.
+    pub fn configure_startup_cache(
+        &mut self,
+        config: crate::startup_cache::StartupCacheConfig,
+        translator: Arc<dyn ShaderTranslator>,
+    ) -> Result<(), String> {
+        #[cfg(feature = "vulkan")]
+        let directory = config.directory.clone();
+        #[cfg(feature = "vulkan")]
+        let workers = config.workers;
+        #[cfg(feature = "vulkan")]
+        let capacity = config.queue_capacity;
+        #[cfg(feature = "vulkan")]
+        let identity = crate::gpu::pipelines::TranslationIdentity {
+            version: "startup graphics interface 1".into(),
+            configuration: format!("{:?}", config.context),
+        };
+        let cache = crate::startup_cache::StartupCache::open(config, translator.clone())?;
+        #[cfg(feature = "vulkan")]
+        let mut cache = cache;
+        #[cfg(feature = "vulkan")]
+        if let Some(backend) = self.gpu.get_mut().unwrap().as_mut() {
+            let mut graphics = crate::gpu::graphics::GraphicsPipelines::persistent(
+                backend.context(),
+                &directory,
+                &identity,
+                workers,
+                capacity,
+            )?;
+            cache.schedule(&mut graphics);
+            backend.graphics = graphics;
+        }
+        *self.startup_cache.get_mut().unwrap() = Some(cache);
+        *self.shader_translator.get_mut().unwrap() = Some(translator);
+        self.shader_translation_enabled
+            .store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Select inputs for subsequent registrations. Existing requests keep their
+    /// original context; register a program again to translate a different variant.
+    pub fn set_shader_translation_context(
+        &self,
+        context: crate::startup_cache::TranslationContext,
+    ) -> bool {
+        let mut cache = self.startup_cache.lock().unwrap();
+        let Some(cache) = cache.as_mut() else {
+            return false;
+        };
+        cache.set_context(context);
+        true
+    }
+
+    pub fn startup_cache_stats(&self) -> Option<crate::startup_cache::StartupCacheStats> {
+        self.startup_cache
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.stats())
+    }
+
+    pub fn take_startup_cache_diagnostics(&self) -> Vec<String> {
+        self.startup_cache
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.diagnostics())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn request_cached_translation(
+        &self,
+        code: &[u8],
+    ) -> Option<crate::api::ShaderTranslation> {
+        self.cached_translation(code, None, true)
+    }
+
+    #[cfg(feature = "vulkan")]
+    pub(crate) fn retry_cached_translation(
+        &self,
+        code: &[u8],
+        context: &crate::startup_cache::TranslationContext,
+    ) -> Option<crate::api::ShaderTranslation> {
+        self.cached_translation(code, Some(context), false)
+    }
+
+    fn cached_translation(
+        &self,
+        code: &[u8],
+        context: Option<&crate::startup_cache::TranslationContext>,
+        count_lookup: bool,
+    ) -> Option<crate::api::ShaderTranslation> {
+        self.startup_cache.lock().unwrap().as_mut().map(|cache| {
+            let captured = context.cloned().unwrap_or_else(|| cache.context());
+            let result = if context.is_some() {
+                cache.request_in_context(SHADER_STAGE_UNKNOWN, code, &captured, count_lookup)
+            } else {
+                cache.request(SHADER_STAGE_UNKNOWN, code, count_lookup)
+            };
+            match result {
+                Ok(Some(request)) => crate::api::ShaderTranslation::Cached(request),
+                Ok(None) => crate::api::ShaderTranslation::Deferred(code.to_vec(), captured),
+                Err(error) => crate::api::ShaderTranslation::Error(error),
+            }
+        })
     }
 
     /// The host this instance was created with.
@@ -419,6 +583,10 @@ impl Instance {
                     .flat_map(|word| word.to_le_bytes())
                     .collect::<Vec<_>>(),
             ));
+    }
+
+    pub(crate) fn clear_pending_shaders(&self, program: u64) {
+        self.pending_shaders.lock().unwrap().remove(&program);
     }
 
     pub(crate) fn add_pending_shader(&self, program: u64, pending: PendingShader) {

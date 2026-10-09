@@ -169,6 +169,10 @@ pub struct ShaderRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShaderTranslation {
+    /// An owned result, so obsolete completion cannot replace a newer program.
+    Cached(crate::startup_cache::TranslationRequest<crate::startup_cache::TranslatedShader>),
+    /// Owned bytes awaiting bounded queue space. Draws retry without guest reads.
+    Deferred(Vec<u8>, crate::startup_cache::TranslationContext),
     Spirv(Vec<u32>),
     Error(String),
 }

@@ -221,11 +221,7 @@ pub(super) fn stage_bindings(words: &[u32], model: u32) -> Result<Vec<Descriptor
     Ok(bindings.into_values().collect())
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct CacheStats {
-    pub hits: u64,
-    pub misses: u64,
-}
+pub use crate::workers::CacheStats;
 
 /// A device-local cache with one fixed translator and translation configuration.
 /// The translator must produce stable output for a byte sequence during this cache's life.

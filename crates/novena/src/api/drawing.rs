@@ -567,22 +567,42 @@ impl State {
         };
         let viewport = rectangle(self.viewport, description.width, description.height)?;
         let scissor = rectangle(self.scissor, description.width, description.height)?;
-        let stages = match instance
+        let translations = match instance
             .objects
             .get(self.program.ok_or(Status::Unimplemented)?)
         {
             Some(Object::Program {
                 shader_translations,
                 ..
-            }) => shader_translations
-                .into_iter()
-                .map(|translation| match translation {
-                    ShaderTranslation::Spirv(words) => Ok(words),
-                    ShaderTranslation::Error(_) => Err(Status::Unimplemented),
-                })
-                .collect::<Result<Vec<_>, _>>()?,
+            }) => shader_translations,
             _ => return Err(Status::BadArgument),
         };
+        let mut translation_keys = Vec::new();
+        let mut stages = Vec::new();
+        for translation in translations {
+            let translation = match translation {
+                ShaderTranslation::Deferred(code, context) => instance
+                    .retry_cached_translation(&code, &context)
+                    .ok_or(Status::Unimplemented)?,
+                other => other,
+            };
+            match translation {
+                ShaderTranslation::Spirv(words) => stages.push(words),
+                ShaderTranslation::Cached(request) => match request.poll() {
+                    crate::startup_cache::TranslationStatus::Ready(shader)
+                        if !shader.requires_subgroup_size_32 =>
+                    {
+                        translation_keys.push(shader.key.clone());
+                        stages.push(shader.words.clone());
+                    }
+                    crate::startup_cache::TranslationStatus::Queued
+                    | crate::startup_cache::TranslationStatus::Compiling => return Ok(()),
+                    _ => return Err(Status::Unimplemented),
+                },
+                ShaderTranslation::Deferred(..) => return Ok(()),
+                ShaderTranslation::Error(_) => return Err(Status::Unimplemented),
+            }
+        }
         let limits = unsafe {
             context
                 .instance
@@ -651,6 +671,10 @@ impl State {
                 uniform_buffers.push(info);
             }
         }
+        if let Some(cache) = instance.startup_cache.lock().unwrap().as_mut() {
+            cache.schedule(&mut backend.graphics);
+        }
+        let recipe_input = input.clone();
         let Some(pipeline) = backend
             .graphics
             .request(&stages, input, topology, pipeline_state, storage)
@@ -658,6 +682,17 @@ impl State {
         else {
             return Ok(());
         };
+        if translation_keys.len() == stages.len() {
+            if let Some(cache) = instance.startup_cache.lock().unwrap().as_mut() {
+                cache.remember(crate::startup_cache::PipelineRecipe {
+                    keys: translation_keys,
+                    input: recipe_input,
+                    topology,
+                    state: pipeline_state,
+                    storage,
+                });
+            }
+        }
         for (&target, d) in targets.iter().zip(&descriptions) {
             if !backend.ensure_texture(target, d, false) {
                 return Err(Status::BadArgument);

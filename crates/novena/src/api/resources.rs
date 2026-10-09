@@ -129,6 +129,22 @@ pub(crate) fn retry_pending(instance: &Instance, program: u64, point: &'static s
         let Some(translator) = instance.shader_translator() else {
             continue;
         };
+        if let Some(translation) = instance.request_cached_translation(&program_bytes) {
+            instance.replace_pending_shader(program, entry.record_index);
+            instance.record_late_read(point);
+            instance.objects.update(program, |object| {
+                if let Object::Program {
+                    shader_translations,
+                    ..
+                } = object
+                {
+                    if let Some(slot) = shader_translations.get_mut(entry.record_index) {
+                        *slot = translation;
+                    }
+                }
+            });
+            continue;
+        }
         match translator.translate(SHADER_STAGE_UNKNOWN, &program_bytes) {
             Ok(words) => {
                 instance.record_successful_shader_translation(&words);
@@ -357,6 +373,9 @@ fn translate_shaders(
                     return super::objects::ShaderTranslation::Error(error.into());
                 }
             };
+            if let Some(translation) = instance.request_cached_translation(&code) {
+                return translation;
+            }
             match translator.translate(SHADER_STAGE_UNKNOWN, &code) {
                 Ok(words) => {
                     instance.record_successful_shader_translation(&words);
@@ -864,6 +883,7 @@ pub fn handler(name: &str) -> Option<Handler> {
         // identify the code value or establish a code size. Keep both and
         // the observed words until that gap is closed.
         "nvnProgramSetShaders" => |instance, _, registers| {
+            instance.clear_pending_shaders(registers.x[0]);
             let count = registers.x[1].min(8);
             let records: Vec<ShaderRecord> = (0..count)
                 .filter_map(|index| {

@@ -15,6 +15,16 @@ pub fn run(test: &str) {
             shadowbox.display()
         );
     }
+    let cache_test =
+        test == "emitted_cache_is_loaded_at_instance_creation_and_runtime_misses_reopen";
+    if cache_test
+        && !fs::read_to_string(shadowbox.join("src/lib.rs"))
+            .expect("translator public interface must be readable")
+            .contains("pub fn header_prefixed_input(")
+    {
+        eprintln!("SKIP {test}: translator checkout lacks the current cache interface");
+        return;
+    }
     let shadowbox = shadowbox.canonicalize().unwrap();
     let directory = root.join("target/shadowbox-global-memory").join(test);
     fs::create_dir_all(&directory).unwrap();
@@ -36,31 +46,32 @@ name = "global_memory"
 path = {source:?}
 
 [dev-dependencies]
-novena = {{ path = {novena:?}, features = ["vulkan"] }}
+novena = {{ path = {novena:?}, features = {features:?} }}
 ash = {{ version = "0.38", default-features = false, features = ["loaded"] }}
 shadowbox = {{ path = {shadowbox:?} }}
 "#,
-            source = crate_root.join(
-                if matches!(
-                    test,
-                    "first_draw_executes_translated_triangle"
-                        | "textured_checkerboard_and_blend_pixels"
-                        | "translated_texture_pixels"
-                        | "multiple_target_blend_pixels"
-                        | "textured_uniform_banks_and_persistence"
-                        | "primitive_topologies_read_back_pixels"
-                        | "vertex_formats_read_back_pixels"
-                        | "uniform_banks_colour_two_draws"
-                        | "uniform_banks_with_strip_and_normalized_attribute"
-                        | "indexed_draw_executes_translated_triangle"
-                        | "depth_stencil_and_raster_pixels"
-                        | "indexed_strip_uniform_depth_pixels"
-                ) {
-                    "tests/shadowbox/drawing.rs"
-                } else {
-                    "tests/shadowbox/global_memory.rs"
-                }
-            ),
+            features = if cache_test { vec![] } else { vec!["vulkan"] },
+            source = crate_root.join(if cache_test {
+                "tests/shadowbox/startup.rs"
+            } else if matches!(
+                test,
+                "first_draw_executes_translated_triangle"
+                    | "textured_checkerboard_and_blend_pixels"
+                    | "translated_texture_pixels"
+                    | "multiple_target_blend_pixels"
+                    | "textured_uniform_banks_and_persistence"
+                    | "primitive_topologies_read_back_pixels"
+                    | "vertex_formats_read_back_pixels"
+                    | "uniform_banks_colour_two_draws"
+                    | "uniform_banks_with_strip_and_normalized_attribute"
+                    | "indexed_draw_executes_translated_triangle"
+                    | "depth_stencil_and_raster_pixels"
+                    | "indexed_strip_uniform_depth_pixels"
+            ) {
+                "tests/shadowbox/drawing.rs"
+            } else {
+                "tests/shadowbox/global_memory.rs"
+            }),
             novena = crate_root,
         ),
     )
