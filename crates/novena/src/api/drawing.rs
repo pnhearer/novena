@@ -698,18 +698,23 @@ impl State {
             }) => shader_translations,
             _ => return Err(Status::BadArgument),
         };
+        let blocking = backend.graphics.policy() == crate::gpu::graphics::PendingDrawPolicy::Block;
         let mut translation_keys = Vec::new();
         let mut stages = Vec::new();
         for translation in translations {
             let translation = match translation {
                 ShaderTranslation::Deferred(code, context) => instance
-                    .retry_cached_translation(&code, &context)
+                    .retry_cached_translation(&code, &context, blocking)
                     .ok_or(Status::Unimplemented)?,
                 other => other,
             };
             match translation {
                 ShaderTranslation::Spirv(words) => stages.push(words),
-                ShaderTranslation::Cached(request) => match request.poll() {
+                ShaderTranslation::Cached(request) => match if blocking {
+                    request.wait()
+                } else {
+                    request.poll()
+                } {
                     crate::startup_cache::TranslationStatus::Ready(shader)
                         if !shader.requires_subgroup_size_32 =>
                     {
@@ -717,10 +722,18 @@ impl State {
                         stages.push(shader.words.clone());
                     }
                     crate::startup_cache::TranslationStatus::Queued
-                    | crate::startup_cache::TranslationStatus::Compiling => return Ok(()),
+                    | crate::startup_cache::TranslationStatus::Compiling => {
+                        backend
+                            .graphics
+                            .log_skipped_draw("shader translation pending");
+                        return Ok(());
+                    }
                     _ => return Err(Status::Unimplemented),
                 },
-                ShaderTranslation::Deferred(..) => return Ok(()),
+                ShaderTranslation::Deferred(..) => {
+                    backend.graphics.log_skipped_draw("translation queue full");
+                    return Ok(());
+                }
                 ShaderTranslation::Error(_) => return Err(Status::Unimplemented),
             }
         }
@@ -822,6 +835,9 @@ impl State {
         #[cfg(feature = "draw-metrics")]
         drop(uniform_span);
         let Some(pipeline) = pipeline else {
+            backend
+                .graphics
+                .log_skipped_draw("pipeline compilation pending or queue full");
             return Ok(());
         };
         if translation_keys.len() == stages.len() {

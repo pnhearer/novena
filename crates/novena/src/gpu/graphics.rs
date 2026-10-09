@@ -340,10 +340,12 @@ pub(crate) struct Key {
 /// Host choice when a draw needs unfinished compilation. Evidence: provenance 0037.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PendingDrawPolicy {
-    /// Submit other commands and try this draw again in a later frame.
+    /// Wait for translation, queue admission, compilation and linking at submission.
     #[default]
+    Block,
+    /// Explicitly discard unfinished draws and log each discarded draw.
     Skip,
-    /// Wait for at most this budget across all parts, then skip this frame.
+    /// Explicitly allow discarding a draw after this wait budget, with a log entry.
     /// The host setter accepts budgets up to 16 milliseconds.
     Wait(Duration),
 }
@@ -416,7 +418,7 @@ impl GraphicsPipelines {
             requires_storage: u64::from(limits.max_uniform_buffer_range) < BANK_SIZE,
         })
     }
-    /// A pending or queue-full request skips only this draw. Failures stay visible.
+    /// Wait by default. Only an explicit host policy may return an unfinished request.
     pub fn request(
         &mut self,
         stages: &[Vec<u32>],
@@ -459,10 +461,14 @@ impl GraphicsPipelines {
         }
         let key = Key::new(stages, input, topology, state, storage)?;
         let deadline = match self.policy {
-            PendingDrawPolicy::Skip => None,
+            PendingDrawPolicy::Block | PendingDrawPolicy::Skip => None,
             PendingDrawPolicy::Wait(budget) => Some(Instant::now() + budget),
         };
-        let pipeline = self.pool.request(key.clone(), deadline)?;
+        let pipeline = self.pool.request(
+            key.clone(),
+            deadline,
+            self.policy == PendingDrawPolicy::Block,
+        )?;
         if let Some(pipeline) = &pipeline {
             let id = self.ready.len();
             self.ready.push((key, pipeline.clone()));
@@ -477,6 +483,12 @@ impl GraphicsPipelines {
         self.policy = policy;
         Ok(())
     }
+    pub(crate) fn log_skipped_draw(&self, reason: &str) {
+        let message = format!("skipped draw: {reason}");
+        eprintln!("{message}");
+        self.driver.diagnostic(message);
+    }
+
     pub(crate) fn policy(&self) -> PendingDrawPolicy {
         self.policy
     }

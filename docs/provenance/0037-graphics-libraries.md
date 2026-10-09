@@ -69,17 +69,20 @@ finish. A draw can also complete the assembly directly.
 
 ## Host policy
 
-A Rust host calls `Instance::set_pending_draw_policy` with
-`PendingDrawPolicy::Skip` or `PendingDrawPolicy::Wait(Duration)`.
-Skip is the default. Wait accepts zero through 16 milliseconds.
-Larger budgets are rejected without changing the selected policy.
-Cache reconfiguration preserves the policy.
+The default is now `PendingDrawPolicy::Block`. Submission waits for translation,
+queue admission, all parts and the executable link before continuing in order.
+See [ordered compilation](0040-ordered-compilation.md).
 
-One deadline covers waiting for all parts and an asynchronous link.
-A timeout or full queue skips that draw for the current frame; later commands
-continue. Compilation failures stay visible. This budget bounds compilation
-waiting, not command recording, GPU completion, attachment transfers, or the
-driver's fast-link call. It is not a total frame-time limit.
+A Rust host can explicitly select `PendingDrawPolicy::Skip` or
+`PendingDrawPolicy::Wait(Duration)` with `Instance::set_pending_draw_policy`.
+Both allow discarded draws, and each discarded draw is logged. The timed skip
+policy accepts zero through 16 milliseconds across parts and linking. Larger
+budgets are rejected without changing the policy. Cache reconfiguration preserves
+the selected policy. Compilation failures stay visible.
+
+The measurements below used the earlier skip default. Their timed wait budget
+bounded compilation waiting, not recording, GPU completion or attachment
+transfers. They do not measure the new default.
 
 `graphics_library_support` reports enabled library and fast-link capability.
 `graphics_compilation_stats` reports successful subset, link, and whole-pipeline

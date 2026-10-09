@@ -54,9 +54,9 @@ GLSL. It does not translate hardware instructions. The markers use only the
 existing shader envelope so registration follows the normal bounded read path.
 
 The host installs explicit topology, vertex-format, texture-slot, filter, and
-wrap contracts. The first submission may skip a draw while its pipeline
-compiles. The example resubmits until pixels arrive or a 30-second timeout
-expires. It checks diagnostics and writes the completed arena bytes.
+wrap contracts. The first submission waits for its pipeline by default.
+The example retains a readback loop with a 30-second timeout. It checks
+diagnostics and writes the completed arena bytes.
 Temporary shader files are removed after compilation.
 
 Evidence: [CPU clears](../provenance/0012-cpu-clears.md),

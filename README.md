@@ -44,8 +44,9 @@ the program's objects and answers queries from observed data. One program runs
 on novena alone, presenting clears without executed draws
 ([notes 0010 and 0011](docs/provenance/0011-running-past-the-first-frame.md)).
 Draw commands and shader records are retained. Supported first draws execute
-only when a Rust host supplies the explicit experiment contract. A draw whose
-pipeline is still compiling is skipped for that frame; other commands continue.
+only when a Rust host supplies the explicit experiment contract. Submission
+waits for translation and pipeline compilation by default, preserving command
+order. A host can explicitly allow skipped draws, each logged.
 Shader translation requires a registered translator and an enabled hook.
 Supported base-level Vulkan texture copies and the bounded first draw path work. General resource
 binding and draw execution remain open. Other calls are counted and answered

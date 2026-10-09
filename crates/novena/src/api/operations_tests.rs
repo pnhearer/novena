@@ -247,7 +247,7 @@ void main() {
     }
 
     impl Fixture {
-        fn graphics(&self) {
+        fn graphics_cold(&self) {
             assert!(self
                 .instance
                 .set_first_draw_contract(Some(FirstDrawContract {
@@ -335,6 +335,10 @@ void main() { color = vec4(1.0, 0.0, 0.0, 1.0); }"#,
                     .collect::<Vec<_>>(),
             );
             self.put(0x5000, &[0; 32]);
+        }
+
+        fn graphics(&self) {
+            self.graphics_cold();
             // Compile the asynchronous graphics pipeline before measuring reports.
             self.draw_state();
             self.command("DrawArrays", &[4, 0, 3]);
@@ -348,8 +352,12 @@ void main() { color = vec4(1.0, 0.0, 0.0, 1.0); }"#,
         }
 
         fn draw_state(&self) {
+            self.draw_state_target(4);
+        }
+
+        fn draw_state_target(&self, target: u64) {
             self.begin();
-            self.memory.lock().unwrap()[0x180..0x188].copy_from_slice(&4_u64.to_le_bytes());
+            self.memory.lock().unwrap()[0x180..0x188].copy_from_slice(&target.to_le_bytes());
             self.command("SetRenderTargets", &[1, 0x180, 0, 0, 0]);
             self.put(
                 0x7000,
@@ -404,6 +412,298 @@ void main() { color = vec4(1.0, 0.0, 0.0, 1.0); }"#,
                 pixels,
                 self.memory.lock().unwrap()[0x1000 + offset..0x2000 + offset]
             );
+        }
+    }
+
+    struct GatedTranslator {
+        words: Vec<u32>,
+        gate: Arc<(Mutex<bool>, std::sync::Condvar)>,
+        started: std::sync::mpsc::Sender<()>,
+    }
+    impl crate::ShaderTranslator for GatedTranslator {
+        fn translate(&self, _: crate::ShaderStage, _: &[u8]) -> Result<Vec<u32>, String> {
+            let _ = self.started.send(());
+            let mut open = self.gate.0.lock().unwrap();
+            while !*open {
+                open = self.gate.1.wait(open).unwrap();
+            }
+            Ok(self.words.clone())
+        }
+        fn translation_cache_key(
+            &self,
+            _: crate::ShaderStage,
+            code: &[u8],
+            _: &crate::startup_cache::TranslationContext,
+        ) -> Result<Option<String>, String> {
+            Ok(Some(format!("{:064x}", code[0] + 1)))
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a graphics device and shader tools; never skips"]
+    fn cold_draw_writes_once_then_later_submission_samples_exact_pixels() {
+        use crate::{
+            gpu::{
+                textures::{TextureContract, TextureMapping},
+                uniforms::UniformStage,
+            },
+            startup_cache::StartupCacheConfig,
+        };
+        use std::{sync::mpsc, time::Duration};
+
+        for mode in 0..3 {
+            let mut f = Fixture::new();
+            f.graphics_cold();
+            let directory = std::env::temp_dir()
+                .join(format!("single-write-cache-{}-{mode}", std::process::id()));
+            fs::create_dir_all(&directory).unwrap();
+            f.instance
+                .set_graphics_pipeline_cache(
+                    &directory.join("pipelines"),
+                    &crate::gpu::pipelines::TranslationIdentity {
+                        version: "single write 1".into(),
+                        configuration: String::new(),
+                    },
+                    1,
+                    1,
+                )
+                .unwrap();
+            assert_eq!(f.instance.graphics_cache_stats().unwrap().misses, 0);
+            let vertices: [f32; 12] = [
+                -1.0, -1.0, 0.0, 1.0, 3.0, -1.0, 0.0, 1.0, -1.0, 3.0, 0.0, 1.0,
+            ];
+            f.put(
+                0x4000,
+                &vertices
+                    .into_iter()
+                    .flat_map(f32::to_le_bytes)
+                    .collect::<Vec<_>>(),
+            );
+            let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+            if mode != 0 {
+                let Some(Object::Program {
+                    mut shader_translations,
+                    ..
+                }) = f.instance.objects.get(31)
+                else {
+                    panic!("missing producer program");
+                };
+                let ShaderTranslation::Spirv(words) = shader_translations.pop().unwrap() else {
+                    panic!("missing producer fragment");
+                };
+                let (started, receive) = mpsc::channel();
+                let mut config = StartupCacheConfig::new(directory.join("translations"));
+                config.workers = 1;
+                config.queue_capacity = 1;
+                f.instance
+                    .configure_startup_cache(
+                        config,
+                        Arc::new(GatedTranslator {
+                            words,
+                            gate: gate.clone(),
+                            started,
+                        }),
+                    )
+                    .unwrap();
+                let pending = f.instance.request_cached_translation(&[0]).unwrap();
+                receive.recv_timeout(Duration::from_secs(5)).unwrap();
+                let translation = if mode == 1 {
+                    pending
+                } else {
+                    let _queued = f.instance.request_cached_translation(&[1]).unwrap();
+                    let deferred = f.instance.request_cached_translation(&[2]).unwrap();
+                    assert!(matches!(deferred, ShaderTranslation::Deferred(..)));
+                    deferred
+                };
+                shader_translations.push(translation);
+                f.instance.objects.put(
+                    31,
+                    Object::Program {
+                        shader_translations,
+                        shader_records: Vec::new(),
+                        device: 0,
+                    },
+                );
+            }
+            f.draw_state();
+            f.command("DrawArrays", &[4, 0, 3]);
+            let completed_early = std::thread::scope(|scope| {
+                let (done, receive) = mpsc::channel();
+                let fixture = &f;
+                let submit = scope.spawn(move || {
+                    fixture.submit(Status::Ok);
+                    done.send(()).unwrap();
+                });
+                let early = mode != 0 && receive.recv_timeout(Duration::from_millis(50)).is_ok();
+                *gate.0.lock().unwrap() = true;
+                gate.1.notify_all();
+                submit.join().unwrap();
+                early
+            });
+            assert!(
+                !completed_early,
+                "submission completed before translation, mode {mode}"
+            );
+            for (at, pixel) in f.pixels(4).as_chunks::<4>().0.iter().enumerate() {
+                assert_eq!(*pixel, [255, 0, 0, 255], "producer mode {mode}, pixel {at}");
+            }
+
+            f.instance
+                .set_texture_contract(TextureContract {
+                    bindings: vec![TextureMapping {
+                        stage: 4,
+                        index: 0,
+                        target: UniformStage::Fragment,
+                        set: 0,
+                        image: 0,
+                        sampler: 1,
+                    }],
+                    filters: vec![(100, ash::vk::Filter::NEAREST)],
+                    wraps: vec![(101, ash::vk::SamplerAddressMode::CLAMP_TO_EDGE)],
+                    compare_disabled: 102,
+                    ..TextureContract::default()
+                })
+                .unwrap();
+            call(&f.instance, "TexturePoolInitialize", &[40, 2, 0, 512]);
+            call(&f.instance, "TexturePoolRegisterTexture", &[40, 256, 4, 0]);
+            call(&f.instance, "SamplerPoolInitialize", &[41, 2, 0, 512]);
+            call(&f.instance, "SamplerBuilderSetDefaults", &[42]);
+            call(&f.instance, "SamplerBuilderSetCompare", &[42, 102, 0]);
+            call(
+                &f.instance,
+                "SamplerBuilderSetMinMagFilter",
+                &[42, 100, 100],
+            );
+            call(
+                &f.instance,
+                "SamplerBuilderSetWrapMode",
+                &[42, 101, 101, 101],
+            );
+            let mut r = Registers::default();
+            r.x[0] = 42;
+            r.d[0] = u64::from(1.0_f32.to_bits());
+            let id = functions::all()
+                .find(|(_, name)| name.get(3..) == Some("SamplerBuilderSetMaxAnisotropy"))
+                .unwrap()
+                .0;
+            assert_eq!(f.instance.call(id, &mut r), Status::Ok);
+            call(&f.instance, "SamplerInitialize", &[43, 42]);
+            call(&f.instance, "SamplerPoolRegisterSampler", &[41, 257, 43]);
+            let fragment = shader(
+                "frag",
+                r#"#version 450
+layout(set=0, binding=0) uniform texture2D source_image;
+layout(set=0, binding=1) uniform sampler source_sampler;
+layout(location=0) out vec4 color;
+void main() {
+    color = texelFetch(sampler2D(source_image, source_sampler), ivec2(gl_FragCoord.xy), 0);
+}"#,
+            );
+            let Some(Object::Program {
+                mut shader_translations,
+                ..
+            }) = f.instance.objects.get(31)
+            else {
+                panic!("missing producer program");
+            };
+            shader_translations.truncate(1);
+            shader_translations.push(ShaderTranslation::Spirv(fragment));
+            f.instance.objects.put(
+                32,
+                Object::Program {
+                    shader_translations,
+                    shader_records: Vec::new(),
+                    device: 0,
+                },
+            );
+            f.draw_state_target(5);
+            f.command("BindProgram", &[32, 0]);
+            f.command("SetTexturePool", &[40]);
+            f.command("SetSamplerPool", &[41]);
+            f.command("BindSeparateTexture", &[4, 0, 256]);
+            f.command("BindSeparateSampler", &[4, 0, 257]);
+            f.command("DrawArrays", &[4, 0, 3]);
+            f.submit(Status::Ok);
+            for (at, pixel) in f.pixels(5).as_chunks::<4>().0.iter().enumerate() {
+                assert_eq!(*pixel, [255, 0, 0, 255], "sample mode {mode}, pixel {at}");
+            }
+            assert!(f.instance.take_graphics_cache_diagnostics().is_empty());
+            drop(f);
+            fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a graphics device and shader tools; never skips"]
+    fn explicit_skip_logs_each_unfinished_draw_and_block_restores_execution() {
+        use crate::{gpu::graphics::PendingDrawPolicy, startup_cache::StartupCacheConfig};
+        for policy in [
+            PendingDrawPolicy::Skip,
+            PendingDrawPolicy::Wait(std::time::Duration::ZERO),
+        ] {
+            let mut f = Fixture::new();
+            f.graphics_cold();
+            let directory =
+                std::env::temp_dir().join(format!("skip-choice-cache-{}", std::process::id()));
+            let Some(Object::Program {
+                mut shader_translations,
+                ..
+            }) = f.instance.objects.get(31)
+            else {
+                panic!("missing program");
+            };
+            let ShaderTranslation::Spirv(words) = shader_translations.pop().unwrap() else {
+                panic!("missing fragment");
+            };
+            let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+            let (started, receive) = std::sync::mpsc::channel();
+            f.instance
+                .configure_startup_cache(
+                    StartupCacheConfig::new(directory.clone()),
+                    Arc::new(GatedTranslator {
+                        words,
+                        gate: gate.clone(),
+                        started,
+                    }),
+                )
+                .unwrap();
+            shader_translations.push(f.instance.request_cached_translation(&[0]).unwrap());
+            receive
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            f.instance.objects.put(
+                31,
+                Object::Program {
+                    shader_translations,
+                    shader_records: Vec::new(),
+                    device: 0,
+                },
+            );
+            f.instance.set_pending_draw_policy(policy).unwrap();
+            f.draw_state();
+            for _ in 0..3 {
+                f.command("DrawArrays", &[4, 0, 3]);
+            }
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f.submit(Status::Ok)));
+            *gate.0.lock().unwrap() = true;
+            gate.1.notify_all();
+            result.unwrap();
+            let diagnostics = f.instance.take_graphics_cache_diagnostics();
+            assert_eq!(
+                diagnostics,
+                vec!["skipped draw: shader translation pending"; 3]
+            );
+            f.instance
+                .set_pending_draw_policy(PendingDrawPolicy::Block)
+                .unwrap();
+            f.draw_state();
+            f.command("DrawArrays", &[4, 0, 3]);
+            f.submit(Status::Ok);
+            f.triangles(4, true, false);
+            assert!(f.instance.take_graphics_cache_diagnostics().is_empty());
+            drop(f);
+            fs::remove_dir_all(directory).unwrap();
         }
     }
 

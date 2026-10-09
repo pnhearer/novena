@@ -309,13 +309,13 @@ mod execution {
                     for t in shader_translations {
                         let t = match t {
                             ShaderTranslation::Deferred(code, context) => instance
-                                .retry_cached_translation(&code, &context)
+                                .retry_cached_translation(&code, &context, true)
                                 .ok_or(Status::Unimplemented)?,
                             t => t,
                         };
                         match t {
                             ShaderTranslation::Spirv(w) => stages.push(w),
-                            ShaderTranslation::Cached(r) => match r.poll() {
+                            ShaderTranslation::Cached(r) => match r.wait() {
                                 crate::startup_cache::TranslationStatus::Ready(s)
                                     if !s.requires_subgroup_size_32 =>
                                 {

@@ -57,11 +57,12 @@ The experiment rejects bound blend, channel-mask, and multisample objects whose
 fields it cannot interpret. Only the listed state fields are supported.
 The Rust experiment has no C configuration interface yet.
 
-Graphics compilation runs on bounded background workers. On first use, the
-executor queues the retained stage words and polls once. A queued, compiling
-or queue-full result skips only that draw and allows other commands to continue.
-Skipped draws are not replayed. Failures remain visible until explicit retry.
-This is a host scheduling choice, not observed guest behavior.
+Graphics compilation runs on bounded background workers. On first use,
+submission waits for translation, queue admission and the executable pipeline
+before continuing in command order. Only an explicit host policy permits
+skipped draws, and each skipped draw is logged. Skipped draws are not replayed.
+Failures remain visible until explicit retry. See
+[ordered compilation](../provenance/0040-ordered-compilation.md).
 
 A host enables private disk persistence outside submission with
 `Instance::set_graphics_pipeline_cache`, supplying a directory, translation

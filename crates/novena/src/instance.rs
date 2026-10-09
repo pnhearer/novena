@@ -379,8 +379,18 @@ impl InstanceState {
         &self,
         code: &[u8],
         context: &crate::startup_cache::TranslationContext,
+        blocking: bool,
     ) -> Option<crate::api::ShaderTranslation> {
-        self.cached_translation(code, Some(context), false)
+        if !blocking {
+            return self.cached_translation(code, Some(context), false);
+        }
+        self.startup_cache.lock().unwrap().as_mut().map(|cache| {
+            match cache.request_blocking(SHADER_STAGE_UNKNOWN, code, context) {
+                Ok(Some(request)) => crate::api::ShaderTranslation::Cached(request),
+                Ok(None) => unreachable!("blocking admission must return a request"),
+                Err(error) => crate::api::ShaderTranslation::Error(error),
+            }
+        })
     }
 
     fn cached_translation(
@@ -564,8 +574,8 @@ impl InstanceState {
         Ok(())
     }
 
-    /// Choose skipping or a shared wait budget for unfinished draws. Evidence: provenance 0037.
-    /// Call outside submission. Budgets above 16 milliseconds are rejected.
+    /// Block at submission by default, or explicitly allow logged skipped draws.
+    /// Call outside submission. Timed skip budgets above 16 milliseconds are rejected.
     #[cfg(feature = "vulkan")]
     pub fn set_pending_draw_policy(
         &self,

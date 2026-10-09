@@ -410,6 +410,27 @@ impl StartupCache {
         context: &TranslationContext,
         count_lookup: bool,
     ) -> Result<Option<TranslationRequest<TranslatedShader>>, String> {
+        self.request_with_admission(stage, code, context, count_lookup, false)
+    }
+
+    #[cfg(feature = "vulkan")]
+    pub(crate) fn request_blocking(
+        &mut self,
+        stage: ShaderStage,
+        code: &[u8],
+        context: &TranslationContext,
+    ) -> Result<Option<TranslationRequest<TranslatedShader>>, String> {
+        self.request_with_admission(stage, code, context, false, true)
+    }
+
+    fn request_with_admission(
+        &mut self,
+        stage: ShaderStage,
+        code: &[u8],
+        context: &TranslationContext,
+        count_lookup: bool,
+        blocking: bool,
+    ) -> Result<Option<TranslationRequest<TranslatedShader>>, String> {
         let Some(key) = self
             .translator
             .translation_cache_key(stage, code, context)?
@@ -434,12 +455,24 @@ impl StartupCache {
                 shared.stats.misses += 1;
             }
         }
-        match self.pool.request(Job::Translate {
+        let job = Job::Translate {
             key,
             stage,
             code: code.to_vec(),
             context: context.clone(),
-        }) {
+        };
+        #[cfg(feature = "vulkan")]
+        let result = if blocking {
+            self.pool.request_blocking(job)
+        } else {
+            self.pool.request(job)
+        };
+        #[cfg(not(feature = "vulkan"))]
+        let result = {
+            let _ = blocking;
+            self.pool.request(job)
+        };
+        match result {
             Ok(request) => Ok(Some(request)),
             Err(crate::workers::RequestError::QueueFull) => {
                 if count_lookup {

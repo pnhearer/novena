@@ -209,11 +209,11 @@ envelope, device identity and empty-cache fallback as compute.
 `retry_graphics_pipeline` takes the translated stages, complete `VertexInput`,
 `PrimitiveTopology`, and interpreted `DrawPipelineState` to forget exactly one failed content request. Public Vulkan enum values are validated first.
 
-Draw execution requests a pipeline and polls once. Queued, compiling or
-queue-full work skips only that draw, with no wait or cache I/O on submission.
-Other commands continue and the skipped draw is not replayed. A failed request
-returns `Unimplemented`. This is the host policy in provenance 0026, not an
-established guest semantic or equivalent output guarantee.
+Draw execution waits for translation, bounded queue admission and pipeline
+completion by default. Later commands remain behind the draw in submission
+order. Compilation failure returns `Unimplemented`. An explicit host policy
+can allow skipped draws, each logged without automatic replay. See
+[ordered compilation](../provenance/0040-ordered-compilation.md).
 
 The queue executor requires explicit recorded enable flags and a host
 `FirstDrawContract` for unresolved tokens. It resolves the vertex slice through
@@ -283,14 +283,12 @@ or command-pool use. Translator panics become failed requests and the worker
 continues. Failed requests stay visible until explicit `retry_failed`; this
 prevents a failing program from triggering compilation every frame.
 
-On a cold first use, the frame polls once and skips the draw if its pipeline is
-queued, compiling, failed, or cannot be queued because the bounded queue is full.
-It continues recording the frame's other commands without waiting for the
-missing pipeline. Queue-full submission leaves no cached request and can retry
-on the next frame. A ready pipeline can be bound immediately. A skipped draw is
-not replayed later in that frame. This is a host design choice, not observed
-guest behavior or a claim of equivalent output. Measure missing-draw effects
-and compilation latency later before choosing a final rendering policy.
+On a cold first use, submission waits for queue admission and completion of
+translation, pipeline parts and the executable link. Ready requests are reused
+immediately. Compilation failures stay visible until explicit retry. The default
+never discards a draw because compilation is unfinished. Explicit skip policies
+log every discarded draw and do not replay it. Skipping may lose a texture write
+that later commands need, so it cannot guarantee equivalent output.
 
 A program replacement retains its new request handle. An old completion only
 updates its own handle, so it cannot replace the current program. Future guest

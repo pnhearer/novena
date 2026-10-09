@@ -263,12 +263,18 @@ impl Compiler {
         key: &Key,
         assembly: &mut Assembly,
         deadline: Option<Instant>,
+        blocking: bool,
     ) -> Result<Option<Arc<GraphicsPipeline>>, String> {
         let mut parts = Vec::new();
         // Attempt every missing part before waiting, so independent jobs can overlap.
         for (job, request) in assembly.jobs.iter().zip(&mut assembly.requests) {
             if request.is_none() {
-                match pool.request(job.clone()) {
+                let result = if blocking {
+                    pool.request_blocking(job.clone())
+                } else {
+                    pool.request(job.clone())
+                };
+                match result {
                     Ok(value) => *request = Some(value),
                     Err(RequestError::QueueFull) => {}
                     Err(RequestError::Stopped) => return Err("graphics compiler stopped".into()),
@@ -279,7 +285,12 @@ impl Compiler {
             let Some(request) = request else {
                 return Ok(None);
             };
-            match deadline.map_or_else(|| request.poll(), |end| request.wait_until(end)) {
+            let status = if blocking {
+                request.wait()
+            } else {
+                deadline.map_or_else(|| request.poll(), |end| request.wait_until(end))
+            };
+            match status {
                 PipelineStatus::Ready(part) => parts.push(part),
                 PipelineStatus::Failed(error) => return Err(error),
                 PipelineStatus::Queued | PipelineStatus::Compiling => return Ok(None),
@@ -289,18 +300,29 @@ impl Compiler {
             return Ok(parts.pop());
         }
         if assembly.link.is_none() {
-            match pool.request(Job {
+            let job = Job {
                 id: JobKey::Link(key.clone()),
                 source: key.clone(),
                 parts,
-            }) {
+            };
+            let result = if blocking {
+                pool.request_blocking(job)
+            } else {
+                pool.request(job)
+            };
+            match result {
                 Ok(request) => assembly.link = Some(request),
                 Err(RequestError::QueueFull) => return Ok(None),
                 Err(RequestError::Stopped) => return Err("graphics compiler stopped".into()),
             }
         }
         let request = assembly.link.as_ref().unwrap();
-        match deadline.map_or_else(|| request.poll(), |end| request.wait_until(end)) {
+        let status = if blocking {
+            request.wait()
+        } else {
+            deadline.map_or_else(|| request.poll(), |end| request.wait_until(end))
+        };
+        match status {
             PipelineStatus::Ready(result) => Ok(Some(result)),
             PipelineStatus::Failed(error) => Err(error),
             PipelineStatus::Queued | PipelineStatus::Compiling => Ok(None),
@@ -311,12 +333,13 @@ impl Compiler {
         &mut self,
         key: Key,
         deadline: Option<Instant>,
+        blocking: bool,
     ) -> Result<Option<Arc<GraphicsPipeline>>, String> {
         #[cfg(feature = "draw-metrics")]
         let _span = crate::draw_metrics::PipelineSpan::new(0);
         self.ensure(&key)?;
         let assembly = self.assemblies.get_mut(&key).unwrap();
-        Self::advance(&mut self.pool, &key, assembly, deadline)
+        Self::advance(&mut self.pool, &key, assembly, deadline, blocking)
     }
 
     pub(super) fn compilation_stats(&self) -> super::graphics::GraphicsCompilationStats {
@@ -331,14 +354,14 @@ impl Compiler {
     pub(super) fn queue(&mut self, key: Key) -> Result<bool, String> {
         self.ensure(&key)?;
         let assembly = self.assemblies.get_mut(&key).unwrap();
-        Self::advance(&mut self.pool, &key, assembly, None)?;
+        Self::advance(&mut self.pool, &key, assembly, None, false)?;
         Ok(assembly.requests.iter().all(Option::is_some))
     }
     pub(super) fn pending(&mut self) -> usize {
         // Startup polling also enqueues the final link after all parts finish.
         let mut count = 0;
         for (key, assembly) in &mut self.assemblies {
-            if let Ok(None) = Self::advance(&mut self.pool, key, assembly, None) {
+            if let Ok(None) = Self::advance(&mut self.pool, key, assembly, None, false) {
                 count += 1;
             }
         }

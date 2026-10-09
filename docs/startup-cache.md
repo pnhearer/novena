@@ -21,9 +21,11 @@ program again when its translation state changes. Generation, geometry input
 and tessellation values are explicit host adapter choices, not guest enum facts.
 
 Registration returns immediately for an indexed hit. A miss queues owned bytes
-for translation and publication. Queue overflow retains bytes and a later draw
-retries. Pending translation or pipeline work skips that draw under the existing
-executor policy. Worker completion cannot replace a newer registration.
+for translation and publication. Queue overflow retains owned bytes. At submission,
+the default policy waits for queue admission, translation and pipeline completion
+before executing the draw. It preserves command and submission order. Only an
+explicit host choice allows skipped draws, and each skip is logged. Worker
+completion cannot replace a newer registration.
 
 AOT modules alone do not describe vertex input, topology or fixed pipeline
 state. Supply `PipelineRecipe` values in `StartupCacheConfig::pipelines` when

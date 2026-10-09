@@ -17,7 +17,7 @@ use std::{
     time::Instant,
 };
 
-/// A frame polls this state and skips the draw unless Ready is returned.
+/// Completion state of an owned compilation request.
 pub enum PipelineStatus<P> {
     /// The owned job is waiting for a worker.
     Queued,
@@ -59,6 +59,20 @@ impl<P> PipelineRequest<P> {
             result: OnceLock::from(result),
             waiter: Mutex::new(()),
         }))
+    }
+
+    /// Wait until the owned job completes or fails.
+    pub fn wait(&self) -> PipelineStatus<P> {
+        if self.0.result.get().is_some() {
+            return self.poll();
+        }
+        let guard = self.0.waiter.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = self
+            .0
+            .completed
+            .wait_while(guard, |_| self.0.result.get().is_none())
+            .unwrap_or_else(|p| p.into_inner());
+        self.poll()
     }
 
     /// Wait for completion until one shared draw deadline, then return a snapshot.
@@ -111,7 +125,7 @@ struct CompileJob<K, P> {
 }
 
 /// Bounded compiler pool. Construction and shutdown belong outside frame recording.
-/// Requests and polling never wait for compilation, cache locks or disk operations.
+/// Nonblocking requests and polling do not wait for compilation.
 pub(crate) struct AsyncPipelines<K, P> {
     requests: HashMap<K, PipelineRequest<P>>,
     sender: Option<mpsc::SyncSender<CompileJob<K, P>>>,
@@ -183,9 +197,19 @@ impl<K: Eq + std::hash::Hash + Clone + Send + 'static, P: Send + Sync + 'static>
         Ok(result)
     }
 
-    /// Duplicate requests share one result. QueueFull leaves no cache entry;
-    /// skip this frame and retry later. Failed requests require explicit retry.
+    /// Duplicate requests share one result. QueueFull leaves no cache entry.
+    /// Failed requests require explicit retry.
     pub fn request(&mut self, program: K) -> Result<PipelineRequest<P>, RequestError> {
+        self.enqueue(program, false)
+    }
+
+    /// Wait for queue admission. Compilation remains owned by the workers.
+    #[cfg(feature = "vulkan")]
+    pub fn request_blocking(&mut self, program: K) -> Result<PipelineRequest<P>, RequestError> {
+        self.enqueue(program, true)
+    }
+
+    fn enqueue(&mut self, program: K, blocking: bool) -> Result<PipelineRequest<P>, RequestError> {
         if let Some(request) = self.requests.get(&program) {
             self.stats.hits += 1;
             return Ok(request.clone());
@@ -196,17 +220,19 @@ impl<K: Eq + std::hash::Hash + Clone + Send + 'static, P: Send + Sync + 'static>
             result: OnceLock::new(),
             waiter: Mutex::new(()),
         });
-        self.sender
-            .as_ref()
-            .ok_or(RequestError::Stopped)?
-            .try_send(CompileJob {
-                program: program.clone(),
-                state: state.clone(),
-            })
-            .map_err(|error| match error {
+        let sender = self.sender.as_ref().ok_or(RequestError::Stopped)?;
+        let job = CompileJob {
+            program: program.clone(),
+            state: state.clone(),
+        };
+        if blocking {
+            sender.send(job).map_err(|_| RequestError::Stopped)?;
+        } else {
+            sender.try_send(job).map_err(|error| match error {
                 mpsc::TrySendError::Full(_) => RequestError::QueueFull,
                 mpsc::TrySendError::Disconnected(_) => RequestError::Stopped,
             })?;
+        }
         let request = PipelineRequest(state);
         self.requests.insert(program, request.clone());
         self.stats.misses += 1;
@@ -315,11 +341,54 @@ mod deadline_tests {
         );
     }
 
+    #[cfg(feature = "vulkan")]
+    #[test]
+    fn blocking_admission_preserves_work_when_the_queue_is_full() {
+        use std::time::Duration;
+        let (started, receive) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        let resume = Mutex::new(resume);
+        let mut pool = AsyncPipelines::new(
+            HashMap::new(),
+            CacheStats::default(),
+            1,
+            1,
+            move |key: &u32| {
+                started.send(*key).unwrap();
+                resume.lock().unwrap().recv().unwrap();
+                Ok(Arc::new(*key))
+            },
+        )
+        .unwrap();
+        let first = pool.request(1).unwrap();
+        assert_eq!(receive.recv_timeout(Duration::from_secs(5)).unwrap(), 1);
+        let second = pool.request(2).unwrap();
+        assert_eq!(pool.request(3).unwrap_err(), RequestError::QueueFull);
+        let third = std::thread::scope(|scope| {
+            let admission = scope.spawn(|| pool.request_blocking(3).unwrap());
+            release.send(()).unwrap();
+            assert_eq!(receive.recv_timeout(Duration::from_secs(5)).unwrap(), 2);
+            let request = admission.join().unwrap();
+            release.send(()).unwrap();
+            assert_eq!(receive.recv_timeout(Duration::from_secs(5)).unwrap(), 3);
+            release.send(()).unwrap();
+            request
+        });
+        for (expected, request) in [first, second, third].iter().enumerate() {
+            assert!(
+                matches!(request.wait(), PipelineStatus::Ready(value) if *value == expected as u32 + 1)
+            );
+        }
+        assert_eq!(pool.pending(), 0);
+        assert_eq!(pool.stats.misses, 3);
+    }
+
     #[test]
     fn completed_requests_ignore_the_waiter_lock() {
         let ready = PipelineRequest::ready(Arc::new(7));
         let _guard = ready.0.waiter.lock().unwrap();
         assert!(matches!(ready.poll(), PipelineStatus::Ready(value) if *value == 7));
+        assert!(matches!(ready.wait(), PipelineStatus::Ready(value) if *value == 7));
         assert!(
             matches!(ready.wait_until(Instant::now()), PipelineStatus::Ready(value) if *value == 7)
         );
@@ -342,5 +411,6 @@ mod deadline_tests {
             matches!(request.wait_until(Instant::now() + Duration::from_secs(5)), PipelineStatus::Failed(error) if error == "synthetic failure")
         );
         assert!(matches!(request.poll(), PipelineStatus::Failed(_)));
+        assert!(matches!(request.wait(), PipelineStatus::Failed(_)));
     }
 }
