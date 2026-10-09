@@ -858,6 +858,8 @@ impl Images {
         draws: &[super::graphics::PendingDraw],
         query: Option<vk::QueryPool>,
     ) -> Option<()> {
+        #[cfg(feature = "draw-metrics")]
+        let _span = crate::draw_metrics::PipelineSpan::new(11);
         let pipeline = &draws.first()?.pipeline;
         let extent = self.images.get(keys.first()?)?.info.extent;
         let mut views = [vk::ImageView::null(); 9];

@@ -1,4 +1,4 @@
-//! Content-keyed compute pipelines. Evidence: provenance 0025 and 0026.
+//! Content-keyed compute pipelines. Evidence: provenance 0025, 0026, and 0037.
 use super::{Context, GlobalMemory};
 use crate::{ShaderTranslator, SHADER_STAGE_UNKNOWN};
 use ash::vk;
@@ -7,7 +7,7 @@ use std::{
     path::Path,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
     },
 };
 
@@ -252,7 +252,8 @@ struct Compiler {
 
 pub(super) struct DriverCache {
     context: Arc<Context>,
-    driver_cache: Mutex<vk::PipelineCache>,
+    driver_cache: RwLock<vk::PipelineCache>,
+    persist_lock: Mutex<()>,
     disk: Option<super::pipeline_disk::DiskCache>,
     driver_cache_loaded: bool,
     translation_hits: AtomicU64,
@@ -313,7 +314,8 @@ impl DriverCache {
             };
         Ok(Arc::new(Self {
             context: context.clone(),
-            driver_cache: Mutex::new(driver_cache),
+            driver_cache: RwLock::new(driver_cache),
+            persist_lock: Mutex::new(()),
             disk,
             driver_cache_loaded,
             translation_hits: AtomicU64::new(0),
@@ -340,14 +342,21 @@ impl DriverCache {
         &self,
         create: impl FnOnce(&Arc<Context>, vk::PipelineCache) -> Result<P, String>,
     ) -> Result<P, String> {
-        let cache = self.driver_cache.lock().unwrap();
+        #[cfg(feature = "draw-metrics")]
+        let span = crate::draw_metrics::PipelineSpan::new(9);
+        let cache = self.driver_cache.read().unwrap();
+        #[cfg(feature = "draw-metrics")]
+        drop(span);
         create(&self.context, *cache)
     }
 
+    // A snapshot must exclude concurrent Vulkan calls even though its handle is immutable.
+    #[allow(clippy::readonly_write_lock)]
     pub(super) fn persist_driver(&self) {
         let Some(disk) = &self.disk else { return };
+        let _writer = self.persist_lock.lock().unwrap();
         let bytes = {
-            let cache = self.driver_cache.lock().unwrap();
+            let cache = self.driver_cache.write().unwrap();
             // SAFETY: this lock excludes all creation and snapshot calls on the cache.
             unsafe { self.context.device.get_pipeline_cache_data(*cache) }
         };
@@ -395,7 +404,7 @@ impl Compiler {
         let created = {
             // Serialize Vulkan creation with driver snapshots. Translation and I/O
             // happen outside this lock; workers never use the queue or command pools.
-            let cache = self.driver.driver_cache.lock().unwrap();
+            let cache = self.driver.driver_cache.read().unwrap();
             ComputePipeline::create(&self.driver.context, *cache, &words)
         };
         let pipeline = match created {
@@ -404,7 +413,7 @@ impl Compiler {
                 self.driver
                     .diagnostic(format!("discard translation cache: {error}"));
                 let words = self.translator.translate(SHADER_STAGE_UNKNOWN, program)?;
-                let cache = self.driver.driver_cache.lock().unwrap();
+                let cache = self.driver.driver_cache.read().unwrap();
                 let pipeline = Arc::new(ComputePipeline::create(
                     &self.driver.context,
                     *cache,

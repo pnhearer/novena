@@ -1,4 +1,4 @@
-//! Bounded owned pipeline requests. Evidence: provenance 0026 and 0027.
+//! Bounded owned pipeline requests. Evidence: provenance 0026, 0027, 0037, and 0038.
 /// Cumulative request reuse and insertion counters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CacheStats {
@@ -11,9 +11,10 @@ use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicU8, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc, Arc, Condvar, Mutex, OnceLock,
     },
     thread::{self, JoinHandle},
+    time::Instant,
 };
 
 /// A frame polls this state and skips the draw unless Ready is returned.
@@ -29,8 +30,10 @@ pub enum PipelineStatus<P> {
 }
 
 struct RequestState<P> {
+    completed: Condvar,
     phase: AtomicU8,
-    result: Mutex<Option<Result<Arc<P>, String>>>,
+    result: OnceLock<Result<Arc<P>, String>>,
+    waiter: Mutex<()>,
 }
 
 /// Owned completion handle. Replacing a program replaces its handle, so an old
@@ -46,24 +49,49 @@ impl<P> Clone for PipelineRequest<P> {
 impl<P> PipelineRequest<P> {
     /// Create an already completed request retaining the supplied shared result.
     pub fn ready(value: Arc<P>) -> Self {
+        Self::completed(Ok(value))
+    }
+
+    pub(crate) fn completed(result: Result<Arc<P>, String>) -> Self {
         Self(Arc::new(RequestState {
+            completed: Condvar::new(),
             phase: AtomicU8::new(2),
-            result: Mutex::new(Some(Ok(value))),
+            result: OnceLock::from(result),
+            waiter: Mutex::new(()),
         }))
+    }
+
+    /// Wait for completion until one shared draw deadline, then return a snapshot.
+    pub fn wait_until(&self, deadline: Instant) -> PipelineStatus<P> {
+        if self.0.result.get().is_some() {
+            return self.poll();
+        }
+        let guard = self.0.waiter.lock().unwrap_or_else(|p| p.into_inner());
+        let (_guard, _) = self
+            .0
+            .completed
+            .wait_timeout_while(
+                guard,
+                deadline.saturating_duration_since(Instant::now()),
+                |_| self.0.result.get().is_none(),
+            )
+            .unwrap_or_else(|p| p.into_inner());
+        self.poll()
     }
 
     /// Return the current phase without waiting for compilation.
     pub fn poll(&self) -> PipelineStatus<P> {
+        #[cfg(feature = "draw-metrics")]
+        let _span = crate::draw_metrics::PipelineSpan::new(10);
+        if let Some(result) = self.0.result.get() {
+            return match result {
+                Ok(pipeline) => PipelineStatus::Ready(pipeline.clone()),
+                Err(error) => PipelineStatus::Failed(error.clone()),
+            };
+        }
         match self.0.phase.load(Ordering::Acquire) {
             0 => PipelineStatus::Queued,
-            1 => PipelineStatus::Compiling,
-            _ => match self.0.result.try_lock() {
-                Ok(result) => match result.as_ref().expect("completed request has a result") {
-                    Ok(pipeline) => PipelineStatus::Ready(pipeline.clone()),
-                    Err(error) => PipelineStatus::Failed(error.clone()),
-                },
-                Err(_) => PipelineStatus::Compiling,
-            },
+            _ => PipelineStatus::Compiling,
         }
     }
 }
@@ -116,8 +144,10 @@ impl<K: Eq + std::hash::Hash + Clone + Send + 'static, P: Send + Sync + 'static>
                     (
                         program,
                         PipelineRequest(Arc::new(RequestState {
+                            completed: Condvar::new(),
                             phase: AtomicU8::new(2),
-                            result: Mutex::new(Some(Ok(pipeline))),
+                            result: OnceLock::from(Ok(pipeline)),
+                            waiter: Mutex::new(()),
                         })),
                     )
                 })
@@ -142,8 +172,10 @@ impl<K: Eq + std::hash::Hash + Clone + Send + 'static, P: Send + Sync + 'static>
                         compiler(&job.program)
                     }))
                     .unwrap_or_else(|_| Err("pipeline compiler panicked".into()));
-                    *job.state.result.lock().unwrap() = Some(compiled);
+                    let _guard = job.state.waiter.lock().unwrap();
+                    assert!(job.state.result.set(compiled).is_ok());
                     job.state.phase.store(2, Ordering::Release);
+                    job.state.completed.notify_all();
                 })
                 .map_err(|error| format!("start pipeline worker: {error}"))?;
             result.workers.push(worker);
@@ -159,8 +191,10 @@ impl<K: Eq + std::hash::Hash + Clone + Send + 'static, P: Send + Sync + 'static>
             return Ok(request.clone());
         }
         let state = Arc::new(RequestState {
+            completed: Condvar::new(),
             phase: AtomicU8::new(0),
-            result: Mutex::new(None),
+            result: OnceLock::new(),
+            waiter: Mutex::new(()),
         });
         self.sender
             .as_ref()
@@ -229,3 +263,84 @@ impl<P> PartialEq for PipelineRequest<P> {
     }
 }
 impl<P> Eq for PipelineRequest<P> {}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn one_deadline_bounds_waiting_and_completion_wakes_waiters() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let mut pool = AsyncPipelines::new(
+            HashMap::new(),
+            CacheStats::default(),
+            1,
+            1,
+            move |key: &u32| {
+                started_tx.send(()).unwrap();
+                release_rx.lock().unwrap().recv().unwrap();
+                Ok(Arc::new(*key))
+            },
+        )
+        .unwrap();
+        let first = pool.request(7).unwrap();
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let second = pool.request(8).unwrap();
+        assert_eq!(pool.request(9).unwrap_err(), RequestError::QueueFull);
+        let start = Instant::now();
+        let deadline = start + Duration::from_millis(5);
+        assert!(matches!(
+            first.wait_until(deadline),
+            PipelineStatus::Compiling
+        ));
+        assert!(matches!(
+            second.wait_until(deadline),
+            PipelineStatus::Queued
+        ));
+        assert!(
+            start.elapsed() < Duration::from_millis(250),
+            "wait exceeded shared deadline"
+        );
+        release_tx.send(()).unwrap();
+        assert!(
+            matches!(first.wait_until(Instant::now() + Duration::from_secs(5)), PipelineStatus::Ready(value) if *value == 7)
+        );
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        release_tx.send(()).unwrap();
+        assert!(
+            matches!(second.wait_until(Instant::now() + Duration::from_secs(5)), PipelineStatus::Ready(value) if *value == 8)
+        );
+    }
+
+    #[test]
+    fn completed_requests_ignore_the_waiter_lock() {
+        let ready = PipelineRequest::ready(Arc::new(7));
+        let _guard = ready.0.waiter.lock().unwrap();
+        assert!(matches!(ready.poll(), PipelineStatus::Ready(value) if *value == 7));
+        assert!(
+            matches!(ready.wait_until(Instant::now()), PipelineStatus::Ready(value) if *value == 7)
+        );
+        let failed = PipelineRequest::<u32>::completed(Err("retained failure".into()));
+        let _guard = failed.0.waiter.lock().unwrap();
+        assert!(
+            matches!(failed.poll(), PipelineStatus::Failed(error) if error == "retained failure")
+        );
+    }
+
+    #[test]
+    fn waiting_preserves_failed_results() {
+        let mut pool =
+            AsyncPipelines::<u32, u32>::new(HashMap::new(), CacheStats::default(), 1, 1, |_| {
+                Err("synthetic failure".into())
+            })
+            .unwrap();
+        let request = pool.request(1).unwrap();
+        assert!(
+            matches!(request.wait_until(Instant::now() + Duration::from_secs(5)), PipelineStatus::Failed(error) if error == "synthetic failure")
+        );
+        assert!(matches!(request.poll(), PipelineStatus::Failed(_)));
+    }
+}

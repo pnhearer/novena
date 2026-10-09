@@ -1,0 +1,123 @@
+{
+  "schema": "response-rsi/tasks/v4",
+  "judge_protocol": "response-rsi/semantic-judge/v1",
+  "tasks": [
+    {
+      "task_id": "graphics-first-use-measurement-20261009",
+      "split": "dev",
+      "prompt": "Explain the graphics first-use experiment and its timing limits. Use the checked process summaries and distinguish median gains from remaining tail spikes.",
+      "criteria": [
+        {
+          "criterion_id": "measured-interval",
+          "instruction": "Describe first draw recording through completed expected pixel readback, five fresh processes and 24 translated fragment variants, and explain that setup and translation are outside the interval.",
+          "weight": 1,
+          "evidence_ids": [
+            "interval"
+          ]
+        },
+        {
+          "criterion_id": "honest-comparison",
+          "instruction": "Report the default skip medians and remaining tail costs without claiming all stutter is gone.",
+          "weight": 1,
+          "evidence_ids": [
+            "comparison"
+          ]
+        }
+      ],
+      "evidence": [
+        {
+          "evidence_id": "interval",
+          "path": "docs/provenance/0037-graphics-libraries.md",
+          "contains": "First-use time starts before recording the first draw that needs the new\npipeline and ends after its expected color appears in completed pixel readback."
+        },
+        {
+          "evidence_id": "comparison",
+          "path": "docs/provenance/0037-graphics-libraries.md",
+          "contains": "| First use, p50 | 30.403 | 24.283 | 18.276 |"
+        }
+      ]
+    },
+    {
+      "task_id": "graphics-subset-reuse-20261009",
+      "split": "dev",
+      "prompt": "Describe which graphics parts must change when only translated fragment words change, and how the implementation proves reusable parts instead of relying on timing.",
+      "criteria": [
+        {
+          "criterion_id": "subset-reuse",
+          "instruction": "Explain that compatible input, raster, and output parts are reused while fragment words change. Include layout and render-pass compatibility constraints.",
+          "weight": 1,
+          "evidence_ids": [
+            "keys"
+          ]
+        },
+        {
+          "criterion_id": "creation-counts",
+          "instruction": "Use actual subset creation counts to distinguish library execution from fallback whole-pipeline compilation.",
+          "weight": 1,
+          "evidence_ids": [
+            "counts"
+          ]
+        }
+      ],
+      "evidence": [
+        {
+          "evidence_id": "keys",
+          "path": "docs/provenance/0037-graphics-libraries.md",
+          "contains": "Shader subsets also include storage choice, the complete descriptor layout\nsignature, and render-pass compatibility."
+        },
+        {
+          "evidence_id": "counts",
+          "path": "docs/provenance/0037-graphics-libraries.md",
+          "contains": "For each library process, counters prove exactly one vertex-input part, one\npre-rasterization part, 24 fragment parts, one output part, and 24 links."
+        }
+      ]
+    },
+    {
+      "task_id": "graphics-pressure-policy-20261009",
+      "split": "heldout",
+      "prompt": "Assess whether a graphics wait budget is a frame-time guarantee, and explain startup and persistence behavior under a one-slot worker queue.",
+      "criteria": [
+        {
+          "criterion_id": "bounded-wait",
+          "instruction": "Explain one shared deadline, timeout skipping, retained failures, and the distinction between compilation waiting and total frame or driver link time.",
+          "weight": 1,
+          "evidence_ids": [
+            "deadline"
+          ]
+        },
+        {
+          "criterion_id": "startup-pressure",
+          "instruction": "Explain retained partial admission, later retries, worker-based startup linking, and serialized persistence snapshots.",
+          "weight": 1,
+          "evidence_ids": [
+            "admission",
+            "prewarm",
+            "snapshot"
+          ]
+        }
+      ],
+      "evidence": [
+        {
+          "evidence_id": "deadline",
+          "path": "docs/provenance/0037-graphics-libraries.md",
+          "contains": "One deadline covers waiting for all parts and an asynchronous link."
+        },
+        {
+          "evidence_id": "admission",
+          "path": "docs/provenance/0037-graphics-libraries.md",
+          "contains": "Partial queue admission retains accepted requests. Later draws and startup\npolling retry the remaining parts."
+        },
+        {
+          "evidence_id": "prewarm",
+          "path": "docs/provenance/0037-graphics-libraries.md",
+          "contains": "Pending-count polling advances\npartial admission and schedules the executable link on a worker once the parts\nfinish."
+        },
+        {
+          "evidence_id": "snapshot",
+          "path": "docs/provenance/0037-graphics-libraries.md",
+          "contains": "A separate writer lock serializes snapshot persistence so an older save\ncannot replace a newer snapshot."
+        }
+      ]
+    }
+  ]
+}

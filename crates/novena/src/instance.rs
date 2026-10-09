@@ -552,6 +552,7 @@ impl InstanceState {
     ) -> Result<(), String> {
         let mut gpu = self.gpu.lock().unwrap_or_else(|p| p.into_inner());
         let backend = gpu.as_mut().ok_or("Vulkan backend is unavailable")?;
+        let policy = backend.graphics.policy();
         backend.graphics = crate::gpu::graphics::GraphicsPipelines::persistent(
             backend.context(),
             directory,
@@ -559,7 +560,51 @@ impl InstanceState {
             worker_count,
             queue_capacity,
         )?;
+        backend.graphics.set_policy(policy)?;
         Ok(())
+    }
+
+    /// Choose skipping or a shared wait budget for unfinished draws. Evidence: provenance 0037.
+    /// Call outside submission. Budgets above 16 milliseconds are rejected.
+    #[cfg(feature = "vulkan")]
+    pub fn set_pending_draw_policy(
+        &self,
+        policy: crate::gpu::graphics::PendingDrawPolicy,
+    ) -> Result<(), String> {
+        self.gpu
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_mut()
+            .ok_or("Vulkan backend is unavailable")?
+            .graphics
+            .set_policy(policy)
+    }
+
+    /// Return successful graphics part, link, and whole-pipeline creation counts.
+    #[cfg(feature = "vulkan")]
+    pub fn graphics_compilation_stats(
+        &self,
+    ) -> Option<crate::gpu::graphics::GraphicsCompilationStats> {
+        self.gpu
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map(|backend| backend.graphics.compilation_stats())
+    }
+
+    /// Return whether graphics library compilation and draw-time linking are enabled.
+    #[cfg(feature = "vulkan")]
+    pub fn graphics_library_support(&self) -> Option<(bool, bool)> {
+        self.gpu
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map(|backend| {
+                (
+                    backend.context().graphics_pipeline_libraries,
+                    backend.context().graphics_pipeline_fast_linking,
+                )
+            })
     }
 
     /// Queued and compiling graphics requests. Polling performs no disk I/O.
@@ -568,7 +613,7 @@ impl InstanceState {
         self.gpu
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .as_ref()
+            .as_mut()
             .map(|backend| backend.graphics.pending())
     }
 

@@ -80,3 +80,9 @@ fn textured_uniform_banks_and_persistence() {
 fn cold_and_warm_first_draw() {
     support::run("startup::cold_and_warm_first_draw");
 }
+
+#[test]
+#[ignore = "requires the translator and a Vulkan GPU; fresh-process timing"]
+fn translated_pipeline_first_use() {
+    support::run("latency::translated_pipeline_first_use");
+}

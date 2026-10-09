@@ -3120,3 +3120,6 @@ fn textured_uniform_banks_and_persistence() {
 
 #[path = "startup_drawing.rs"]
 mod startup;
+
+#[path = "pipeline_latency.rs"]
+mod latency;

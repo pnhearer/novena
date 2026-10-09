@@ -1,4 +1,4 @@
-//! Vulkan backing for the flat address space. Provenance: 0022-flat-global-memory.
+//! Vulkan backing for the flat address space. Provenance: 0022-flat-global-memory and 0038.
 
 use super::Context;
 use crate::global_memory::{
@@ -60,6 +60,8 @@ impl GlobalMemory {
                         .contains(visible)
             })
             .collect();
+        // Submission reads the mapped arena as well as writing it. Prefer cached
+        // coherent memory, then device-local memory among equally cached choices.
         candidates.sort_by_key(|&ty| {
             let flags = properties.memory_types[ty as usize].property_flags;
             (
@@ -360,9 +362,13 @@ impl GlobalMemory {
             .iter()
             .map(|(&key, &pool)| (key, pool))
             .collect();
+        #[cfg(feature = "draw-metrics")]
+        let wait_span = crate::draw_metrics::PipelineSpan::new(15);
         if self.context.wait_queue().is_none() {
             return false;
         }
+        #[cfg(feature = "draw-metrics")]
+        drop(wait_span);
         let mut bytes = vec![0; 64 * 1024];
         for (key, pool) in pools {
             let mut offset = 0;
@@ -371,6 +377,8 @@ impl GlobalMemory {
                 let Some(at) = self.pool_offset(key, offset, length) else {
                     return false;
                 };
+                #[cfg(feature = "draw-metrics")]
+                let read_span = crate::draw_metrics::PipelineSpan::new(16);
                 unsafe {
                     std::ptr::copy_nonoverlapping(
                         (self.mapped as *const u8).add(at as usize),
@@ -378,6 +386,8 @@ impl GlobalMemory {
                         length,
                     );
                 }
+                #[cfg(feature = "draw-metrics")]
+                drop(read_span);
                 if !write(pool.storage + offset, &bytes[..length]) {
                     return false;
                 }
