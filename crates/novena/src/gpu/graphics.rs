@@ -335,6 +335,8 @@ pub(crate) struct GraphicsPipelines {
     driver: Arc<DriverCache>,
     requires_storage: bool,
     pool: AsyncPipelines<Key, GraphicsPipeline>,
+    ready_ids: HashMap<u64, Vec<usize>>,
+    ready: Vec<(Key, Arc<GraphicsPipeline>)>,
 }
 impl GraphicsPipelines {
     /// Create reusable execution resources; return None if Vulkan setup fails.
@@ -384,6 +386,8 @@ impl GraphicsPipelines {
         Ok(Self {
             driver,
             pool,
+            ready_ids: HashMap::new(),
+            ready: Vec::new(),
             requires_storage: u64::from(limits.max_uniform_buffer_range) < BANK_SIZE,
         })
     }
@@ -398,14 +402,50 @@ impl GraphicsPipelines {
     ) -> Result<Option<Arc<GraphicsPipeline>>, String> {
         #[cfg(feature = "draw-metrics")]
         let _span = crate::draw_metrics::Span::new(0);
-        let key = Key::new(stages, input, topology, state, self.uses_storage(storage))?;
+        use std::hash::{Hash, Hasher};
+        let storage = self.uses_storage(storage);
+        let mut shader_hashes = [0; 2];
+        if stages.len() == 2 {
+            for (hash, words) in shader_hashes.iter_mut().zip(stages) {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                words.hash(&mut hasher);
+                *hash = hasher.finish();
+            }
+            shader_hashes.sort_unstable();
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (&shader_hashes, &input, topology, state, storage).hash(&mut hasher);
+        let fingerprint = hasher.finish();
+        if let Some(ids) = self.ready_ids.get(&fingerprint) {
+            for &id in ids {
+                let (key, pipeline) = &self.ready[id];
+                if key.input == input
+                    && key.topology == topology
+                    && key.state == state
+                    && key.storage == storage
+                    && stages.len() == 2
+                    && ((stages[0] == key.vertex && stages[1] == key.fragment)
+                        || (stages[1] == key.vertex && stages[0] == key.fragment))
+                {
+                    self.pool.stats.hits += 1;
+                    return Ok(Some(pipeline.clone()));
+                }
+            }
+        }
+        let key = Key::new(stages, input, topology, state, storage)?;
+        let retained = key.clone();
         let request = match self.pool.request(key) {
             Ok(request) => request,
             Err(RequestError::QueueFull) => return Ok(None),
             Err(RequestError::Stopped) => return Err("graphics compiler stopped".into()),
         };
         match request.poll() {
-            PipelineStatus::Ready(pipeline) => Ok(Some(pipeline)),
+            PipelineStatus::Ready(pipeline) => {
+                let id = self.ready.len();
+                self.ready.push((retained, pipeline.clone()));
+                self.ready_ids.entry(fingerprint).or_default().push(id);
+                Ok(Some(pipeline))
+            }
             PipelineStatus::Failed(error) => Err(error),
             PipelineStatus::Queued | PipelineStatus::Compiling => Ok(None),
         }
@@ -426,6 +466,17 @@ impl GraphicsPipelines {
             Ok(_) => Ok(true),
             Err(RequestError::QueueFull) => Ok(false),
             Err(RequestError::Stopped) => Err("graphics compiler stopped".into()),
+        }
+    }
+
+    pub(super) fn invalidate_descriptors(&mut self) {
+        for (_, pipeline) in &self.ready {
+            let mut cache = pipeline
+                .descriptors
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            cache.ids.clear();
+            cache.entries.clear();
         }
     }
 
@@ -533,14 +584,11 @@ pub(crate) struct Draw {
     pub viewport: vk::Viewport,
     /// Dynamic Vulkan scissor in pixel coordinates.
     pub scissor: vk::Rect2D,
-    /// Array or indexed draw selection.
-    pub vertices: DrawVertices,
-    /// Number of vertices or indices in the draw.
-    pub count: u32,
-    /// Owned descriptor sets and backing uniform resources for this draw.
-    pub descriptors: DrawDescriptors,
+    /// Immutable descriptors shared by draws with identical resource ranges.
+    pub descriptors: Arc<DrawDescriptors>,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) enum DrawVertices {
     Arrays {
         first: u32,
@@ -653,6 +701,9 @@ pub(crate) struct GraphicsPipeline {
     pub textures: Vec<super::textures::Binding>,
     /// Whether banks use storage buffers.
     pub storage: bool,
+    pub batch_safe: bool,
+    descriptors: std::sync::Mutex<DescriptorCache>,
+    push_set: Option<u32>,
 }
 
 impl GraphicsPipeline {
@@ -809,6 +860,14 @@ impl GraphicsPipeline {
             pipeline: vk::Pipeline::null(),
             layout: vk::PipelineLayout::null(),
             set_layouts: Vec::new(),
+            descriptors: std::sync::Mutex::new(DescriptorCache::default()),
+            push_set: None,
+            batch_safe: [&key.vertex, &key.fragment].iter().all(|words| {
+                instructions(words).is_ok_and(|ops| {
+                    !ops.iter()
+                        .any(|&(op, args)| op == 32 && args.get(1) == Some(&5349))
+                })
+            }),
             banks,
             textures,
             storage: key.storage,
@@ -870,6 +929,22 @@ impl GraphicsPipeline {
                 if limits.max_bound_descriptor_sets < 4 {
                     return Err("four draw descriptor sets are unavailable".into());
                 }
+                if context.push_descriptors.is_some() {
+                    result.push_set = (0..4)
+                        .filter_map(|set| {
+                            let count =
+                                result.banks.iter().filter(|b| b.stage.set() == set).count()
+                                    + result
+                                        .textures
+                                        .iter()
+                                        .filter(|b| b.stage_set() == set)
+                                        .count();
+                            (count != 0 && count <= context.max_push_descriptors.min(64) as usize)
+                                .then_some((set, count))
+                        })
+                        .max_by_key(|&(_, count)| count)
+                        .map(|(set, _)| set);
+                }
                 for set in 0..4 {
                     let stage = if set % 2 == 0 {
                         UniformStage::Vertex
@@ -898,7 +973,13 @@ impl GraphicsPipeline {
                                 },
                             ))
                             .collect();
-                    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+                    let info = vk::DescriptorSetLayoutCreateInfo::default()
+                        .bindings(&bindings)
+                        .flags(if result.push_set == Some(set) {
+                            vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR
+                        } else {
+                            vk::DescriptorSetLayoutCreateFlags::empty()
+                        });
                     let mut support = vk::DescriptorSetLayoutSupport::default();
                     context
                         .device
@@ -1058,19 +1139,46 @@ impl GraphicsPipeline {
         &self,
         buffers: &[vk::DescriptorBufferInfo],
         images: &[vk::DescriptorImageInfo],
-    ) -> Result<DrawDescriptors, String> {
+    ) -> Result<Arc<DrawDescriptors>, String> {
         #[cfg(feature = "draw-metrics")]
         let _span = crate::draw_metrics::Span::new(1);
         if buffers.len() != self.banks.len() || images.len() != self.textures.len() {
             return Err("missing constant bank ranges".into());
         }
+        use ash::vk::Handle;
+        let key = DescriptorKey {
+            buffers: buffers
+                .iter()
+                .map(|b| (b.buffer.as_raw(), b.offset, b.range))
+                .collect(),
+            images: images
+                .iter()
+                .map(|i| {
+                    (
+                        i.sampler.as_raw(),
+                        i.image_view.as_raw(),
+                        i.image_layout.as_raw(),
+                    )
+                })
+                .collect(),
+        };
+        let mut cache = self.descriptors.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(&id) = cache.ids.get(&key) {
+            return Ok(cache.entries[id].clone());
+        }
+        if cache.entries.len() == 256 {
+            cache.ids.clear();
+            cache.entries.clear();
+        }
         let mut result = DrawDescriptors {
             context: self.context.clone(),
             pool: vk::DescriptorPool::null(),
             sets: Vec::new(),
+            buffers: buffers.to_vec(),
+            images: images.to_vec(),
         };
         if self.banks.is_empty() && self.textures.is_empty() {
-            return Ok(result);
+            return Ok(Arc::new(result));
         }
         unsafe {
             let mut sizes = Vec::new();
@@ -1099,6 +1207,8 @@ impl GraphicsPipeline {
                     );
                 }
             }
+            #[cfg(feature = "draw-metrics")]
+            crate::draw_metrics::count(1);
             result.pool = self
                 .context
                 .device
@@ -1109,15 +1219,21 @@ impl GraphicsPipeline {
                     None,
                 )
                 .map_err(|e| format!("create draw descriptor pool: {e:?}"))?;
-            result.sets = self
-                .context
-                .device
-                .allocate_descriptor_sets(
-                    &vk::DescriptorSetAllocateInfo::default()
-                        .descriptor_pool(result.pool)
-                        .set_layouts(&self.set_layouts),
-                )
-                .map_err(|e| format!("allocate draw descriptors: {e:?}"))?;
+            result.sets = vec![vk::DescriptorSet::null(); self.set_layouts.len()];
+            for (set, &layout) in self.set_layouts.iter().enumerate() {
+                if self.push_set == Some(set as u32) {
+                    continue;
+                }
+                result.sets[set] = self
+                    .context
+                    .device
+                    .allocate_descriptor_sets(
+                        &vk::DescriptorSetAllocateInfo::default()
+                            .descriptor_pool(result.pool)
+                            .set_layouts(std::slice::from_ref(&layout)),
+                    )
+                    .map_err(|e| format!("allocate draw descriptors: {e:?}"))?[0];
+            }
             let mut writes: Vec<_> = self
                 .banks
                 .iter()
@@ -1137,27 +1253,75 @@ impl GraphicsPipeline {
                     .descriptor_type(b.ty)
                     .image_info(std::slice::from_ref(info))
             }));
+            writes.retain(|w| w.dst_set != vk::DescriptorSet::null());
+            #[cfg(feature = "draw-metrics")]
+            if !writes.is_empty() {
+                crate::draw_metrics::count(0);
+            }
             self.context.device.update_descriptor_sets(&writes, &[]);
         }
+        let result = Arc::new(result);
+        let id = cache.entries.len();
+        cache.entries.push(result.clone());
+        cache.ids.insert(key, id);
         Ok(result)
     }
 
     /// Caller owns the active compatible render pass, live arena slice and completion.
     pub unsafe fn record(&self, command: vk::CommandBuffer, memory: &GlobalMemory, draw: &Draw) {
+        #[cfg(feature = "draw-metrics")]
+        crate::draw_metrics::count(2);
         let device = &self.context.device;
         device.cmd_bind_pipeline(command, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
         for &(binding, buffer, offset) in &draw.buffers {
             device.cmd_bind_vertex_buffers(command, binding, &[buffer], &[offset]);
         }
-        if !draw.descriptors.sets.is_empty() {
-            device.cmd_bind_descriptor_sets(
-                command,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.layout,
-                0,
-                &draw.descriptors.sets,
-                &[],
-            );
+        for (set, &handle) in draw.descriptors.sets.iter().enumerate() {
+            if handle != vk::DescriptorSet::null() {
+                device.cmd_bind_descriptor_sets(
+                    command,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.layout,
+                    set as u32,
+                    &[handle],
+                    &[],
+                );
+            }
+        }
+        if let Some(set) = self.push_set {
+            #[cfg(feature = "draw-metrics")]
+            crate::draw_metrics::count(4);
+            let mut writes = [vk::WriteDescriptorSet::default(); 64];
+            let mut count = 0;
+            for (bank, buffer) in self.banks.iter().zip(&draw.descriptors.buffers) {
+                if bank.stage.set() == set {
+                    writes[count] = vk::WriteDescriptorSet::default()
+                        .dst_binding(bank.bank)
+                        .descriptor_type(self.descriptor_type())
+                        .buffer_info(std::slice::from_ref(buffer));
+                    count += 1;
+                }
+            }
+            for (binding, image) in self.textures.iter().zip(&draw.descriptors.images) {
+                if binding.stage_set() == set {
+                    writes[count] = vk::WriteDescriptorSet::default()
+                        .dst_binding(binding.lowered())
+                        .descriptor_type(binding.ty)
+                        .image_info(std::slice::from_ref(image));
+                    count += 1;
+                }
+            }
+            self.context
+                .push_descriptors
+                .as_ref()
+                .unwrap()
+                .cmd_push_descriptor_set(
+                    command,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.layout,
+                    set,
+                    &writes[..count],
+                );
         }
         device.cmd_set_viewport(command, 0, &[draw.viewport]);
         device.cmd_set_scissor(command, 0, &[draw.scissor]);
@@ -1166,16 +1330,29 @@ impl GraphicsPipeline {
             self.layout,
             vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
         );
-        match draw.vertices {
-            DrawVertices::Arrays { first } => device.cmd_draw(command, draw.count, 1, first, 0),
+    }
+
+    /// Record geometry after the retained draw state has been bound.
+    pub unsafe fn record_vertices(
+        &self,
+        command: vk::CommandBuffer,
+        vertices: DrawVertices,
+        count: u32,
+        bind_index: bool,
+    ) {
+        let device = &self.context.device;
+        match vertices {
+            DrawVertices::Arrays { first } => device.cmd_draw(command, count, 1, first, 0),
             DrawVertices::Elements {
                 buffer,
                 offset,
                 index_type,
                 base_vertex,
             } => {
-                device.cmd_bind_index_buffer(command, buffer, offset, index_type);
-                device.cmd_draw_indexed(command, draw.count, 1, 0, base_vertex, 0);
+                if bind_index {
+                    device.cmd_bind_index_buffer(command, buffer, offset, index_type);
+                }
+                device.cmd_draw_indexed(command, count, 1, 0, base_vertex, 0);
             }
         }
     }
@@ -1200,11 +1377,30 @@ impl Drop for GraphicsPipeline {
     }
 }
 
+#[derive(Hash, PartialEq, Eq)]
+struct DescriptorKey {
+    buffers: Vec<(u64, u64, u64)>,
+    images: Vec<(u64, u64, i32)>,
+}
+#[derive(Default)]
+struct DescriptorCache {
+    ids: HashMap<DescriptorKey, usize>,
+    entries: Vec<Arc<DrawDescriptors>>,
+}
+pub(super) struct PendingDraw {
+    pub pipeline: Arc<GraphicsPipeline>,
+    pub state: Arc<Draw>,
+    pub vertices: DrawVertices,
+    pub count: u32,
+}
+
 /// Per-draw sets and pool retained until synchronous submission completes.
 pub(crate) struct DrawDescriptors {
     context: Arc<Context>,
     pool: vk::DescriptorPool,
     sets: Vec<vk::DescriptorSet>,
+    buffers: Vec<vk::DescriptorBufferInfo>,
+    images: Vec<vk::DescriptorImageInfo>,
 }
 impl Drop for DrawDescriptors {
     fn drop(&mut self) {

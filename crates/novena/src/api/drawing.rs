@@ -12,7 +12,7 @@ use crate::{
     Instance, Status,
 };
 use ash::vk;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 type Settings = StateSettings;
 
@@ -31,7 +31,7 @@ pub(super) struct Request<'a> {
     pub count: u32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Vertices {
     Arrays {
         first: u32,
@@ -87,11 +87,24 @@ pub(super) struct State {
     unsupported: bool,
     stencil_commands: Vec<(&'static str, u64, u64)>,
     bias: Option<[u64; 3]>,
+    prepared: Option<Prepared>,
 }
 
+struct Prepared {
+    targets: Vec<u64>,
+    depth: u64,
+    primitive: u32,
+    draw: Arc<Draw>,
+    pipeline: Arc<crate::gpu::graphics::GraphicsPipeline>,
+    fetches: Vec<(u32, u32, u32, u64)>,
+    source: Vertices,
+    count: u32,
+    vertices: DrawVertices,
+}
 impl State {
     /// Update retained draw state from a recorded command.
     pub fn record(&mut self, command: RecordedCommand) {
+        self.prepared = None;
         match command {
             RecordedCommand::State(StateCommand::SetDescriptorPool { sampler, pool }) => {
                 if sampler {
@@ -330,11 +343,51 @@ impl State {
 
     /// Execute one bounded draw using explicit host contracts; report unsupported state.
     pub fn execute(
-        &self,
+        &mut self,
         instance: &Instance,
         backend: &mut Backend,
         request: Request<'_>,
     ) -> Result<(), Status> {
+        if let Some(prepared) = &self.prepared {
+            if request.views == [0, 0]
+                && prepared.targets == request.targets
+                && prepared.depth == request.depth
+                && prepared.primitive == request.primitive
+            {
+                let vertices = match request.vertices {
+                    Vertices::Arrays { first } => {
+                        for &(stride, offset, bytes, size) in &prepared.fetches {
+                            if vertex_end(first, request.count, stride, offset, bytes)
+                                .ok_or(Status::BadArgument)?
+                                > size
+                            {
+                                return Err(Status::BadArgument);
+                            }
+                        }
+                        Some(DrawVertices::Arrays { first })
+                    }
+                    source if source == prepared.source && request.count == prepared.count => {
+                        Some(prepared.vertices)
+                    }
+                    _ => None,
+                };
+                if let Some(vertices) = vertices {
+                    #[cfg(feature = "draw-metrics")]
+                    crate::draw_metrics::count(3);
+                    return backend
+                        .queue_draw(
+                            request.targets,
+                            (request.depth != 0).then_some(request.depth),
+                            prepared.pipeline.clone(),
+                            prepared.draw.clone(),
+                            vertices,
+                            request.count,
+                        )
+                        .ok_or(Status::InternalError);
+                }
+            }
+        }
+        backend.finish_draws().ok_or(Status::InternalError)?;
         let Request {
             targets,
             depth,
@@ -432,6 +485,24 @@ impl State {
         } else {
             None
         };
+        let mut attachment_ranges = [(0_u64, 0_u64, 0_u64); 9];
+        for (at, d) in descriptions
+            .iter()
+            .chain(depth_description.iter())
+            .enumerate()
+        {
+            let bytes = backend.texture_storage_size(d).map_or_else(
+                || {
+                    d.width
+                        .saturating_mul(d.height)
+                        .saturating_mul(if at < descriptions.len() { 4 } else { 5 })
+                },
+                |bytes| bytes as u64,
+            );
+            attachment_ranges[at] = (d.pool, d.pool_offset, bytes);
+        }
+        let attachment_ranges =
+            &attachment_ranges[..descriptions.len() + usize::from(depth_description.is_some())];
         let context = backend.context().clone();
         let memory = backend.global_memory.as_mut().ok_or(Status::BadArgument)?;
         let mut input = VertexInput {
@@ -440,6 +511,7 @@ impl State {
         };
         let mut buffers = Vec::new();
         let mut fetches = Vec::new();
+        let mut independent = true;
         for attribute in attributes {
             let format = value(attribute, "Format")?;
             let format_kind =
@@ -484,6 +556,9 @@ impl State {
                     return Err(Status::BadArgument);
                 }
             }
+            independent &= !attachment_ranges.iter().any(|&(pool, offset, bytes)| {
+                pool == resolution.pool && ranges_overlap(offset, bytes, resolution.offset, size)
+            });
             fetches.push((stride, offset, bytes, size));
             input.attributes.push(VertexAttribute {
                 binding,
@@ -497,6 +572,7 @@ impl State {
         }
         input.bindings.sort_unstable_by_key(|b| b.binding);
         buffers.sort_unstable_by_key(|b| b.0);
+        let source = vertices;
         let vertices = match vertices {
             Vertices::Arrays { first } => DrawVertices::Arrays { first },
             Vertices::Elements {
@@ -523,6 +599,10 @@ impl State {
                     .resolve_gpu_address(indices)
                     .map_err(|_| Status::BadArgument)?;
                 let length = u64::from(count) * format.width() as u64;
+                independent &= !attachment_ranges.iter().any(|&(pool, offset, bytes)| {
+                    pool == index_resolution.pool
+                        && ranges_overlap(offset, bytes, index_resolution.offset, length)
+                });
                 if length > index_resolution.remaining {
                     return Err(Status::BadArgument);
                 }
@@ -538,7 +618,7 @@ impl State {
                 }
                 // Read canonical bytes, including earlier completed GPU writes in this submission.
                 // Bounded chunks avoid allocating a count-sized host copy.
-                let mut bytes = vec![0; 64 * 1024];
+                let mut bytes = [0; 64 * 1024];
                 let mut read = 0;
                 while read < length {
                     let chunk = (length - read).min(bytes.len() as u64) as usize;
@@ -642,56 +722,73 @@ impl State {
         let storage = backend
             .graphics
             .uses_storage(backend.uniforms.storage_buffers);
-        #[cfg(feature = "draw-metrics")]
-        let uniform_span = crate::draw_metrics::Span::new(2);
-        let mut uniform_buffers = Vec::new();
-        for stage in [UniformStage::Vertex, UniformStage::Fragment] {
-            let words = stages
-                .iter()
-                .find(|words| execution_model(words).ok() == Some(stage.model()))
-                .ok_or(Status::Unimplemented)?;
-            for bank in uniforms::banks(words, stage).map_err(|_| Status::Unimplemented)? {
-                let mapping = backend
-                    .uniforms
-                    .bindings
-                    .iter()
-                    .find(|m| m.target == stage && m.bank == bank.bank)
-                    .ok_or(Status::Unimplemented)?;
-                let &(address, size) = self
-                    .uniforms
-                    .get(&(mapping.stage, mapping.index))
-                    .ok_or(Status::Unimplemented)?;
-                let resolution = instance
-                    .objects
-                    .resolve_gpu_address(address)
-                    .map_err(|_| Status::BadArgument)?;
-                if size == 0
-                    || size > BANK_SIZE
-                    || !size.is_multiple_of(16)
-                    || size > resolution.remaining
-                {
-                    return Err(Status::BadArgument);
-                }
-                let info = if storage {
-                    memory.storage_buffer_info(resolution.pool, resolution.offset, size)
-                } else {
-                    memory.uniform_buffer_info(resolution.pool, resolution.offset, size)
-                }
-                .ok_or(Status::BadArgument)?;
-                uniform_buffers.push(info);
-            }
-        }
-        #[cfg(feature = "draw-metrics")]
-        drop(uniform_span);
         if let Some(cache) = instance.startup_cache.lock().unwrap().as_mut() {
             cache.schedule(&mut backend.graphics);
         }
         let recipe_input = input.clone();
-        let Some(pipeline) = backend
+        let pipeline = backend
             .graphics
             .request(&stages, input, topology, pipeline_state, storage)
-            .map_err(|_| Status::Unimplemented)?
-        else {
+            .map_err(|_| Status::Unimplemented)?;
+        let pending_banks;
+        let banks = if let Some(pipeline) = &pipeline {
+            &pipeline.banks
+        } else {
+            pending_banks = [UniformStage::Vertex, UniformStage::Fragment]
+                .into_iter()
+                .map(|stage| {
+                    let words = stages
+                        .iter()
+                        .find(|words| execution_model(words).ok() == Some(stage.model()))
+                        .ok_or(Status::Unimplemented)?;
+                    uniforms::banks(words, stage).map_err(|_| Status::Unimplemented)
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            &pending_banks
+        };
+        #[cfg(feature = "draw-metrics")]
+        let uniform_span = crate::draw_metrics::Span::new(2);
+        let mut uniform_buffers = Vec::new();
+        for bank in banks {
+            let stage = bank.stage;
+            let mapping = backend
+                .uniforms
+                .bindings
+                .iter()
+                .find(|m| m.target == stage && m.bank == bank.bank)
+                .ok_or(Status::Unimplemented)?;
+            let &(address, size) = self
+                .uniforms
+                .get(&(mapping.stage, mapping.index))
+                .ok_or(Status::Unimplemented)?;
+            let resolution = instance
+                .objects
+                .resolve_gpu_address(address)
+                .map_err(|_| Status::BadArgument)?;
+            if size == 0
+                || size > BANK_SIZE
+                || !size.is_multiple_of(16)
+                || size > resolution.remaining
+            {
+                return Err(Status::BadArgument);
+            }
+            independent &= !attachment_ranges.iter().any(|&(pool, offset, bytes)| {
+                pool == resolution.pool && ranges_overlap(offset, bytes, resolution.offset, size)
+            });
+            let info = if storage {
+                memory.storage_buffer_info(resolution.pool, resolution.offset, size)
+            } else {
+                memory.uniform_buffer_info(resolution.pool, resolution.offset, size)
+            }
+            .ok_or(Status::BadArgument)?;
+            uniform_buffers.push(info);
+        }
+        #[cfg(feature = "draw-metrics")]
+        drop(uniform_span);
+        let Some(pipeline) = pipeline else {
             return Ok(());
         };
         if translation_keys.len() == stages.len() {
@@ -866,11 +963,9 @@ impl State {
         let descriptors = pipeline
             .descriptors(&uniform_buffers, &texture_infos)
             .map_err(|_| Status::InternalError)?;
-        let draw = Draw {
+        let draw = Arc::new(Draw {
             descriptors,
             buffers,
-            vertices,
-            count,
             viewport: vk::Viewport {
                 x: 0.0,
                 y: 0.0,
@@ -883,9 +978,29 @@ impl State {
                 width: scissor[0],
                 height: scissor[1],
             }),
-        };
+        });
+        if independent && pipeline.batch_safe {
+            self.prepared = Some(Prepared {
+                targets: targets.to_vec(),
+                depth,
+                primitive,
+                draw: draw.clone(),
+                pipeline: pipeline.clone(),
+                fetches,
+                source,
+                count,
+                vertices,
+            });
+        }
         backend
-            .draw(targets, depth_description.map(|_| depth), &pipeline, &draw)
+            .queue_draw(
+                targets,
+                depth_description.map(|_| depth),
+                pipeline,
+                draw,
+                vertices,
+                count,
+            )
             .ok_or(Status::InternalError)
     }
 

@@ -172,12 +172,35 @@ pub fn handler(name: &str) -> Option<Handler> {
                     let Some(commands) = commands else {
                         continue;
                     };
+                    #[cfg(feature = "vulkan")]
+                    if let Some(backend) = gpu.as_mut() {
+                        backend.reserve_draws(commands.len());
+                    }
                     let mut targets = Vec::new();
                     let mut depth_target = 0;
                     let mut target_views = [0, 0];
                     #[cfg(feature = "vulkan")]
                     let mut draw_state = super::drawing::State::default();
-                    for command in commands {
+                    let mut commands = commands;
+                    for command in commands.drain(..) {
+                        #[cfg(feature = "vulkan")]
+                        if !matches!(
+                            &command,
+                            RecordedCommand::DrawArrays { .. }
+                                | RecordedCommand::DrawElementsBaseVertex { .. }
+                                | RecordedCommand::SetViewport(_)
+                                | RecordedCommand::SetScissor(_)
+                                | RecordedCommand::SetDepthRange(_)
+                                | RecordedCommand::BindProgram(_)
+                                | RecordedCommand::BindState { .. }
+                                | RecordedCommand::State(_)
+                        ) {
+                            if let Some(backend) = gpu.as_mut() {
+                                if backend.finish_draws().is_none() {
+                                    return Status::InternalError;
+                                }
+                            }
+                        }
                         match command {
                             RecordedCommand::SetRenderTargets {
                                 colors,
@@ -477,9 +500,16 @@ pub fn handler(name: &str) -> Option<Handler> {
                             }
                         }
                     }
+                    instance.objects.recycle_recording(handle, commands);
                 }
                 Status::Ok
             })();
+            #[cfg(feature = "vulkan")]
+            if let Some(backend) = gpu.as_mut() {
+                if backend.finish_draws().is_none() {
+                    return Status::InternalError;
+                }
+            }
             #[cfg(feature = "vulkan")]
             if let Some(memory) = gpu
                 .as_mut()

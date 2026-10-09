@@ -171,10 +171,10 @@ impl Commands {
         let buffers = [frame.command];
         let waits = [frame.acquire];
         let stages = [vk::PipelineStageFlags::TRANSFER];
-        let signals: Vec<_> = signal.into_iter().collect();
+        let signals = [signal.unwrap_or(vk::Semaphore::null())];
         let mut submit = vk::SubmitInfo::default()
             .command_buffers(&buffers)
-            .signal_semaphores(&signals);
+            .signal_semaphores(&signals[..usize::from(signal.is_some())]);
         if wait {
             submit = submit.wait_semaphores(&waits).wait_dst_stage_mask(&stages);
         }
@@ -204,7 +204,7 @@ impl Commands {
         if self.failed {
             return None;
         }
-        let fences: Vec<_> = self.frames.iter().map(|frame| frame.fence).collect();
+        let fences: [_; FRAMES] = std::array::from_fn(|i| self.frames[i].fence);
         unsafe {
             self.context
                 .device

@@ -18,11 +18,19 @@ use std::{
 use support::{call, compile, hosted, put, register_marker, Memory, Shaders};
 
 fn main() {
-    let frames: usize = std::env::args()
-        .nth(1)
-        .map(|s| s.parse().unwrap())
-        .unwrap_or(5);
-    assert!(frames > 0);
+    let mut args = std::env::args().skip(1);
+    let frames = args.next().map(|s| s.parse().unwrap()).unwrap_or(5);
+    let draws = args.next().map(|s| s.parse().unwrap()).unwrap_or(10_000);
+    let indexed = args.next().is_some_and(|s| s == "indexed");
+    run(frames, draws, indexed);
+}
+
+fn run(frames: usize, draws_per_frame: usize, indexed: bool) {
+    scene(frames, draws_per_frame, indexed, false);
+}
+
+fn scene(frames: usize, draws_per_frame: usize, indexed: bool, fail_tail: bool) {
+    assert!(frames > 0 && draws_per_frame > 0 && draws_per_frame.is_multiple_of(100));
     let scratch = std::env::temp_dir().join(format!("draw-bench-{}", std::process::id()));
     fs::create_dir(&scratch).expect("create temporary shader directory");
     let vertex = compile(
@@ -144,6 +152,14 @@ fn main() {
         &[0.5_f32, 0.5, 0.5, 1.0]
             .into_iter()
             .flat_map(f32::to_le_bytes)
+            .collect::<Vec<_>>(),
+    );
+    put(
+        &memory,
+        0x1200,
+        &[0_u16, 1, 2]
+            .into_iter()
+            .flat_map(u16::to_le_bytes)
             .collect::<Vec<_>>(),
     );
     put(&memory, 0x100, &4_u64.to_le_bytes());
@@ -322,11 +338,14 @@ fn main() {
     let mut commands = 0;
     let mut elapsed = Duration::ZERO;
     let mut metrics = [(0_u64, 0_u64); 3];
+    let mut counts = [0_u64; 5];
+    let calls = std::cell::Cell::new(0_u64);
     let mut ids = std::collections::HashMap::new();
     for (id, name) in novena::functions::all() {
         ids.insert(&name[3..], id);
     }
     let invoke = |suffix: &str, args: &[u64]| {
+        calls.set(calls.get() + 1);
         let mut r = novena::Registers::default();
         r.x[..args.len()].copy_from_slice(args);
         assert_eq!(instance.call(ids[suffix], &mut r), novena::Status::Ok);
@@ -334,6 +353,20 @@ fn main() {
     };
     // One full frame warms capacities, descriptor identities and all sampled images.
     for frame in 0..=frames {
+        let factor = if frame.is_multiple_of(2) {
+            1.0_f32
+        } else {
+            0.5_f32
+        };
+        put(
+            &memory,
+            0x7800,
+            &[factor; 4]
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+                .collect::<Vec<_>>(),
+        );
+        let call_start = calls.get();
         let wall = Instant::now();
         let allocation_start = ALLOCATIONS.load(std::sync::atomic::Ordering::Relaxed);
         let cpu = cpu_time();
@@ -355,9 +388,10 @@ fn main() {
         invoke("CommandBufferSetTexturePool", &[7, 32]);
         invoke("CommandBufferSetSamplerPool", &[7, 33]);
         invoke("CommandBufferBindSeparateSampler", &[7, 5, 3, 257]);
-        for draw in 0..10_000 {
-            if draw % 100 == 0 {
-                let group = draw / 100;
+        for draw in 0..draws_per_frame {
+            let width = draws_per_frame / 100;
+            if draw.is_multiple_of(width) {
+                let group = draw / width;
                 invoke(
                     "CommandBufferBindSeparateTexture",
                     &[7, 5, 3, [256, 258, 259][group % 3]],
@@ -368,39 +402,83 @@ fn main() {
                 );
                 invoke(
                     "CommandBufferSetScissor",
-                    &[7, 0, 0, if group % 2 == 0 { 64 } else { 48 }, 64],
+                    &[7, 0, 0, if group.is_multiple_of(2) { 64 } else { 48 }, 64],
                 );
             }
-            invoke("CommandBufferDrawArrays", &[7, 1, 0, 3]);
+            if indexed {
+                invoke(
+                    "CommandBufferDrawElementsBaseVertex",
+                    &[7, 1, 6, 3, base + 0x200, 0],
+                );
+            } else {
+                invoke("CommandBufferDrawArrays", &[7, 1, 0, 3]);
+            }
+        }
+        if fail_tail {
+            invoke("CommandBufferDrawArrays", &[7, 1, u64::from(u32::MAX), 0]);
+            invoke("CommandBufferDrawArrays", &[7, 1, 0, 4]);
         }
         let handle = invoke("CommandBufferEndRecording", &[7]);
+        let recorded_commands = calls.get() - call_start - 2;
         let recorded_cpu = cpu_time() - cpu;
         let recorded_allocs =
             ALLOCATIONS.load(std::sync::atomic::Ordering::Relaxed) - allocation_start;
         put(&memory, 0x300, &handle.to_le_bytes());
         novena::draw_metrics::take();
+        novena::draw_metrics::take_counts();
         let allocation_start = ALLOCATIONS.load(std::sync::atomic::Ordering::Relaxed);
         let cpu = cpu_time();
-        invoke("QueueSubmitCommands", &[0, 1, 0x300]);
+        let mut submit = novena::Registers::default();
+        submit.x[..3].copy_from_slice(&[0, 1, 0x300]);
+        assert_eq!(
+            instance.call(ids["QueueSubmitCommands"], &mut submit),
+            if fail_tail {
+                novena::Status::BadArgument
+            } else {
+                novena::Status::Ok
+            }
+        );
         let submitted_cpu = cpu_time() - cpu;
         let submitted_allocs =
             ALLOCATIONS.load(std::sync::atomic::Ordering::Relaxed) - allocation_start;
         let spans = novena::draw_metrics::take();
+        let operations = novena::draw_metrics::take_counts();
         if frame != 0 {
             record_cpu += recorded_cpu;
             submit_cpu += submitted_cpu;
             record_allocs += recorded_allocs;
             submit_allocs += submitted_allocs;
-            commands += 10_316;
+            commands += recorded_commands;
             elapsed += wall.elapsed();
+            for i in 0..5 {
+                counts[i] += operations[i];
+            }
             for i in 0..3 {
                 metrics[i].0 += spans[i].0;
                 metrics[i].1 += spans[i].1;
             }
         }
+        let pixels = memory.0.lock().unwrap();
+        let at = 0x2000 + (20 * 64 + 20) * 4;
+        assert_eq!(
+            &pixels[at..at + 4],
+            &[128, 128, 128, 255],
+            "last group must use its own texture and uniform range"
+        );
+        let at = 0x2000 + (10 * 64 + 52) * 4;
+        let expected = if frame.is_multiple_of(2) {
+            [128, 128, 128, 255]
+        } else {
+            [64, 64, 64, 128]
+        };
+        assert_eq!(
+            &pixels[at..at + 4],
+            &expected,
+            "scissor must preserve the preceding group's updated uniform bytes"
+        );
     }
-    let draws = frames as f64 * 10_000.0;
-    println!("frames={frames} draws_per_frame=10000 record_ns_per_command={:.2} submit_cpu_ns_per_draw={:.2} fps={:.3} record_allocations_per_frame={} submit_allocations_per_frame={}",
+    let draws = frames as f64 * draws_per_frame as f64;
+    println!("frames={frames} draws_per_frame={draws_per_frame} record_ns_per_command={:.2} submit_cpu_ns_per_draw={:.2} fps={:.3} record_allocations_per_frame={} submit_allocations_per_frame={}",
         record_cpu as f64/commands as f64,submit_cpu as f64/draws,frames as f64/elapsed.as_secs_f64(),record_allocs/frames as u64,submit_allocs/frames as u64);
     for (label, (nanos, calls)) in ["pipeline", "descriptor", "uniform"]
         .into_iter()
@@ -413,7 +491,41 @@ fn main() {
             nanos as f64 / calls.max(1) as f64
         );
     }
+    println!("descriptor_updates_per_frame={} descriptor_pools_per_frame={} state_binds_per_frame={} retained_draws_per_frame={} push_writes_per_frame={}", counts[0]/frames as u64, counts[1]/frames as u64, counts[2]/frames as u64, counts[3]/frames as u64, counts[4]/frames as u64);
+    assert_eq!(
+        &counts[..4],
+        &[
+            0,
+            0,
+            frames as u64 * 100,
+            frames as u64 * (draws_per_frame as u64 - 100 + u64::from(fail_tail))
+        ],
+        "warm groups must reuse descriptors and bind once"
+    );
+    assert!(
+        submit_allocs / (frames as u64) < 5_000,
+        "allocation count must depend on groups"
+    );
     assert!(instance.take_graphics_cache_diagnostics().is_empty());
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    #[ignore = "requires a Vulkan GPU and shader tools"]
+    fn grouped_draws_reuse_resources() {
+        super::run(1, 10_000, false);
+    }
+    #[test]
+    #[ignore = "requires a Vulkan GPU and shader tools"]
+    fn grouped_indexed_draws_reuse_resources() {
+        super::run(1, 10_000, true);
+    }
+    #[test]
+    #[ignore = "requires a Vulkan GPU and shader tools"]
+    fn retained_bounds_and_partial_completion() {
+        super::scene(1, 10_000, false, true);
+    }
 }
 
 use std::alloc::{GlobalAlloc, Layout, System};

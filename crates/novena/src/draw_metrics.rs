@@ -26,3 +26,12 @@ impl Drop for Span {
         CALLS[self.0].fetch_add(1, Ordering::Relaxed);
     }
 }
+
+/// Actual descriptor updates, pool creations, state binds, retained draw hits, and push writes.
+pub fn take_counts() -> [u64; 5] {
+    std::array::from_fn(|i| COUNTS[i].swap(0, Ordering::Relaxed))
+}
+static COUNTS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+pub(crate) fn count(index: usize) {
+    COUNTS[index].fetch_add(1, Ordering::Relaxed);
+}

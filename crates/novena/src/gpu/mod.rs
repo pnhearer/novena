@@ -94,6 +94,8 @@ pub struct Context {
     /// Indices of families for which the device created queues.
     pub queue_families: Vec<u32>,
     swapchain: bool,
+    pub(crate) push_descriptors: Option<ash::khr::push_descriptor::Device>,
+    pub(crate) max_push_descriptors: u32,
 }
 
 /// Vulkan images, presentation, pipelines, and lazily allocated arena storage.
@@ -109,6 +111,9 @@ pub struct Backend {
     windows: HashMap<u64, Window>,
     offscreen: Option<Image>,
     images: Images,
+    pending_draws: Vec<graphics::PendingDraw>,
+    draw_targets: Vec<u64>,
+    draw_depth: Option<u64>,
     bindings: HashMap<u64, (u64, u64, usize)>,
     tiled: HashMap<u64, crate::tiling::Layout>,
     /// Flat mapped arena, present after the first successful pool allocation.
@@ -137,6 +142,9 @@ impl Backend {
             windows: HashMap::new(),
             offscreen: None,
             images,
+            pending_draws: Vec::new(),
+            draw_targets: Vec::new(),
+            draw_depth: None,
             bindings: HashMap::new(),
             tiled: HashMap::new(),
             context,
@@ -407,6 +415,7 @@ impl Backend {
         key: textures::SamplerKey,
     ) -> Option<vk::Sampler> {
         if self.samplers.get(&(pool, id)).is_none_or(|s| s.key != key) {
+            self.graphics.invalidate_descriptors();
             self.samplers
                 .insert((pool, id), textures::Sampler::new(&self.context, key)?);
         }
@@ -550,6 +559,7 @@ impl Backend {
 
     /// Remove the image and arena binding for a texture key.
     pub fn release_texture(&mut self, key: u64) {
+        self.graphics.invalidate_descriptors();
         self.images.remove(key);
         self.bindings.remove(&key);
         self.tiled.remove(&key);
@@ -578,33 +588,70 @@ impl Backend {
         .is_some()
     }
 
-    pub(crate) fn draw(
+    pub(crate) fn reserve_draws(&mut self, count: usize) {
+        self.pending_draws
+            .reserve(count.saturating_sub(self.pending_draws.len()));
+    }
+
+    pub(crate) fn queue_draw(
         &mut self,
         textures: &[u64],
         depth: Option<u64>,
-        pipeline: &graphics::GraphicsPipeline,
-        draw: &graphics::Draw,
+        pipeline: Arc<graphics::GraphicsPipeline>,
+        state: Arc<graphics::Draw>,
+        vertices: graphics::DrawVertices,
+        count: u32,
     ) -> Option<()> {
-        for &texture in textures {
-            self.sync_texture(texture, true)?;
+        if !self.pending_draws.is_empty()
+            && (textures != self.draw_targets
+                || depth != self.draw_depth
+                || !Arc::ptr_eq(&pipeline, &self.pending_draws[0].pipeline))
+        {
+            self.finish_draws()?;
         }
-        if let Some(depth) = depth {
-            self.sync_texture(depth, true)?;
+        if self.pending_draws.is_empty() {
+            self.draw_targets.clear();
+            self.draw_targets.extend_from_slice(textures);
+            self.draw_depth = depth;
         }
-        self.images.draw(
-            textures,
-            depth,
+        self.pending_draws.push(graphics::PendingDraw {
             pipeline,
-            self.global_memory.as_ref()?,
-            draw,
-        )?;
-        for &texture in textures {
-            self.sync_texture(texture, false)?;
-        }
-        if let Some(depth) = depth {
-            self.sync_texture(depth, false)?;
-        }
+            state,
+            vertices,
+            count,
+        });
         Some(())
+    }
+
+    pub(crate) fn finish_draws(&mut self) -> Option<()> {
+        if self.pending_draws.is_empty() {
+            return Some(());
+        }
+        // Take reusable vectors to release the borrow across resource synchronization.
+        let mut draws = std::mem::take(&mut self.pending_draws);
+        let targets = std::mem::take(&mut self.draw_targets);
+        let depth = self.draw_depth;
+        let result = (|| {
+            for &texture in &targets {
+                self.sync_texture(texture, true)?;
+            }
+            if let Some(depth) = depth {
+                self.sync_texture(depth, true)?;
+            }
+            self.images
+                .draw(&targets, depth, self.global_memory.as_ref()?, &draws)?;
+            for &texture in &targets {
+                self.sync_texture(texture, false)?;
+            }
+            if let Some(depth) = depth {
+                self.sync_texture(depth, false)?;
+            }
+            Some(())
+        })();
+        draws.clear();
+        self.pending_draws = draws;
+        self.draw_targets = targets;
+        result
     }
 
     /// Return unscaled RGBA image bytes and dimensions, or None on failure.
@@ -843,7 +890,18 @@ impl Context {
             .enumerate()
             .filter_map(|(i, family)| (family.queue_count > 0).then_some(i as u32))
             .collect();
+        let push_descriptors = Self::supports_push(&instance, pick)
+            .then(|| ash::khr::push_descriptor::Device::new(&instance, &device));
+        let mut push = vk::PhysicalDevicePushDescriptorPropertiesKHR::default();
+        let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut push);
+        if push_descriptors.is_some() {
+            unsafe {
+                instance.get_physical_device_properties2(pick, &mut properties);
+            }
+        }
         Some(Self {
+            push_descriptors,
+            max_push_descriptors: push.max_push_descriptors,
             entry,
             instance,
             physical_device: pick,
@@ -853,6 +911,16 @@ impl Context {
             shader_features,
             queue_families,
             swapchain,
+        })
+    }
+
+    fn supports_push(instance: &Instance, device: vk::PhysicalDevice) -> bool {
+        std::env::var_os("NOVENA_DISABLE_PUSH_DESCRIPTORS").is_none() && unsafe {
+            instance.enumerate_device_extension_properties(device)
+        }
+        .is_ok_and(|extensions| {
+            extensions.iter().any(|e| unsafe { std::ffi::CStr::from_ptr(e.extension_name.as_ptr()) }
+                    == ash::khr::push_descriptor::NAME)
         })
     }
 
@@ -934,11 +1002,13 @@ impl Context {
                         .queue_priorities(&priority)
                 })
                 .collect();
-            let extensions: Vec<_> = if swapchain {
-                vec![ash::khr::swapchain::NAME.as_ptr()]
-            } else {
-                Vec::new()
-            };
+            let mut extensions = Vec::new();
+            if swapchain {
+                extensions.push(ash::khr::swapchain::NAME.as_ptr());
+            }
+            if Self::supports_push(instance, pick) {
+                extensions.push(ash::khr::push_descriptor::NAME.as_ptr());
+            }
             let device_info = vk::DeviceCreateInfo::default()
                 .queue_create_infos(&queue_info)
                 .enabled_extension_names(&extensions)

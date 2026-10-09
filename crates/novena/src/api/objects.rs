@@ -621,54 +621,69 @@ impl Objects {
     /// Resolve assigned or observed GPU ranges to CPU storage. Observed addresses
     /// never replace an assigned Vulkan base.
     pub fn resolve_gpu_address(&self, address: u64) -> Result<GpuAddress, GpuAddressError> {
-        let mut pools: Vec<(u64, u64, u64, u64, bool)> = self
-            .lock()
-            .iter()
-            .flat_map(|(pool, object)| match object {
-                Object::MemoryPool {
+        let objects = self.lock();
+        let mut matched_base = None;
+        // Assigned ranges have precedence over the extra observed alias.
+        for alias in [false, true] {
+            for (&pool, object) in objects.iter() {
+                let Object::MemoryPool {
                     storage,
                     size,
                     gpu_address,
                     observed_gpu_address,
                     ..
-                } => {
-                    let base = gpu_address.or(*observed_gpu_address).unwrap_or(*storage);
-                    [
-                        Some((*pool, *storage, base, *size, false)),
-                        observed_gpu_address
-                            .filter(|observed| *observed != base)
-                            .map(|observed| (*pool, *storage, observed, *size, true)),
-                    ]
-                }
-                _ => [None, None],
-            })
-            .flatten()
-            .collect();
-        // An address in our device takes precedence over another driver's range.
-        pools.sort_by_key(|entry| entry.4);
-        let mut matched_base = None;
-        for (pool, storage, base, size, _) in pools {
-            let Some(offset) = address.checked_sub(base) else {
-                continue;
-            };
-            if offset < size {
-                let Some(program_address) = storage.checked_add(offset) else {
-                    return Err(GpuAddressError::UnknownAddress);
+                } = object
+                else {
+                    continue;
                 };
-                return Ok(GpuAddress {
-                    pool,
-                    offset,
-                    remaining: size - offset,
-                    program_address,
-                });
+                let assigned = gpu_address.or(*observed_gpu_address).unwrap_or(*storage);
+                let base = if alias {
+                    let Some(observed) =
+                        observed_gpu_address.filter(|observed| *observed != assigned)
+                    else {
+                        continue;
+                    };
+                    observed
+                } else {
+                    assigned
+                };
+                let Some(offset) = address.checked_sub(base) else {
+                    continue;
+                };
+                if offset < *size {
+                    let program_address = storage
+                        .checked_add(offset)
+                        .ok_or(GpuAddressError::UnknownAddress)?;
+                    return Ok(GpuAddress {
+                        pool,
+                        offset,
+                        remaining: size - offset,
+                        program_address,
+                    });
+                }
+                matched_base = Some(pool);
             }
-            matched_base = Some(pool);
         }
         Err(
             matched_base.map_or(GpuAddressError::UnknownAddress, |pool| {
                 GpuAddressError::OutsidePool { pool }
             }),
         )
+    }
+
+    pub(crate) fn recycle_recording(&self, handle: u64, mut consumed: Vec<RecordedCommand>) {
+        consumed.clear();
+        let owner = handle & ((1 << 48) - 1);
+        if let Some(Object::CommandBuffer {
+            commands,
+            recording: false,
+            ..
+        }) = self.lock().get_mut(&owner)
+        {
+            if commands.capacity() < consumed.capacity() {
+                *commands = consumed;
+            }
+        }
     }
 
     /// Every texture some window presents.

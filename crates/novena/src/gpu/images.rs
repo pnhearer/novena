@@ -394,6 +394,20 @@ impl Drop for Buffer {
     }
 }
 
+struct DrawFramebuffer {
+    context: Arc<Context>,
+    handle: vk::Framebuffer,
+    views: Vec<vk::ImageView>,
+    pipeline: Arc<super::graphics::GraphicsPipeline>,
+}
+impl Drop for DrawFramebuffer {
+    fn drop(&mut self) {
+        unsafe {
+            self.context.device.destroy_framebuffer(self.handle, None);
+        }
+    }
+}
+
 pub(super) struct Images {
     context: Arc<Context>,
     commands: Commands,
@@ -401,6 +415,14 @@ pub(super) struct Images {
     recycled: Vec<Image>,
     staging: Option<Buffer>,
     transfer: Option<Transfer>,
+    framebuffer: Option<DrawFramebuffer>,
+}
+
+impl Drop for Images {
+    fn drop(&mut self) {
+        let _ = self.commands.wait();
+        self.framebuffer = None;
+    }
 }
 
 impl Images {
@@ -413,6 +435,7 @@ impl Images {
             recycled: Vec::new(),
             staging: None,
             transfer: None,
+            framebuffer: None,
         })
     }
 
@@ -457,6 +480,7 @@ impl Images {
 
     /// Invalidate transfer recordings before pooling or destroying the removed image.
     pub fn remove(&mut self, key: u64) {
+        self.framebuffer = None;
         if let Some(image) = self.images.remove(&key) {
             // Destroying a referenced object invalidates executable recordings.
             self.commands.invalidate_cached();
@@ -652,37 +676,52 @@ impl Images {
         self.commands.submit(false, None)
     }
 
-    /// Record and complete a bounded draw into the selected images.
+    /// Record one group with shared attachments and complete it before releasing resources.
     pub fn draw(
         &mut self,
         keys: &[u64],
         depth: Option<u64>,
-        pipeline: &super::graphics::GraphicsPipeline,
         memory: &super::GlobalMemory,
-        draw: &super::graphics::Draw,
+        draws: &[super::graphics::PendingDraw],
     ) -> Option<()> {
+        let pipeline = &draws.first()?.pipeline;
         let extent = self.images.get(keys.first()?)?.info.extent;
-        let mut views = Vec::new();
-        for key in keys {
-            views.push(self.images.get_mut(key)?.view()?);
+        let mut views = [vk::ImageView::null(); 9];
+        for (at, key) in keys.iter().enumerate() {
+            views[at] = self.images.get_mut(key)?.view()?;
         }
         if let Some(depth) = depth {
-            views.push(self.images.get_mut(&depth)?.view()?);
+            views[keys.len()] = self.images.get_mut(&depth)?.view()?;
         }
+        let views = &views[..keys.len() + usize::from(depth.is_some())];
+        if self
+            .framebuffer
+            .as_ref()
+            .is_none_or(|f| f.views != views || !Arc::ptr_eq(&f.pipeline, pipeline))
+        {
+            let handle = unsafe {
+                self.context
+                    .device
+                    .create_framebuffer(
+                        &vk::FramebufferCreateInfo::default()
+                            .render_pass(pipeline.render_pass)
+                            .attachments(views)
+                            .width(extent.width)
+                            .height(extent.height)
+                            .layers(1),
+                        None,
+                    )
+                    .ok()?
+            };
+            self.framebuffer = Some(DrawFramebuffer {
+                context: self.context.clone(),
+                handle,
+                views: views.to_vec(),
+                pipeline: pipeline.clone(),
+            });
+        }
+        let framebuffer = self.framebuffer.as_ref()?.handle;
         let device = &self.context.device;
-        let framebuffer = unsafe {
-            device
-                .create_framebuffer(
-                    &vk::FramebufferCreateInfo::default()
-                        .render_pass(pipeline.render_pass)
-                        .attachments(&views)
-                        .width(extent.width)
-                        .height(extent.height)
-                        .layers(1),
-                    None,
-                )
-                .ok()?
-        };
         let result = (|| {
             let (cmd, _) = self.commands.begin()?;
             buffer_barrier(device, cmd);
@@ -708,17 +747,39 @@ impl Images {
                         })),
                     vk::SubpassContents::INLINE,
                 );
-                pipeline.record(cmd, memory, draw);
+                let mut previous = None;
+                let mut previous_index = None;
+                for draw in draws {
+                    let id = Arc::as_ptr(&draw.state);
+                    if previous != Some(id) {
+                        pipeline.record(cmd, memory, &draw.state);
+                        previous = Some(id);
+                    }
+                    let bind_index = if let super::graphics::DrawVertices::Elements {
+                        buffer,
+                        offset,
+                        index_type,
+                        ..
+                    } = draw.vertices
+                    {
+                        let index = (buffer, offset, index_type);
+                        let changed = previous_index != Some(index);
+                        previous_index = Some(index);
+                        changed
+                    } else {
+                        false
+                    };
+                    pipeline.record_vertices(cmd, draw.vertices, draw.count, bind_index);
+                }
                 device.cmd_end_render_pass(cmd);
             }
             self.commands.submit(false, None)?;
             self.commands.wait()
         })();
-        unsafe {
-            if result.is_none() {
+        if result.is_none() {
+            unsafe {
                 let _ = device.device_wait_idle();
             }
-            device.destroy_framebuffer(framebuffer, None);
         }
         result
     }
