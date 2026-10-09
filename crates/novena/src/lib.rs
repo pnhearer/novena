@@ -16,6 +16,7 @@
 #![deny(missing_docs)]
 
 pub mod api;
+mod execution;
 pub mod functions;
 pub mod global_memory;
 #[cfg(feature = "vulkan")]

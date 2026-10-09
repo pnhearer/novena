@@ -764,7 +764,7 @@ impl ComputePipeline {
         {
             return Err("workgroup count limit exceeded".into());
         }
-        let device = &self.context.device;
+        let device = &self.context.recorder();
         device.cmd_bind_pipeline(command, vk::PipelineBindPoint::COMPUTE, self.pipeline);
         if !sets.is_empty() {
             device.cmd_bind_descriptor_sets(

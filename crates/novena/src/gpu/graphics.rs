@@ -1140,7 +1140,7 @@ impl GraphicsPipeline {
 
     /// Caller owns the active compatible render pass, live arena slice and completion.
     pub unsafe fn record(&self, command: vk::CommandBuffer, memory: &GlobalMemory, draw: &Draw) {
-        let device = &self.context.device;
+        let device = &self.context.recorder();
         device.cmd_bind_pipeline(command, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
         for &(binding, buffer, offset) in &draw.buffers {
             device.cmd_bind_vertex_buffers(command, binding, &[buffer], &[offset]);

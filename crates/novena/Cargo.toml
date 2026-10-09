@@ -14,6 +14,7 @@ vulkan = ["dep:ash", "dep:blake3", "dep:serde", "dep:serde_json"]
 shadowbox = ["vulkan"]
 
 [dependencies]
+arc-swap = "1"
 ash = { version = "0.38", optional = true, default-features = false, features = ["loaded"] }
 blake3 = { version = "1", optional = true }
 sha2 = "0.10"
@@ -22,4 +23,8 @@ serde_json = { version = "1", optional = true }
 
 [[example]]
 name = "textured_triangle"
+required-features = ["vulkan"]
+
+[[example]]
+name = "recording_scale"
 required-features = ["vulkan"]

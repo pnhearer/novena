@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::sync::Arc;
 
+mod command_workers;
 mod commands;
 pub mod graphics;
 pub mod image_enums;
@@ -17,6 +18,7 @@ mod memory;
 mod pipeline_disk;
 mod pipeline_workers;
 mod present;
+mod recording_device;
 pub mod texture_transfer;
 pub mod textures;
 pub mod uniforms;
@@ -94,6 +96,7 @@ pub struct Context {
     /// Indices of families for which the device created queues.
     pub queue_families: Vec<u32>,
     swapchain: bool,
+    command_workers: command_workers::Runtime,
 }
 
 /// Vulkan images, presentation, pipelines, and lazily allocated arena storage.
@@ -824,7 +827,7 @@ impl Backend {
     }
 
     pub(crate) fn finish(&self) -> bool {
-        unsafe { self.context.device.device_wait_idle().is_ok() }
+        self.context.wait_idle().is_ok()
     }
 }
 
@@ -880,6 +883,7 @@ impl Context {
             entry,
             instance,
             physical_device: pick,
+            command_workers: command_workers::Runtime::new(&device, queue, family),
             device,
             queue,
             queue_family: family,
@@ -887,6 +891,14 @@ impl Context {
             queue_families,
             swapchain,
         })
+    }
+
+    fn recorder(&self) -> recording_device::RecordingDevice<'_> {
+        recording_device::RecordingDevice::new(&self.device)
+    }
+
+    pub(super) fn wait_idle(&self) -> Result<(), vk::Result> {
+        self.command_workers.wait_idle()
     }
 
     fn create_device(
@@ -989,6 +1001,7 @@ impl Context {
 
 impl Drop for Context {
     fn drop(&mut self) {
+        self.command_workers.shutdown();
         // SAFETY: all work submitted by this small context is complete before
         // it is dropped by the owning instance.
         unsafe {

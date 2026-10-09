@@ -305,6 +305,11 @@ fn api_clear_copy_and_present_share_arena_bytes() {
     let handle = call(&instance, "nvnCommandBufferEndRecording", &[7]);
     put(&state, 0x300, &handle.to_le_bytes());
     call(&instance, "nvnQueueSubmitCommands", &[0, 1, 0x300]);
+    let finish = functions::all()
+        .find(|(_, name)| name.ends_with("QueueFinish"))
+        .unwrap()
+        .1;
+    call(&instance, finish, &[0]);
     assert!(state.memory.lock().unwrap()[0x1080..0x1098]
         .as_chunks::<4>()
         .0

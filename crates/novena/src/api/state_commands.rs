@@ -98,19 +98,7 @@ fn record_state(instance: &Instance, function: FunctionId, r: &mut Registers) ->
             };
             // Counted object spacing is a host choice, not a guest layout. 0028.
             #[cfg(feature = "vulkan")]
-            let stride = instance
-                .gpu
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .as_ref()
-                .and_then(|gpu| gpu.first_draw.as_ref())
-                .and_then(|contract| {
-                    if kind == "VertexAttribState" {
-                        contract.attribute_state_stride
-                    } else {
-                        contract.stream_state_stride
-                    }
-                });
+            let stride = instance.recording_stride(kind);
             #[cfg(not(feature = "vulkan"))]
             let stride: Option<u64> = None;
             let count = r.x[1];
@@ -771,16 +759,7 @@ mod tests {
         let handle = r.x[0];
         memory.handle.store(handle, Ordering::Relaxed);
         // Assert that the submission actually consumed a nonempty recording.
-        instance.objects.update(0x200, |object| {
-            if let Object::CommandBuffer {
-                recording_handles, ..
-            } = object
-            {
-                assert_eq!(recording_handles[&handle].len(), NAMES.len());
-            } else {
-                panic!("command buffer");
-            }
-        });
+        assert_eq!(instance.objects.recording_len(handle), Some(NAMES.len()));
         r.x[..3].copy_from_slice(&[0x700, 1, 0x1000]);
         assert_eq!(call(&instance, "QueueSubmitCommands", &mut r), Status::Ok);
         assert!(instance.objects.recording(handle).is_none());

@@ -1,12 +1,13 @@
 //! Render images and transfers to canonical arena bytes. Provenance: 0026 and 0028; 0032.
 
 use super::image_layout::format_aspects;
+use super::recording_device::RecordingDevice as Device;
 use super::{
     commands::Commands, find_memory_type, image_layout::ImageDescriptor,
     texture_transfer::Transfer, Context,
 };
 use crate::tiling::{ImageKind, ImageShape, Layout, TileShape};
-use ash::{vk, vk::Handle, Device};
+use ash::{vk, vk::Handle};
 use std::{collections::HashMap, sync::Arc};
 
 #[derive(Clone, Copy)]
@@ -274,7 +275,7 @@ impl Image {
 
     /// Record a barrier to the requested layout and update tracked layout.
     pub fn transition(&mut self, command: vk::CommandBuffer, layout: vk::ImageLayout) {
-        transition(&self.context.device, command, self.info, layout);
+        transition(&self.context.recorder(), command, self.info, layout);
         self.info.layout = layout;
     }
 }
@@ -283,7 +284,7 @@ impl Drop for Image {
     fn drop(&mut self) {
         unsafe {
             // Includes presentation copies and callers using the context directly.
-            let _ = self.context.device.device_wait_idle();
+            let _ = self.context.wait_idle();
             for view in self.views.values() {
                 self.context.device.destroy_image_view(*view, None);
             }
@@ -384,7 +385,7 @@ impl Buffer {
 impl Drop for Buffer {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.context.device.device_wait_idle();
+            let _ = self.context.wait_idle();
             if !self.mapped.is_null() {
                 self.context.device.unmap_memory(self.memory);
             }
@@ -585,12 +586,12 @@ impl Images {
             return self.commands.submit(false, None);
         }
         let transfer = self.transfer.as_ref()?;
-        buffer_barrier(&self.context.device, cmd);
+        buffer_barrier(&self.context.recorder(), cmd);
         if grouped && load {
             for (&(_, address, packing), &offset) in resources.iter().zip(&offsets) {
                 transfer.record_disjoint(cmd, address, packing, true, offset)?;
             }
-            buffer_barrier(&self.context.device, cmd);
+            buffer_barrier(&self.context.recorder(), cmd);
         }
         for (&(key, address, packing), &offset) in resources.iter().zip(&offsets) {
             let image = self.images.get_mut(&key)?;
@@ -608,7 +609,7 @@ impl Images {
             let regions = buffer_regions(image.info, image.packing.as_ref(), offset as u64);
             unsafe {
                 if load {
-                    self.context.device.cmd_copy_buffer_to_image(
+                    self.context.recorder().cmd_copy_buffer_to_image(
                         cmd,
                         transfer.buffer(),
                         image.info.image,
@@ -616,7 +617,7 @@ impl Images {
                         &regions,
                     );
                 } else {
-                    self.context.device.cmd_copy_image_to_buffer(
+                    self.context.recorder().cmd_copy_image_to_buffer(
                         cmd,
                         image.info.image,
                         image.info.layout,
@@ -626,18 +627,18 @@ impl Images {
                 }
             }
             if !grouped {
-                buffer_barrier(&self.context.device, cmd);
+                buffer_barrier(&self.context.recorder(), cmd);
                 if !load {
                     transfer.record_at(cmd, address, packing, false, offset)?;
                 }
             }
         }
-        buffer_barrier(&self.context.device, cmd);
+        buffer_barrier(&self.context.recorder(), cmd);
         if grouped && !load {
             for (&(_, address, packing), &offset) in resources.iter().zip(&offsets) {
                 transfer.record_disjoint(cmd, address, packing, false, offset)?;
             }
-            buffer_barrier(&self.context.device, cmd);
+            buffer_barrier(&self.context.recorder(), cmd);
         }
         self.commands.submit(false, None)
     }
@@ -691,7 +692,7 @@ impl Images {
         if reused {
             return self.commands.submit(false, None);
         }
-        buffer_barrier(&self.context.device, cmd);
+        buffer_barrier(&self.context.recorder(), cmd);
         for &(key, buffer, offset, _) in resources {
             let image = self.images.get_mut(&key)?;
             image.transition(
@@ -705,7 +706,7 @@ impl Images {
             let regions = buffer_regions(image.info, image.packing.as_ref(), offset);
             unsafe {
                 if load {
-                    self.context.device.cmd_copy_buffer_to_image(
+                    self.context.recorder().cmd_copy_buffer_to_image(
                         cmd,
                         buffer,
                         image.info.image,
@@ -713,7 +714,7 @@ impl Images {
                         &regions,
                     );
                 } else {
-                    self.context.device.cmd_copy_image_to_buffer(
+                    self.context.recorder().cmd_copy_image_to_buffer(
                         cmd,
                         image.info.image,
                         image.info.layout,
@@ -723,10 +724,10 @@ impl Images {
                 }
             }
             if ordered {
-                buffer_barrier(&self.context.device, cmd);
+                buffer_barrier(&self.context.recorder(), cmd);
             }
         }
-        buffer_barrier(&self.context.device, cmd);
+        buffer_barrier(&self.context.recorder(), cmd);
         self.commands.submit(false, None)
     }
 
@@ -774,7 +775,7 @@ impl Images {
         let image = self.images.get_mut(&key)?;
         image.transition(cmd, vk::ImageLayout::TRANSFER_DST_OPTIMAL);
         unsafe {
-            self.context.device.cmd_clear_color_image(
+            self.context.recorder().cmd_clear_color_image(
                 cmd,
                 image.info.image,
                 image.info.layout,
@@ -802,7 +803,7 @@ impl Images {
         if let Some(depth) = depth {
             views.push(self.images.get_mut(&depth)?.view()?);
         }
-        let device = &self.context.device;
+        let device = &self.context.recorder();
         let framebuffer = unsafe {
             device
                 .create_framebuffer(
@@ -849,7 +850,7 @@ impl Images {
         })();
         unsafe {
             if result.is_none() {
-                let _ = device.device_wait_idle();
+                let _ = self.context.wait_idle();
             }
             device.destroy_framebuffer(framebuffer, None);
         }
@@ -865,7 +866,7 @@ impl Images {
         let image = self.images.get_mut(&key)?;
         image.transition(cmd, vk::ImageLayout::TRANSFER_DST_OPTIMAL);
         unsafe {
-            self.context.device.cmd_clear_depth_stencil_image(
+            self.context.recorder().cmd_clear_depth_stencil_image(
                 cmd,
                 image.info.image,
                 image.info.layout,
@@ -902,7 +903,7 @@ impl Images {
         }
         let (cmd, _) = self.commands.begin()?;
         let image = self.images.get_mut(&key)?;
-        buffer_barrier(&self.context.device, cmd);
+        buffer_barrier(&self.context.recorder(), cmd);
         let layout = if load {
             vk::ImageLayout::TRANSFER_DST_OPTIMAL
         } else {
@@ -912,7 +913,7 @@ impl Images {
         let regions = buffer_regions(image.info, image.packing.as_ref(), offset);
         unsafe {
             if load {
-                self.context.device.cmd_copy_buffer_to_image(
+                self.context.recorder().cmd_copy_buffer_to_image(
                     cmd,
                     buffer,
                     image.info.image,
@@ -920,14 +921,14 @@ impl Images {
                     &regions,
                 );
             } else {
-                self.context.device.cmd_copy_image_to_buffer(
+                self.context.recorder().cmd_copy_image_to_buffer(
                     cmd,
                     image.info.image,
                     layout,
                     buffer,
                     &regions,
                 );
-                buffer_barrier(&self.context.device, cmd);
+                buffer_barrier(&self.context.recorder(), cmd);
             }
         }
         self.commands.submit(false, None)
@@ -998,7 +999,7 @@ impl Images {
         let dst = self.images.get(&destination)?.info;
         unsafe {
             self.context
-                .device
+                .recorder()
                 .cmd_copy_image(cmd, src.image, src.layout, dst.image, dst.layout, regions);
         }
         self.commands.submit(false, None)
@@ -1108,7 +1109,7 @@ impl Images {
             })
         };
         unsafe {
-            self.context.device.cmd_blit_image(
+            self.context.recorder().cmd_blit_image(
                 cmd,
                 src.image,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
@@ -1154,7 +1155,7 @@ impl Images {
         let (cmd, _) = self.commands.begin()?;
         image.transition(cmd, vk::ImageLayout::TRANSFER_SRC_OPTIMAL);
         unsafe {
-            self.context.device.cmd_copy_image_to_buffer(
+            self.context.recorder().cmd_copy_image_to_buffer(
                 cmd,
                 image.info.image,
                 image.info.layout,
@@ -1162,7 +1163,7 @@ impl Images {
                 &buffer_regions(image.info, image.packing.as_ref(), 0),
             );
         }
-        buffer_barrier(&self.context.device, cmd);
+        buffer_barrier(&self.context.recorder(), cmd);
         self.commands.submit(false, None)?;
         self.commands.wait()?;
         staging.read(image.info.size as usize)
@@ -1175,7 +1176,7 @@ impl Images {
         }
         let (cmd, _) = self.commands.begin()?;
         record_present(
-            &self.context.device,
+            &self.context.recorder(),
             cmd,
             source,
             target.info,
@@ -1266,7 +1267,7 @@ fn buffer_regions(
 }
 
 pub(super) fn transition(
-    device: &Device,
+    device: &Device<'_>,
     cmd: vk::CommandBuffer,
     image: ImageInfo,
     layout: vk::ImageLayout,
@@ -1333,7 +1334,7 @@ pub(super) fn transition(
     }
 }
 
-pub(super) fn buffer_barrier(device: &Device, cmd: vk::CommandBuffer) {
+pub(super) fn buffer_barrier(device: &Device<'_>, cmd: vk::CommandBuffer) {
     unsafe {
         device.cmd_pipeline_barrier(
             cmd,
@@ -1371,7 +1372,7 @@ pub(super) fn can_blit(context: &Context, source: vk::Format, destination: vk::F
 
 /// Shared by swapchain and offscreen presentation, including conversion and scaling.
 pub(super) fn record_present(
-    device: &Device,
+    device: &Device<'_>,
     cmd: vk::CommandBuffer,
     source: ImageInfo,
     destination: ImageInfo,

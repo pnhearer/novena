@@ -26,212 +26,121 @@ pub(super) struct TransferKey {
 }
 
 struct Frame {
-    pool: vk::CommandPool,
-    command: vk::CommandBuffer,
-    fence: vk::Fence,
     acquire: vk::Semaphore,
-    cached: Option<Vec<TransferKey>>,
+    completion: Option<super::command_workers::Completion>,
+    cached: Option<(Vec<TransferKey>, Vec<super::recording_device::Operation>)>,
 }
-
 pub(super) struct Commands {
     context: Arc<Context>,
     frames: Vec<Frame>,
     next: usize,
-    failed: bool,
-    reusing: bool,
+    capture: Option<super::recording_device::Capture>,
+    replay: Option<Vec<super::recording_device::Operation>>,
     pending: Option<Vec<TransferKey>>,
 }
-
 impl Commands {
-    /// Create reusable execution resources; return None if Vulkan setup fails.
     pub fn new(context: &Arc<Context>) -> Option<Self> {
         let mut commands = Self {
-            context: Arc::clone(context),
+            context: context.clone(),
             frames: Vec::new(),
             next: 0,
-            failed: false,
-            reusing: false,
+            capture: None,
+            replay: None,
             pending: None,
         };
         for _ in 0..FRAMES {
-            let device = &context.device;
-            // Own each partially created frame before the next fallible call.
-            let pool = unsafe {
-                device
-                    .create_command_pool(
-                        &vk::CommandPoolCreateInfo::default()
-                            .queue_family_index(context.queue_family),
-                        None,
-                    )
-                    .ok()?
-            };
-            commands.frames.push(Frame {
-                pool,
-                command: vk::CommandBuffer::null(),
-                fence: vk::Fence::null(),
-                acquire: vk::Semaphore::null(),
-                cached: None,
-            });
-            let frame = commands.frames.last_mut()?;
-            frame.command = unsafe {
-                device
-                    .allocate_command_buffers(
-                        &vk::CommandBufferAllocateInfo::default()
-                            .command_pool(pool)
-                            .level(vk::CommandBufferLevel::PRIMARY)
-                            .command_buffer_count(1),
-                    )
-                    .ok()?[0]
-            };
-            frame.fence = unsafe {
-                device
-                    .create_fence(
-                        &vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED),
-                        None,
-                    )
-                    .ok()?
-            };
-            frame.acquire = unsafe {
-                device
+            let acquire = unsafe {
+                context
+                    .device
                     .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
                     .ok()?
             };
+            commands.frames.push(Frame {
+                acquire,
+                completion: None,
+                cached: None,
+            });
         }
         Some(commands)
     }
-
     pub fn slot(&self) -> usize {
         self.next
     }
-
     pub fn slots(&self) -> usize {
         self.frames.len()
     }
-
-    /// Wait and discard cached recordings before their resources change.
     pub fn invalidate_cached(&mut self) {
         for frame in &mut self.frames {
             frame.cached = None;
         }
         self.pending = None;
-        self.reusing = false;
+        self.replay = None;
     }
-
-    /// Begin a fresh command recording and return its reusable completion semaphore.
     pub fn begin(&mut self) -> Option<(vk::CommandBuffer, vk::Semaphore)> {
-        self.begin_with_flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+        self.capture.take();
+        self.replay = None;
+        self.pending = None;
+        let frame = &mut self.frames[self.next];
+        if let Some(completion) = frame.completion.take() {
+            completion.wait()?;
+        }
+        frame.cached = None;
+        let capture = super::recording_device::Capture::new();
+        let command = capture.command();
+        self.capture = Some(capture);
+        Some((command, frame.acquire))
     }
-
-    /// Select a transfer recording by complete identity; report whether it already exists.
     pub fn begin_cached(&mut self, key: Vec<TransferKey>) -> Option<(vk::CommandBuffer, bool)> {
-        if self.failed {
-            return None;
+        let frame = &mut self.frames[self.next];
+        if let Some(completion) = frame.completion.take() {
+            completion.wait()?;
         }
-        let frame = &self.frames[self.next];
-        if frame.cached.as_ref() == Some(&key) {
-            unsafe {
-                self.context
-                    .device
-                    .wait_for_fences(&[frame.fence], true, u64::MAX)
-                    .ok()?;
+        if let Some((cached, operations)) = &frame.cached {
+            if *cached == key {
+                self.capture.take();
+                self.pending = None;
+                self.replay = Some(operations.clone());
+                return Some((vk::CommandBuffer::null(), true));
             }
-            self.reusing = true;
-            self.pending = None;
-            return Some((frame.command, true));
         }
-        let (command, _) = self.begin_with_flags(vk::CommandBufferUsageFlags::empty())?;
+        let (command, _) = self.begin()?;
         self.pending = Some(key);
         Some((command, false))
     }
-
-    fn begin_with_flags(
-        &mut self,
-        flags: vk::CommandBufferUsageFlags,
-    ) -> Option<(vk::CommandBuffer, vk::Semaphore)> {
-        self.reusing = false;
-        self.pending = None;
-        self.frames[self.next].cached = None;
-        if self.failed {
-            return None;
-        }
-        let frame = &self.frames[self.next];
-        let device = &self.context.device;
-        unsafe {
-            device
-                .wait_for_fences(&[frame.fence], true, u64::MAX)
-                .ok()?;
-            device
-                .reset_command_pool(frame.pool, vk::CommandPoolResetFlags::empty())
-                .ok()?;
-            device
-                .begin_command_buffer(
-                    frame.command,
-                    &vk::CommandBufferBeginInfo::default().flags(flags),
-                )
-                .ok()?;
-        }
-        Some((frame.command, frame.acquire))
-    }
-
-    /// Submit the selected command; optionally wait and signal the supplied semaphore.
     pub fn submit(&mut self, wait: bool, signal: Option<vk::Semaphore>) -> Option<()> {
-        let frame = &self.frames[self.next];
-        let device = &self.context.device;
-        let buffers = [frame.command];
-        let waits = [frame.acquire];
-        let stages = [vk::PipelineStageFlags::TRANSFER];
-        let signals: Vec<_> = signal.into_iter().collect();
-        let mut submit = vk::SubmitInfo::default()
-            .command_buffers(&buffers)
-            .signal_semaphores(&signals);
-        if wait {
-            submit = submit.wait_semaphores(&waits).wait_dst_stage_mask(&stages);
-        }
-        unsafe {
-            if !self.reusing {
-                device.end_command_buffer(frame.command).ok()?;
-            }
-            device.reset_fences(&[frame.fence]).ok()?;
-            if device
-                .queue_submit(self.context.queue, &[submit], frame.fence)
-                .is_err()
-            {
-                // This fence will never signal. Prevent a later indefinite wait.
-                self.failed = true;
-                return None;
-            }
-        }
+        let operations = if let Some(operations) = self.replay.take() {
+            operations
+        } else {
+            self.capture.take()?.finish()
+        };
+        let frame = &mut self.frames[self.next];
         if let Some(key) = self.pending.take() {
-            self.frames[self.next].cached = Some(key);
+            frame.cached = Some((key, operations.clone()));
         }
+        frame.completion = Some(self.context.command_workers.enqueue(
+            operations,
+            wait.then_some(frame.acquire),
+            signal,
+        ));
         self.next = (self.next + 1) % self.frames.len();
         Some(())
     }
-
-    /// Wait for retained command submissions to complete; return None on failure.
     pub fn wait(&self) -> Option<()> {
-        if self.failed {
-            return None;
+        for frame in &self.frames {
+            if let Some(completion) = &frame.completion {
+                completion.wait()?;
+            }
         }
-        let fences: Vec<_> = self.frames.iter().map(|frame| frame.fence).collect();
-        unsafe {
-            self.context
-                .device
-                .wait_for_fences(&fences, true, u64::MAX)
-                .ok()
-        }
+        Some(())
     }
 }
-
 impl Drop for Commands {
     fn drop(&mut self) {
-        unsafe {
-            let device = &self.context.device;
-            let _ = device.device_wait_idle();
-            for frame in &self.frames {
-                device.destroy_semaphore(frame.acquire, None);
-                device.destroy_fence(frame.fence, None);
-                device.destroy_command_pool(frame.pool, None);
+        self.capture.take();
+        let _ = self.context.wait_idle();
+        for frame in &self.frames {
+            unsafe {
+                self.context.device.destroy_semaphore(frame.acquire, None);
             }
         }
     }

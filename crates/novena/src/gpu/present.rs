@@ -21,7 +21,7 @@ struct Swapchain {
 impl Drop for Swapchain {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.context.device.device_wait_idle();
+            let _ = self.context.wait_idle();
             for &semaphore in &self.ready {
                 self.context.device.destroy_semaphore(semaphore, None);
             }
@@ -163,9 +163,7 @@ impl Window {
                 .queue_family_indices(&families);
         }
         // Drain before replacing resources. Ordinary frames use only slot fences.
-        unsafe {
-            context.device.device_wait_idle().ok()?;
-        }
+        context.wait_idle().ok()?;
         self.chain.take();
         let loader = ash::khr::swapchain::Device::new(&context.instance, &context.device);
         let handle = unsafe { loader.create_swapchain(&info, None).ok()? };
@@ -248,7 +246,7 @@ impl Window {
             let result = (|| {
                 let target = chain.images[index as usize];
                 record_present(
-                    &self.context.device,
+                    &self.context.recorder(),
                     cmd,
                     source,
                     target,
@@ -258,13 +256,13 @@ impl Window {
                 commands.submit(true, Some(ready))?;
                 chain.images[index as usize].layout = vk::ImageLayout::PRESENT_SRC_KHR;
                 let waits = [ready];
-                let chains = [chain.handle];
-                let indices = [index];
-                let present = vk::PresentInfoKHR::default()
-                    .wait_semaphores(&waits)
-                    .swapchains(&chains)
-                    .image_indices(&indices);
-                match unsafe { chain.loader.queue_present(self.present_queue, &present) } {
+                match self.context.command_workers.present(
+                    self.present_queue,
+                    &chain.loader,
+                    chain.handle,
+                    index,
+                    &waits,
+                ) {
                     Ok(outdated) => self.rebuild = suboptimal || outdated,
                     Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => self.rebuild = true,
                     Err(_) => return None,

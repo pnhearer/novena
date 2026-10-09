@@ -9,7 +9,8 @@ use crate::{
         uniforms::{self, UniformStage, BANK_SIZE},
         Backend,
     },
-    Instance, Status,
+    instance::InstanceState as Instance,
+    Status,
 };
 use ash::vk;
 use std::collections::HashMap;
