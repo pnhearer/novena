@@ -1,8 +1,36 @@
 //! Original host memory and synthetic shader markers for the triangle example.
 use novena::{functions, Host, Instance, Registers, ShaderStage, ShaderTranslator, Status};
-use std::{ffi::c_void, fs, path::Path, process::Command, sync::Mutex};
+use std::{ffi::c_void, fs, path::Path, process::Command, sync::Mutex, time::Instant};
 
-pub(super) struct Memory(pub Mutex<Vec<u8>>);
+pub(super) struct Memory(pub Mutex<Vec<u8>>, pub Mutex<Measurement>);
+
+#[derive(Default)]
+pub(super) struct Measurement {
+    pub pending: std::collections::VecDeque<Instant>,
+    pub samples: Vec<f64>,
+}
+
+unsafe extern "C" fn present(
+    user: *mut c_void,
+    _: u64,
+    width: u32,
+    height: u32,
+    rgba: *const u8,
+    stride: u64,
+) {
+    let handed = Instant::now();
+    let memory = unsafe { &*user.cast::<Memory>() };
+    let mut measurement = memory.1.lock().unwrap();
+    let start = measurement.pending.pop_front().expect("present timestamp");
+    measurement
+        .samples
+        .push(handed.duration_since(start).as_secs_f64() * 1e6);
+    assert_eq!((width, height, stride), (64, 64, 256));
+    let pixels = unsafe { std::slice::from_raw_parts(rgba, (stride * u64::from(height)) as usize) };
+    assert_eq!(&pixels[..4], &[0, 0, 255, 255]);
+    assert!(pixels.as_chunks::<4>().0.contains(&[255, 255, 255, 255]));
+    assert!(pixels.as_chunks::<4>().0.contains(&[0, 0, 0, 255]));
+}
 
 unsafe extern "C" fn read(user: *mut c_void, address: u64, out: *mut u8, size: u64) -> i32 {
     // SAFETY: the example keeps Memory alive until the instance is dropped.
@@ -37,6 +65,7 @@ pub(super) fn hosted(memory: &Memory) -> Instance {
         user: std::ptr::from_ref(memory).cast_mut().cast(),
         read_memory: Some(read),
         write_memory: Some(write),
+        present: Some(present),
         ..Host::default()
     };
     // SAFETY: the caller keeps memory alive and drops the instance first.

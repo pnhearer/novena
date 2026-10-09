@@ -506,6 +506,10 @@ pub fn handler(name: &str) -> Option<Handler> {
             )
         },
         "nvnQueueFinish" => |instance, _, registers| {
+            let status = instance.poll_presentations(true);
+            if status != Status::Ok {
+                return status;
+            }
             #[cfg(feature = "vulkan")]
             if instance
                 .gpu
@@ -526,6 +530,7 @@ pub fn handler(name: &str) -> Option<Handler> {
             )
         },
         "nvnQueuePresentTexture" => |instance, _, r| {
+            let started = std::time::Instant::now();
             let window = r.x[1];
             let Some(Object::Window {
                 textures,
@@ -547,74 +552,78 @@ pub fn handler(name: &str) -> Option<Handler> {
                 r.x[0] = 0;
                 return Status::Ok;
             };
-            if let Some(wait) = host.wait_vblank {
-                unsafe {
-                    wait(host.user);
-                }
-            }
-            #[cfg(feature = "vulkan")]
-            if let Some(backend) = instance
-                .gpu
+            let mut pacing = instance
+                .presentation
                 .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .as_mut()
-            {
-                if !backend.ensure_texture(texture, &description, false) {
-                    return Status::BadArgument;
-                }
-                if !host.vulkan.is_null() {
-                    if backend
-                        .present_window(host, window, texture, present_interval)
-                        .is_none()
-                    {
-                        return Status::InternalError;
-                    }
-                    r.x[0] = 0;
-                    return Status::Ok;
-                }
-                if let Some(present) = host.present {
-                    let Some((width, height, pixels)) =
-                        backend.present_callback(texture, description.width, description.height)
-                    else {
-                        return Status::InternalError;
-                    };
-                    unsafe {
-                        present(
-                            host.user,
-                            window,
-                            width,
-                            height,
-                            pixels.as_ptr(),
-                            u64::from(width) * 4,
-                        );
-                    }
-                }
-                r.x[0] = 0;
-                return Status::Ok;
+                .unwrap_or_else(|p| p.into_inner());
+            if pacing.config.mode == crate::PresentationMode::Mailbox {
+                pacing.drop_pending(window);
             }
-            let _ = present_interval;
-            if !host.vulkan.is_null() {
-                return Status::InternalError;
+            if pacing.pending.len() == pacing.config.frames_in_flight as usize {
+                if let Err(status) = pacing.deliver_one(instance, host, true) {
+                    pacing.failed();
+                    return status;
+                }
             }
-            if let Some(present) = host.present {
-                let image = image
+            let slot = pacing.begin();
+            let prepare = (|| {
+                #[cfg(feature = "vulkan")]
+                if let Some(backend) = instance
+                    .gpu
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
-                    .as_ref()
-                    .cloned();
-                let Some(image) = image else {
-                    return Status::BadArgument;
-                };
-                unsafe {
-                    present(
-                        host.user,
-                        window,
-                        image.width,
-                        image.height,
-                        image.pixels.as_ptr(),
-                        u64::from(image.width) * 4,
-                    );
+                    .as_mut()
+                {
+                    if !backend.ensure_texture(texture, &description, false) {
+                        return Err(Status::BadArgument);
+                    }
+                    if !host.vulkan.is_null() {
+                        let handed = backend
+                            .present_window(host, window, texture, present_interval, pacing.config)
+                            .ok_or(Status::InternalError)?;
+                        if handed {
+                            pacing.delivered(started);
+                        } else {
+                            pacing.skipped();
+                        }
+                        return Ok(());
+                    }
+                    if host.present.is_some() {
+                        backend
+                            .enqueue_callback(slot, texture, description.width, description.height)
+                            .ok_or(Status::InternalError)?;
+                        pacing.push(crate::presentation::Frame {
+                            window,
+                            started,
+                            slot,
+                            pixels: None,
+                        });
+                    }
+                    return Ok(());
                 }
+                let _ = present_interval;
+                if !host.vulkan.is_null() {
+                    return Err(Status::InternalError);
+                }
+                if host.present.is_some() {
+                    let image = image
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .as_ref()
+                        .cloned()
+                        .ok_or(Status::BadArgument)?;
+                    pacing.push(crate::presentation::Frame {
+                        window,
+                        started,
+                        slot,
+                        pixels: Some((image.width, image.height, image.pixels)),
+                    });
+                }
+                Ok(())
+            })();
+            if let Err(status) = prepare {
+                pacing.failed();
+                return status;
             }
             r.x[0] = 0;
             Status::Ok
@@ -763,6 +772,10 @@ pub fn handler(name: &str) -> Option<Handler> {
             succeed(registers)
         },
         "nvnWindowFinalize" => |instance, _, registers| {
+            let status = instance.poll_presentations(true);
+            if status != Status::Ok {
+                return status;
+            }
             #[cfg(feature = "vulkan")]
             if let Some(backend) = instance
                 .gpu

@@ -185,6 +185,7 @@ thread_local! {
 /// Host connection, object records, observation counters, and optional execution services.
 pub struct Instance {
     host: Option<Host>,
+    pub(crate) presentation: Mutex<crate::presentation::Presentation>,
     /// novena's record of the program's objects.
     pub objects: Objects,
     handlers: Vec<Option<Handler>>,
@@ -236,6 +237,7 @@ impl Instance {
         let count = functions::count();
         Self {
             host,
+            presentation: Mutex::default(),
             objects: Objects::new(),
             handlers: functions::all()
                 .map(|(_, name)| api::handler(name))
@@ -1014,6 +1016,12 @@ fn hash_bytes(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf29ce484222325, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
     })
+}
+
+impl Drop for Instance {
+    fn drop(&mut self) {
+        let _ = self.poll_presentations(true);
+    }
 }
 
 #[cfg(test)]

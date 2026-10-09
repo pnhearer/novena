@@ -1,4 +1,4 @@
-//! Bounded command reuse with a fence for every slot. Provenance: 0026.
+//! Bounded command reuse with timeline completion values. Provenance: 0034.
 
 use super::Context;
 use ash::vk;
@@ -28,7 +28,7 @@ pub(super) struct TransferKey {
 struct Frame {
     pool: vk::CommandPool,
     command: vk::CommandBuffer,
-    fence: vk::Fence,
+    completion: u64,
     acquire: vk::Semaphore,
     cached: Option<Vec<TransferKey>>,
 }
@@ -37,6 +37,8 @@ pub(super) struct Commands {
     context: Arc<Context>,
     frames: Vec<Frame>,
     next: usize,
+    timeline: vk::Semaphore,
+    submitted: u64,
     failed: bool,
     reusing: bool,
     pending: Option<Vec<TransferKey>>,
@@ -45,15 +47,29 @@ pub(super) struct Commands {
 impl Commands {
     /// Create reusable execution resources; return None if Vulkan setup fails.
     pub fn new(context: &Arc<Context>) -> Option<Self> {
+        Self::with_capacity(context, FRAMES)
+    }
+
+    pub fn with_capacity(context: &Arc<Context>, capacity: usize) -> Option<Self> {
         let mut commands = Self {
             context: Arc::clone(context),
             frames: Vec::new(),
             next: 0,
+            timeline: vk::Semaphore::null(),
+            submitted: 0,
             failed: false,
             reusing: false,
             pending: None,
         };
-        for _ in 0..FRAMES {
+        let mut ty =
+            vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
+        commands.timeline = unsafe {
+            context
+                .device
+                .create_semaphore(&vk::SemaphoreCreateInfo::default().push_next(&mut ty), None)
+                .ok()?
+        };
+        for _ in 0..capacity {
             let device = &context.device;
             // Own each partially created frame before the next fallible call.
             let pool = unsafe {
@@ -68,7 +84,7 @@ impl Commands {
             commands.frames.push(Frame {
                 pool,
                 command: vk::CommandBuffer::null(),
-                fence: vk::Fence::null(),
+                completion: 0,
                 acquire: vk::Semaphore::null(),
                 cached: None,
             });
@@ -82,14 +98,6 @@ impl Commands {
                             .command_buffer_count(1),
                     )
                     .ok()?[0]
-            };
-            frame.fence = unsafe {
-                device
-                    .create_fence(
-                        &vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED),
-                        None,
-                    )
-                    .ok()?
             };
             frame.acquire = unsafe {
                 device
@@ -129,12 +137,7 @@ impl Commands {
         }
         let frame = &self.frames[self.next];
         if frame.cached.as_ref() == Some(&key) {
-            unsafe {
-                self.context
-                    .device
-                    .wait_for_fences(&[frame.fence], true, u64::MAX)
-                    .ok()?;
-            }
+            self.wait_value(frame.completion)?;
             self.reusing = true;
             self.pending = None;
             return Some((frame.command, true));
@@ -156,10 +159,8 @@ impl Commands {
         }
         let frame = &self.frames[self.next];
         let device = &self.context.device;
+        self.wait_value(frame.completion)?;
         unsafe {
-            device
-                .wait_for_fences(&[frame.fence], true, u64::MAX)
-                .ok()?;
             device
                 .reset_command_pool(frame.pool, vk::CommandPoolResetFlags::empty())
                 .ok()?;
@@ -180,10 +181,23 @@ impl Commands {
         let buffers = [frame.command];
         let waits = [frame.acquire];
         let stages = [vk::PipelineStageFlags::TRANSFER];
-        let signals: Vec<_> = signal.into_iter().collect();
+        let value = self.submitted.checked_add(1)?;
+        let mut signals = vec![self.timeline];
+        let mut values = vec![value];
+        if let Some(signal) = signal {
+            signals.push(signal);
+            values.push(0);
+        }
+        let wait_values = [0];
+        let mut timeline =
+            vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&values);
+        if wait {
+            timeline = timeline.wait_semaphore_values(&wait_values);
+        }
         let mut submit = vk::SubmitInfo::default()
             .command_buffers(&buffers)
-            .signal_semaphores(&signals);
+            .signal_semaphores(&signals)
+            .push_next(&mut timeline);
         if wait {
             submit = submit.wait_semaphores(&waits).wait_dst_stage_mask(&stages);
         }
@@ -191,16 +205,17 @@ impl Commands {
             if !self.reusing {
                 device.end_command_buffer(frame.command).ok()?;
             }
-            device.reset_fences(&[frame.fence]).ok()?;
             if device
-                .queue_submit(self.context.queue, &[submit], frame.fence)
+                .queue_submit(self.context.queue, &[submit], vk::Fence::null())
                 .is_err()
             {
-                // This fence will never signal. Prevent a later indefinite wait.
+                // A failed submission has no completion value to wait for.
                 self.failed = true;
                 return None;
             }
         }
+        self.submitted = value;
+        self.frames[self.next].completion = value;
         if let Some(key) = self.pending.take() {
             self.frames[self.next].cached = Some(key);
         }
@@ -210,14 +225,38 @@ impl Commands {
 
     /// Wait for retained command submissions to complete; return None on failure.
     pub fn wait(&self) -> Option<()> {
-        if self.failed {
-            return None;
-        }
-        let fences: Vec<_> = self.frames.iter().map(|frame| frame.fence).collect();
+        self.wait_value(self.submitted)
+    }
+
+    pub fn completion(&self) -> u64 {
+        self.submitted
+    }
+
+    pub fn ready(&self, value: u64) -> Option<bool> {
         unsafe {
             self.context
                 .device
-                .wait_for_fences(&fences, true, u64::MAX)
+                .get_semaphore_counter_value(self.timeline)
+                .ok()
+                .map(|v| v >= value)
+        }
+    }
+
+    pub fn wait_value(&self, value: u64) -> Option<()> {
+        if value == 0 {
+            return Some(());
+        }
+        let semaphores = [self.timeline];
+        let values = [value];
+        unsafe {
+            self.context
+                .device
+                .wait_semaphores(
+                    &vk::SemaphoreWaitInfo::default()
+                        .semaphores(&semaphores)
+                        .values(&values),
+                    u64::MAX,
+                )
                 .ok()
         }
     }
@@ -225,12 +264,12 @@ impl Commands {
 
 impl Drop for Commands {
     fn drop(&mut self) {
+        let _ = self.wait();
         unsafe {
             let device = &self.context.device;
-            let _ = device.device_wait_idle();
+            device.destroy_semaphore(self.timeline, None);
             for frame in &self.frames {
                 device.destroy_semaphore(frame.acquire, None);
-                device.destroy_fence(frame.fence, None);
                 device.destroy_command_pool(frame.pool, None);
             }
         }

@@ -6,7 +6,7 @@
 use ash::{vk, Device, Entry, Instance};
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 mod commands;
 pub mod graphics;
@@ -17,6 +17,7 @@ mod memory;
 mod pipeline_disk;
 mod pipeline_workers;
 mod present;
+mod readbacks;
 pub mod texture_transfer;
 pub mod textures;
 pub mod uniforms;
@@ -94,6 +95,12 @@ pub struct Context {
     /// Indices of families for which the device created queues.
     pub queue_families: Vec<u32>,
     swapchain: bool,
+    completion: Mutex<QueueCompletion>,
+}
+
+struct QueueCompletion {
+    semaphore: vk::Semaphore,
+    value: u64,
 }
 
 /// Vulkan images, presentation, pipelines, and lazily allocated arena storage.
@@ -108,6 +115,7 @@ pub struct Backend {
     pub(crate) graphics: graphics::GraphicsPipelines,
     windows: HashMap<u64, Window>,
     offscreen: Option<Image>,
+    readbacks: readbacks::Readbacks,
     images: Images,
     bindings: HashMap<u64, (u64, u64, usize)>,
     tiled: HashMap<u64, crate::tiling::Layout>,
@@ -136,6 +144,7 @@ impl Backend {
             graphics: graphics::GraphicsPipelines::new(&context)?,
             windows: HashMap::new(),
             offscreen: None,
+            readbacks: readbacks::Readbacks::new(&context),
             images,
             bindings: HashMap::new(),
             tiled: HashMap::new(),
@@ -760,8 +769,9 @@ impl Backend {
         host: &crate::Host,
         window: u64,
         texture: u64,
-        interval: u32,
-    ) -> Option<()> {
+        _interval: u32,
+        config: crate::PresentationConfig,
+    ) -> Option<bool> {
         let mut extent = vk::Extent2D::default();
         let surface_host = unsafe { &*host.vulkan };
         unsafe {
@@ -774,7 +784,7 @@ impl Backend {
         }
         self.windows
             .get_mut(&window)?
-            .present(source, extent, interval)
+            .present(source, extent, config)
     }
 
     /// Offscreen presentation uses the same blit and barriers as a swapchain.
@@ -812,23 +822,71 @@ impl Backend {
         Some((width, height, self.images.read_image(target)?))
     }
 
-    pub(crate) fn present_callback(
+    pub(crate) fn enqueue_callback(
         &mut self,
+        slot: usize,
         texture: u64,
         width: u64,
         height: u64,
-    ) -> Option<(u32, u32, Vec<u8>)> {
+    ) -> Option<()> {
         let width = (width.max(1) as f32 * self.scale).round() as u32;
         let height = (height.max(1) as f32 * self.scale).round() as u32;
-        self.present_offscreen(texture, vk::Format::R8G8B8A8_UNORM, width, height)
+        self.sync_texture(texture, true)?;
+        let source = self.images.source(texture)?;
+        if source.format != vk::Format::R8G8B8A8_UNORM {
+            return None;
+        }
+        self.readbacks.submit(slot, source, width, height)
+    }
+
+    pub(crate) fn read_callback(
+        &self,
+        slot: usize,
+        wait: bool,
+    ) -> Option<Option<(u32, u32, Vec<u8>)>> {
+        self.readbacks.read(slot, wait)
+    }
+
+    pub(crate) fn reset_presentations(&mut self) {
+        self.readbacks = readbacks::Readbacks::new(&self.context);
     }
 
     pub(crate) fn finish(&self) -> bool {
-        unsafe { self.context.device.device_wait_idle().is_ok() }
+        self.images.wait().is_some()
+            && self.readbacks.wait().is_some()
+            && self.windows.values().all(Window::wait)
     }
 }
 
 impl Context {
+    /// Retire preceding work on the execution queue at a timeline checkpoint.
+    /// Queue access must be serialized with submissions by the caller.
+    pub(crate) fn wait_queue(&self) -> Option<()> {
+        let mut completion = self.completion.lock().unwrap_or_else(|p| p.into_inner());
+        let value = completion.value.checked_add(1)?;
+        let semaphores = [completion.semaphore];
+        let values = [value];
+        let mut timeline =
+            vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&values);
+        let submit = vk::SubmitInfo::default()
+            .signal_semaphores(&semaphores)
+            .push_next(&mut timeline);
+        unsafe {
+            self.device
+                .queue_submit(self.queue, &[submit], vk::Fence::null())
+                .ok()?;
+            completion.value = value;
+            self.device
+                .wait_semaphores(
+                    &vk::SemaphoreWaitInfo::default()
+                        .semaphores(&semaphores)
+                        .values(&values),
+                    u64::MAX,
+                )
+                .ok()
+        }
+    }
+
     /// Create a module after checking the optional global memory features.
     /// The caller still validates SPIR-V and owns the returned Vulkan module.
     pub fn create_global_shader_module(&self, words: &[u32]) -> Result<vk::ShaderModule, String> {
@@ -856,6 +914,22 @@ impl Context {
             .application_name(&app)
             .engine_name(&app)
             .api_version(vk::API_VERSION_1_2);
+        let mut extensions = extensions.to_vec();
+        if swapchain {
+            let supported = unsafe { entry.enumerate_instance_extension_properties(None).ok()? };
+            for name in [
+                ash::khr::get_surface_capabilities2::NAME,
+                ash::ext::surface_maintenance1::NAME,
+            ] {
+                if !supported.iter().any(|extension| unsafe { std::ffi::CStr::from_ptr(extension.extension_name.as_ptr()) } == name) { return None; }
+                if !extensions
+                    .iter()
+                    .any(|existing| existing.as_c_str() == name)
+                {
+                    extensions.push(name.to_owned());
+                }
+            }
+        }
         let pointers: Vec<_> = extensions.iter().map(|name| name.as_ptr()).collect();
         let create = vk::InstanceCreateInfo::default()
             .application_info(&info)
@@ -876,7 +950,23 @@ impl Context {
             .enumerate()
             .filter_map(|(i, family)| (family.queue_count > 0).then_some(i as u32))
             .collect();
+        let mut ty =
+            vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
+        let semaphore = unsafe {
+            device.create_semaphore(&vk::SemaphoreCreateInfo::default().push_next(&mut ty), None)
+        };
+        let Ok(semaphore) = semaphore else {
+            unsafe {
+                device.destroy_device(None);
+                instance.destroy_instance(None);
+            }
+            return None;
+        };
         Some(Self {
+            completion: Mutex::new(QueueCompletion {
+                semaphore,
+                value: 0,
+            }),
             entry,
             instance,
             physical_device: pick,
@@ -903,9 +993,16 @@ impl Context {
             if swapchain {
                 let supported =
                     unsafe { instance.enumerate_device_extension_properties(pick) }.ok()?;
-                if !supported.iter().any(|extension| {
-                    (unsafe { std::ffi::CStr::from_ptr(extension.extension_name.as_ptr()) })
-                        == ash::khr::swapchain::NAME
+                if ![
+                    ash::khr::swapchain::NAME,
+                    ash::ext::swapchain_maintenance1::NAME,
+                ]
+                .iter()
+                .all(|name| {
+                    supported.iter().any(|extension| {
+                        (unsafe { std::ffi::CStr::from_ptr(extension.extension_name.as_ptr()) })
+                            == *name
+                    })
                 }) {
                     continue;
                 }
@@ -924,14 +1021,24 @@ impl Context {
                 continue;
             };
             let family = family as u32;
+            let mut maintenance = vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default();
             let mut v11 = vk::PhysicalDeviceVulkan11Features::default();
             let mut v12 = vk::PhysicalDeviceVulkan12Features::default();
             let mut features = vk::PhysicalDeviceFeatures2::default()
                 .push_next(&mut v11)
                 .push_next(&mut v12);
+            if swapchain {
+                features = features.push_next(&mut maintenance);
+            }
             unsafe { instance.get_physical_device_features2(pick, &mut features) };
             let core = features.features;
-            if core.shader_int64 == vk::FALSE || v12.buffer_device_address == vk::FALSE {
+            if swapchain && maintenance.swapchain_maintenance1 == vk::FALSE {
+                continue;
+            }
+            if core.shader_int64 == vk::FALSE
+                || v12.buffer_device_address == vk::FALSE
+                || v12.timeline_semaphore == vk::FALSE
+            {
                 continue;
             }
             let shader_features = ShaderFeatures {
@@ -954,6 +1061,7 @@ impl Context {
                 .storage_buffer16_bit_access(shader_features.storage_buffer16_bit_access);
             let mut enabled12 = vk::PhysicalDeviceVulkan12Features::default()
                 .buffer_device_address(true)
+                .timeline_semaphore(true)
                 .storage_buffer8_bit_access(shader_features.storage_buffer8_bit_access)
                 .shader_int8(shader_features.shader_int8);
             let priority = [1.0_f32];
@@ -968,16 +1076,25 @@ impl Context {
                 })
                 .collect();
             let extensions: Vec<_> = if swapchain {
-                vec![ash::khr::swapchain::NAME.as_ptr()]
+                vec![
+                    ash::khr::swapchain::NAME.as_ptr(),
+                    ash::ext::swapchain_maintenance1::NAME.as_ptr(),
+                ]
             } else {
                 Vec::new()
             };
-            let device_info = vk::DeviceCreateInfo::default()
+            let mut device_info = vk::DeviceCreateInfo::default()
                 .queue_create_infos(&queue_info)
                 .enabled_extension_names(&extensions)
                 .enabled_features(&enabled)
                 .push_next(&mut enabled11)
                 .push_next(&mut enabled12);
+            let mut enabled_maintenance =
+                vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default()
+                    .swapchain_maintenance1(true);
+            if swapchain {
+                device_info = device_info.push_next(&mut enabled_maintenance);
+            }
             // SAFETY: the selected family supports graphics and the create info is valid.
             if let Ok(device) = unsafe { instance.create_device(pick, &device_info, None) } {
                 return Some((pick, device, family, shader_features));
@@ -992,7 +1109,9 @@ impl Drop for Context {
         // SAFETY: all work submitted by this small context is complete before
         // it is dropped by the owning instance.
         unsafe {
-            let _ = self.device.device_wait_idle();
+            let _ = self.wait_queue();
+            let completion = self.completion.get_mut().unwrap_or_else(|p| p.into_inner());
+            self.device.destroy_semaphore(completion.semaphore, None);
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);
         }
@@ -1060,8 +1179,10 @@ mod tests {
         };
         assert!(backend.ensure(1, 2, 1, false));
         assert!(backend.clear_color(1, [0.0, 0.0, 1.0, 1.0], 0xf));
+        backend.enqueue_callback(0, 1, 2, 1).unwrap();
         let (width, height, pixels) = backend
-            .present_callback(1, 2, 1)
+            .read_callback(0, true)
+            .flatten()
             .expect("Vulkan presentation");
         assert_eq!((width, height), (4, 2));
         assert_eq!(&pixels[..4], &[0, 0, 255, 255]);

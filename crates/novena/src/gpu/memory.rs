@@ -228,7 +228,7 @@ impl GlobalMemory {
             // SAFETY: this new block is within the buffer. New or recycled bytes
             // and the complete-word padding start zeroed before use.
             unsafe {
-                if self.device.device_wait_idle().is_err() {
+                if self.context.wait_queue().is_none() {
                     self.allocator.release(key);
                     return None;
                 }
@@ -246,7 +246,7 @@ impl GlobalMemory {
     pub fn release_pool(&mut self, key: u64) -> bool {
         // SAFETY: this backend serializes queue use. Waiting also protects callers
         // that submitted work directly through Context before finalizing a pool.
-        if unsafe { self.device.device_wait_idle() }.is_err() {
+        if self.context.wait_queue().is_none() {
             return false;
         }
         self.allocator.release(key)
@@ -269,7 +269,7 @@ impl GlobalMemory {
         // SAFETY: the range is inside the mapped buffer, coherent memory needs no
         // flush, and exclusive access prevents simultaneous host or queue writes.
         unsafe {
-            self.device.device_wait_idle().ok()?;
+            self.context.wait_queue()?;
             std::ptr::copy_nonoverlapping(
                 bytes.as_ptr(),
                 (self.mapped as *mut u8).add(offset as usize),
@@ -289,7 +289,7 @@ impl GlobalMemory {
         // SAFETY: waiting completes submitted writes; the range is inside coherent
         // host-visible memory and the output slice is valid for its length.
         unsafe {
-            self.device.device_wait_idle().ok()?;
+            self.context.wait_queue()?;
             std::ptr::copy_nonoverlapping(
                 (self.mapped as *const u8).add(offset as usize),
                 bytes.as_mut_ptr(),
@@ -307,7 +307,7 @@ impl GlobalMemory {
             .iter()
             .map(|(&key, &pool)| (key, pool))
             .collect();
-        if unsafe { self.device.device_wait_idle() }.is_err() {
+        if self.context.wait_queue().is_none() {
             return false;
         }
         let mut bytes = vec![0; 64 * 1024];
@@ -342,7 +342,7 @@ impl GlobalMemory {
             .iter()
             .map(|(&key, &pool)| (key, pool))
             .collect();
-        if unsafe { self.device.device_wait_idle() }.is_err() {
+        if self.context.wait_queue().is_none() {
             return false;
         }
         let mut bytes = vec![0; 64 * 1024];
@@ -401,7 +401,7 @@ impl Drop for GlobalMemory {
         // SAFETY: the owning device outlives this object and all submitted users
         // finish before either the buffer or its memory is freed.
         unsafe {
-            let _ = self.device.device_wait_idle();
+            let _ = self.context.wait_queue();
             self.device.unmap_memory(self.memory);
             self.device.destroy_buffer(self.buffer, None);
             self.device.free_memory(self.memory, None);

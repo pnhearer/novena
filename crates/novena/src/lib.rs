@@ -22,6 +22,8 @@ pub mod global_memory;
 pub mod gpu;
 mod instance;
 pub mod observe;
+pub mod presentation;
+pub use presentation::{FrameStatistics, PresentationConfig, PresentationMode};
 pub mod startup_cache;
 pub mod tiling;
 mod workers;
@@ -162,6 +164,73 @@ pub unsafe extern "C" fn novena_instance_destroy(instance: *mut Instance) {
         if !instance.is_null() {
             drop(unsafe { Box::from_raw(instance) });
         }
+    })
+}
+
+/// Set presentation capacity and mode, zero for FIFO or one for mailbox.
+///
+/// # Safety
+/// `instance` must be live. Presentation callbacks must not reenter the library.
+#[no_mangle]
+pub unsafe extern "C" fn novena_instance_set_presentation(
+    instance: *const Instance,
+    frames_in_flight: u32,
+    mode: u32,
+) -> Status {
+    ffi_guard(Status::InternalError, || {
+        let Some(instance) = (unsafe { instance.as_ref() }) else {
+            return Status::BadArgument;
+        };
+        let mode = match mode {
+            0 => PresentationMode::Fifo,
+            1 => PresentationMode::Mailbox,
+            _ => return Status::BadArgument,
+        };
+        instance.configure_presentation(PresentationConfig {
+            frames_in_flight,
+            mode,
+        })
+    })
+}
+
+/// Deliver one ready callback, or drain all pending callbacks when wait is one.
+///
+/// # Safety
+/// `instance` must be live. Presentation callbacks must not reenter the library.
+#[no_mangle]
+pub unsafe extern "C" fn novena_instance_poll_presentations(
+    instance: *const Instance,
+    wait: u32,
+) -> Status {
+    ffi_guard(Status::InternalError, || {
+        let Some(instance) = (unsafe { instance.as_ref() }) else {
+            return Status::BadArgument;
+        };
+        if wait > 1 {
+            return Status::BadArgument;
+        }
+        instance.poll_presentations(wait != 0)
+    })
+}
+
+/// Copy cumulative frame counts and latency moments into host storage.
+///
+/// # Safety
+/// `instance` must be live and `out` must be writable for one FrameStatistics.
+#[no_mangle]
+pub unsafe extern "C" fn novena_instance_frame_statistics(
+    instance: *const Instance,
+    out: *mut FrameStatistics,
+) -> Status {
+    ffi_guard(Status::InternalError, || {
+        let Some(instance) = (unsafe { instance.as_ref() }) else {
+            return Status::BadArgument;
+        };
+        let Some(out) = (unsafe { out.as_mut() }) else {
+            return Status::BadArgument;
+        };
+        *out = instance.frame_statistics();
+        Status::Ok
     })
 }
 
