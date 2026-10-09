@@ -120,7 +120,7 @@ no API to change them.
 ## Content cache
 
 `ComputePipelines` fixes a translator and its configuration for the cache's
-lifetime. Its synchronous `get_or_compile` API is for prewarming and tests.
+lifetime. Its synchronous `get_or_compile` API is for startup compilation and tests.
 The frame-facing service is `AsyncComputePipelines`. Both compare the complete
 normalized header and code before translation. Identical snapshots from
 different allocations share one result. Changed bytes miss. Hash collisions
@@ -251,7 +251,7 @@ the driver rejects the accepted blob.
 One mutex serializes Vulkan creation and `vkGetPipelineCacheData` on the shared
 driver cache. Translation and file I/O happen outside this mutex. Successful
 compilation saves the translation and a complete driver snapshot on the worker.
-No cache I/O runs during request submission or polling. The synchronous prewarm
+No cache I/O runs during request submission or polling. The synchronous compile in advance
 API performs that same I/O on its caller and belongs outside frame recording.
 
 Writers create unique temporary files in the destination directory with exclusive
@@ -270,7 +270,7 @@ ordinary compilation and reports a bounded diagnostic list through
 Construct `AsyncComputePipelines` from an in-memory or persistent
 `ComputePipelines`, a positive worker count and a positive queue capacity.
 Construction loads the driver cache and starts workers before frame recording.
-Ready prewarmed pipelines transfer into the service. Queue capacity bounds
+Ready compiled pipelines transfer into the service. Queue capacity bounds
 waiting jobs; worker count bounds active jobs.
 
 After capture, `request` queues an owned snapshot with nonblocking `try_send`.
@@ -294,7 +294,7 @@ and compilation latency later before choosing a final rendering policy.
 
 A program replacement retains its new request handle. An old completion only
 updates its own handle, so it cannot replace the current program. Future guest
-integration should prewarm at ProgramSetShaders and retry capture when code
+integration should compile in advance at ProgramSetShaders and retry capture when code
 becomes readable. Compute guest integration remains open. The bounded graphics
 path uses retained translations and this same request policy.
 
@@ -335,7 +335,7 @@ execution still needs validated units, resource binding and command ordering.
 
 ## Execution and proof
 
-For synchronous prewarming, construct `ComputePipelines` with a context and
+For synchronous startup compilation, construct `ComputePipelines` with a context and
 translator and call `get_or_compile` with the owned header/code snapshot.
 For frame recording, convert that cache to `AsyncComputePipelines`, request the
 snapshot and use only a ready result. Skip the draw while its result is

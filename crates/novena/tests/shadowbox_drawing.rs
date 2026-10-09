@@ -74,3 +74,9 @@ fn multiple_target_blend_pixels() {
 fn textured_uniform_banks_and_persistence() {
     support::run("textured_uniform_banks_and_persistence");
 }
+
+#[test]
+#[ignore = "requires the translator and a Vulkan GPU; fresh-process timing"]
+fn cold_and_warm_first_draw() {
+    support::run("startup::cold_and_warm_first_draw");
+}

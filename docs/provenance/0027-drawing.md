@@ -38,7 +38,7 @@ Mesa revision 7b76f8646e387c17022f8586d224738e310b5bfc supplies:
 - `src/nouveau/compiler/nak_private.h`: position addresses 0x70 through 0x7c
   and the generic attribute base 0x80.
 - `src/nouveau/compiler/nak/sph.rs` and the public shader-header definitions
-  in `src/nouveau/headers/nvidia/classes/cla097sph.h`: stage bits 10 through 13,
+  in the public `cla097sph.h` header: stage bits 10 through 13,
   vertex input mask starting at bit 192, position output mask at bit 400,
   and fragment color output mask at bit 576.
 

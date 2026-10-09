@@ -51,7 +51,9 @@ pub struct DepthRasterContract {
     pub polygon_offset: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+#[derive(
+    Clone, Copy, Debug, Default, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
 pub struct StencilState {
     pub fail: i32,
     pub depth_fail: i32,
@@ -115,7 +117,7 @@ impl BlendContract {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ColorAttachmentState {
     pub enable: bool,
     pub factors: [i32; 4],
@@ -148,7 +150,9 @@ impl ColorAttachmentState {
 
 /// Interpreted pipeline state, also used for explicit cache retry.
 /// Enum integers are public Vulkan values. Retry validates them before use.
-#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+#[derive(
+    Clone, Copy, Debug, Default, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
 pub struct DrawPipelineState {
     /// Zero preserves the original single-target retry contract. Otherwise 1 through 8.
     pub color_count: u32,
@@ -166,7 +170,7 @@ pub struct DrawPipelineState {
     pub bias: [u32; 3],
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PrimitiveTopology {
     TriangleList,
     TriangleStrip,
@@ -184,7 +188,7 @@ impl PrimitiveTopology {
 }
 
 /// Float-converting vertex formats from public Vulkan documentation, provenance 0028.
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum VertexFormat {
     Float,
     Float2,
@@ -237,19 +241,19 @@ pub(crate) fn mapped<T: Copy, K: PartialEq>(table: &[(K, T)], token: K) -> Optio
     matches.next().is_none().then_some(result)
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct VertexInput {
     pub bindings: Vec<VertexBinding>,
     pub attributes: Vec<VertexAttribute>,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct VertexBinding {
     pub binding: u32,
     pub stride: u32,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct VertexAttribute {
     pub binding: u32,
     pub format: VertexFormat,
@@ -257,7 +261,7 @@ pub struct VertexAttribute {
 }
 
 #[derive(Clone, Hash, PartialEq, Eq)]
-struct Key {
+pub(crate) struct Key {
     vertex: Vec<u32>,
     fragment: Vec<u32>,
     input: VertexInput,
@@ -341,6 +345,25 @@ impl GraphicsPipelines {
             PipelineStatus::Queued | PipelineStatus::Compiling => Ok(None),
         }
     }
+    pub(crate) fn queue_startup(
+        &mut self,
+        stages: &[Vec<u32>],
+        recipe: &crate::startup_cache::PipelineRecipe,
+    ) -> Result<bool, String> {
+        let key = Key::new(
+            stages,
+            recipe.input.clone(),
+            recipe.topology,
+            recipe.state,
+            self.uses_storage(recipe.storage),
+        )?;
+        match self.pool.request(key) {
+            Ok(_) => Ok(true),
+            Err(RequestError::QueueFull) => Ok(false),
+            Err(RequestError::Stopped) => Err("graphics compiler stopped".into()),
+        }
+    }
+
     pub fn retry_failed(
         &mut self,
         stages: &[Vec<u32>],
@@ -374,7 +397,7 @@ impl GraphicsPipelines {
     }
 }
 impl Key {
-    fn new(
+    pub(crate) fn new(
         stages: &[Vec<u32>],
         input: VertexInput,
         topology: PrimitiveTopology,

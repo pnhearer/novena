@@ -89,7 +89,12 @@ const EXIT: u64 = 0xe300_0000_0000_0000 | ALWAYS;
 const NOP: u64 = 0x50b0_0000_0000_0000 | ALWAYS;
 
 fn mov(register: u8, value: f32) -> u64 {
-    0x0100_0000_0000_0000 | ALWAYS | u64::from(register) | u64::from(value.to_bits()) << 20
+    // Mesa sm50.rs:1938-1941 sets all four lane-mask bits for an immediate move.
+    0x0100_0000_0000_0000
+        | ALWAYS
+        | (15 << 12)
+        | u64::from(register)
+        | u64::from(value.to_bits()) << 20
 }
 
 fn shader(fragment: bool, green: f32) -> Vec<u8> {
@@ -166,7 +171,7 @@ impl novena::ShaderTranslator for Translator {
         if output.requires_subgroup_size_32 {
             return Err("subgroup size 32 is not enabled".into());
         }
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tmp/draw.spv");
+        let path = std::env::temp_dir().join(format!("draw-{}.spv", std::process::id()));
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(
             &path,
@@ -502,8 +507,7 @@ fn draw_proof(indexed_draw: bool) {
         .as_ref()
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("tmp/graphics-cache-{}", std::process::id()))
+            std::env::temp_dir().join(format!("graphics-cache-{}", std::process::id()))
         });
     let identity = novena::gpu::pipelines::TranslationIdentity {
         version: "synthetic-triangle-1".into(),
@@ -690,6 +694,10 @@ struct Fixture {
 
 impl Fixture {
     fn new(contract: FirstDrawContract) -> Self {
+        Self::with_instance(contract, |host| unsafe { Instance::with_host(host) })
+    }
+
+    fn with_instance(contract: FirstDrawContract, build: impl FnOnce(Host) -> Instance) -> Self {
         let state = Box::new(State {
             memory: Mutex::new(vec![0; 0x40000]),
             frames: Mutex::new(Vec::new()),
@@ -701,7 +709,7 @@ impl Fixture {
             present: Some(present),
             ..Host::default()
         };
-        let instance = unsafe { Instance::with_host(host) };
+        let instance = build(host);
         assert!(
             instance.set_first_draw_contract(Some(contract)),
             "Vulkan must be active"
@@ -733,7 +741,14 @@ impl Fixture {
             ("DepthStencilState", 23),
             ("PolygonState", 24),
         ] {
-            call(&instance, &format!("nvn{kind}SetDefaults"), &[address]);
+            call(
+                &instance,
+                &format!(
+                    "{}{kind}SetDefaults",
+                    &functions::all().next().unwrap().1[..3]
+                ),
+                &[address],
+            );
         }
         call(&instance, "nvnVertexStreamStateSetStride", &[20, 32]);
         call(&instance, "nvnVertexStreamStateSetDivisor", &[20, 0]);
@@ -1067,7 +1082,7 @@ impl novena::ShaderTranslator for SourceShaders {
 }
 
 fn compile_source(stage: &str, source: &str) -> Vec<u32> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tmp");
+    let dir = std::env::temp_dir().join(format!("draw-formats-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let input = dir.join(format!("format.{stage}"));
     let output = dir.join(format!("format.{stage}.spv"));
@@ -1998,7 +2013,14 @@ impl DepthProof {
             ("DepthStencilState", 23),
             ("PolygonState", 24),
         ] {
-            call(&instance, &format!("nvn{kind}SetDefaults"), &[address]);
+            call(
+                &instance,
+                &format!(
+                    "{}{kind}SetDefaults",
+                    &functions::all().next().unwrap().1[..3]
+                ),
+                &[address],
+            );
         }
         call(&instance, "nvnVertexStreamStateSetStride", &[20, 16]);
         call(&instance, "nvnVertexStreamStateSetDivisor", &[20, 0]);
@@ -2997,7 +3019,7 @@ fn multiple_target_blend_pixels() {
 #[ignore = "requires Vulkan, glslangValidator and spirv-val; never skips"]
 fn textured_uniform_banks_and_persistence() {
     use novena::gpu::uniforms::{UniformBankMapping, UniformBufferContract, UniformStage};
-    let cache = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tmp/textured-cache");
+    let cache = std::env::temp_dir().join(format!("textured-cache-{}", std::process::id()));
     if cache.exists() {
         fs::remove_dir_all(&cache).unwrap();
     }
@@ -3083,3 +3105,6 @@ fn textured_uniform_banks_and_persistence() {
     }
     println!("MATCH texture descriptors beside stage-local uniform and storage banks, rebinding, pipeline reuse and driver-cache reopening");
 }
+
+#[path = "startup_drawing.rs"]
+mod startup;

@@ -221,11 +221,7 @@ pub(super) fn stage_bindings(words: &[u32], model: u32) -> Result<Vec<Descriptor
     Ok(bindings.into_values().collect())
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct CacheStats {
-    pub hits: u64,
-    pub misses: u64,
-}
+pub use crate::workers::CacheStats;
 
 /// A device-local cache with one fixed translator and translation configuration.
 /// The translator must produce stable output for a byte sequence during this cache's life.
@@ -476,7 +472,7 @@ impl ComputePipelines {
         })
     }
 
-    /// Synchronous prewarming/testing API. The frame path uses AsyncComputePipelines.
+    /// Synchronous startup compilation and testing API. The frame path uses AsyncComputePipelines.
     /// The translator must supply SPIR-V valid for this device. Full input equality
     /// handles digest collisions, and guest addresses are absent from the key.
     pub fn get_or_compile(&mut self, program: &[u8]) -> Result<Arc<ComputePipeline>, String> {

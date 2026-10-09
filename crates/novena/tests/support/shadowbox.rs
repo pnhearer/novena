@@ -15,8 +15,20 @@ pub fn run(test: &str) {
             shadowbox.display()
         );
     }
+    let cache_test =
+        test == "emitted_cache_is_loaded_at_instance_creation_and_runtime_misses_reopen";
     let shadowbox = shadowbox.canonicalize().unwrap();
-    let directory = root.join("target/shadowbox-global-memory").join(test);
+    let target = env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| env::temp_dir().join("novena-checks"));
+    let target = if target.is_absolute() {
+        target
+    } else {
+        root.join(target)
+    };
+    let directory = target
+        .join("shadowbox-global-memory")
+        .join(test.replace("::", "-"));
     fs::create_dir_all(&directory).unwrap();
     let manifest = directory.join("Cargo.toml");
     // Keep path dependency resolution outside Novena's workspace. All dependencies
@@ -36,12 +48,15 @@ name = "global_memory"
 path = {source:?}
 
 [dev-dependencies]
-novena = {{ path = {novena:?}, features = ["vulkan"] }}
+novena = {{ path = {novena:?}, features = {features:?} }}
 ash = {{ version = "0.38", default-features = false, features = ["loaded"] }}
 shadowbox = {{ path = {shadowbox:?} }}
 "#,
-            source = crate_root.join(
-                if matches!(
+            features = if cache_test { vec![] } else { vec!["vulkan"] },
+            source = crate_root.join(if cache_test {
+                "tests/shadowbox/startup.rs"
+            } else if test == "startup::cold_and_warm_first_draw"
+                || matches!(
                     test,
                     "first_draw_executes_translated_triangle"
                         | "textured_checkerboard_and_blend_pixels"
@@ -55,21 +70,26 @@ shadowbox = {{ path = {shadowbox:?} }}
                         | "indexed_draw_executes_translated_triangle"
                         | "depth_stencil_and_raster_pixels"
                         | "indexed_strip_uniform_depth_pixels"
-                ) {
-                    "tests/shadowbox/drawing.rs"
-                } else {
-                    "tests/shadowbox/global_memory.rs"
-                }
-            ),
+                )
+            {
+                "tests/shadowbox/drawing.rs"
+            } else {
+                "tests/shadowbox/global_memory.rs"
+            }),
             novena = crate_root,
         ),
     )
     .unwrap();
-    let status = Command::new(env!("CARGO"))
-        .args(["test", "--manifest-path"])
+    let mut command = Command::new(env!("CARGO"));
+    command.arg("test");
+    if !cfg!(debug_assertions) {
+        command.arg("--release");
+    }
+    let status = command
+        .arg("--manifest-path")
         .arg(manifest)
         .arg("--target-dir")
-        .arg(root.join("target/shadowbox-global-memory/build"))
+        .arg(target.join("shadowbox-global-memory/build"))
         .args([
             "--test",
             "global_memory",

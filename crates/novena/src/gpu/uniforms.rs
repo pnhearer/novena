@@ -296,8 +296,7 @@ mod tests {
     #[ignore = "requires spirv-val"]
     fn validates_uniform_and_storage_bank_rewrites() {
         use std::{fs, process::Command};
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/uniform-validation");
+        let directory = std::env::temp_dir().join("novena-uniform-validation");
         fs::create_dir_all(&directory).unwrap();
         for storage in [false, true] {
             let words = lower(&bank(), UniformStage::Fragment, storage).unwrap();

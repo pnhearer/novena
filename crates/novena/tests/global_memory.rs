@@ -8,9 +8,7 @@ use std::{ffi::CString, fs, path::PathBuf, process::Command, sync::Arc};
 
 fn shader(name: &str) -> Vec<u32> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let output = root
-        .join("../../target/tmp")
-        .join(format!("{name}-{}.spv", std::process::id()));
+    let output = std::env::temp_dir().join(format!("{name}-{}.spv", std::process::id()));
     fs::create_dir_all(output.parent().unwrap()).unwrap();
     let compiled = Command::new("glslangValidator")
         .args(["-V", "--target-env", "vulkan1.2", "-o"])
