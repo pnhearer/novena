@@ -73,7 +73,7 @@ pub(crate) struct Execution {
     occlusion: vk::QueryPool,
     counting: bool,
     samples: u64,
-    pipelines: HashMap<Vec<u32>, Arc<ComputePipeline>>,
+    pipelines: HashMap<(Vec<u32>, bool), Arc<ComputePipeline>>,
 }
 impl Execution {
     pub fn new(context: &Arc<Context>) -> Option<Self> {
@@ -280,17 +280,26 @@ impl Execution {
         &mut self,
         memory: &GlobalMemory,
         words: &[u32],
+        requires_subgroup_size_32: bool,
         resources: &[(u32, u32, vk::DescriptorBufferInfo)],
         groups: [u32; 3],
         indirect: Option<(vk::Buffer, u64)>,
     ) -> Option<()> {
-        let pipeline = if let Some(p) = self.pipelines.get(words) {
+        let key = (words.to_vec(), requires_subgroup_size_32);
+        let pipeline = if let Some(p) = self.pipelines.get(&key) {
             p.clone()
         } else {
             let p = Arc::new(
-                ComputePipeline::create(&self.context, vk::PipelineCache::null(), words).ok()?,
+                ComputePipeline::create(
+                    &self.context,
+                    vk::PipelineCache::null(),
+                    words,
+                    requires_subgroup_size_32,
+                )
+                .map_err(|error| eprintln!("compute pipeline: {error}"))
+                .ok()?,
             );
-            self.pipelines.insert(words.to_vec(), p.clone());
+            self.pipelines.insert(key, p.clone());
             p
         };
         let bindings = pipeline.bindings();

@@ -41,7 +41,7 @@ pub struct TranslatedShader {
     pub key: String,
     /// Translated SPIR-V module words.
     pub words: Vec<u32>,
-    /// Whether execution requires subgroup size 32, currently rejected by graphics.
+    /// Whether pipeline creation must require 32-lane subgroups.
     pub requires_subgroup_size_32: bool,
 }
 
@@ -514,7 +514,7 @@ impl StartupCache {
     #[cfg(feature = "vulkan")]
     fn drain_recipes(
         &mut self,
-        mut enqueue: impl FnMut(&[Vec<u32>], &PipelineRecipe) -> Result<bool, String>,
+        mut enqueue: impl FnMut(&[&TranslatedShader], &PipelineRecipe) -> Result<bool, String>,
     ) {
         let mut entries = self.shared.lock().unwrap();
         self.recipes.retain(|recipe| {
@@ -529,13 +529,7 @@ impl StartupCache {
                     .push("pipeline recipe lacks translated stages".into());
                 return false;
             };
-            if shaders.iter().any(|s| s.requires_subgroup_size_32) {
-                entries
-                    .diagnostics
-                    .push("pipeline recipe requires unsupported subgroup size".into());
-                return false;
-            }
-            let stages: Vec<_> = shaders.iter().map(|s| s.words.clone()).collect();
+            let stages: Vec<_> = shaders.into_iter().map(AsRef::as_ref).collect();
             match enqueue(&stages, recipe) {
                 Ok(true) => {
                     entries.stats.pipelines_queued += 1;
@@ -918,6 +912,29 @@ mod tests {
 
     #[cfg(feature = "vulkan")]
     #[test]
+    fn reopened_recipes_forward_subgroup_metadata() {
+        let directory = Directory::new();
+        let translator = Translator::new(Duration::ZERO);
+        let mut cold = StartupCache::open(directory.config(), translator.clone()).unwrap();
+        let vertex = ready(&request(&mut cold, b"vertex"));
+        let subgroup = ready(&request(&mut cold, b"subgroup"));
+        cold.remember(recipe(vertex.key.clone(), subgroup.key.clone()));
+        drop(cold);
+        let mut warm = StartupCache::open(directory.config(), translator).unwrap();
+        let mut received = false;
+        warm.drain_recipes(|stages, _| {
+            assert!(!stages[0].requires_subgroup_size_32);
+            assert!(stages[1].requires_subgroup_size_32);
+            received = true;
+            Ok(true)
+        });
+        assert!(received);
+        assert_eq!(warm.stats().pipelines_queued, 1);
+        assert!(warm.diagnostics().is_empty());
+    }
+
+    #[cfg(feature = "vulkan")]
+    #[test]
     fn recipes_reopen_validate_and_retry_a_full_pipeline_queue() {
         let directory = Directory::new();
         let translator = Translator::new(Duration::ZERO);
@@ -933,7 +950,7 @@ mod tests {
         assert_eq!(warm.recipes.len(), 1);
         warm.drain_recipes(|stages, recipe| {
             crate::gpu::graphics::Key::new(
-                stages,
+                &stages.iter().map(|s| s.words.clone()).collect::<Vec<_>>(),
                 recipe.input.clone(),
                 recipe.topology,
                 recipe.state,

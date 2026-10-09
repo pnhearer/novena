@@ -92,12 +92,14 @@ impl PartKey {
                 }
                 result.layout.sort_unstable();
                 if part == Part::Raster {
+                    result.state.subgroup_size_32[0] = key.state.subgroup_size_32[0];
                     result.shader = key.vertex.clone();
                     result.state.cull = key.state.cull;
                     result.state.polygon = key.state.polygon;
                     result.state.clockwise = key.state.clockwise;
                     result.state.bias = key.state.bias;
                 } else {
+                    result.state.subgroup_size_32[1] = key.state.subgroup_size_32[1];
                     result.shader = key.fragment.clone();
                     result.state.depth_test = key.state.depth_test;
                     result.state.depth_write = key.state.depth_write;

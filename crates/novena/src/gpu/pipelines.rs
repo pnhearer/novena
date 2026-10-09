@@ -1,6 +1,9 @@
 //! Content-keyed compute pipelines. Evidence: provenance 0025, 0026, and 0037.
 use super::{Context, GlobalMemory};
-use crate::{ShaderTranslator, SHADER_STAGE_UNKNOWN};
+use crate::{
+    startup_cache::{TranslatedShader, TranslationContext},
+    ShaderTranslator, SHADER_STAGE_UNKNOWN,
+};
 use ash::vk;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -330,9 +333,9 @@ impl DriverCache {
         }
     }
 
-    fn save_translation(&self, program: &[u8], words: &[u32]) {
+    fn save_translation(&self, program: &[u8], shader: &TranslatedShader) {
         if let Some(disk) = &self.disk {
-            if let Err(error) = disk.save_translation(program, words) {
+            if let Err(error) = disk.save_shader(program, shader) {
                 self.diagnostic(format!("save translation cache: {error}"));
             }
         }
@@ -384,43 +387,57 @@ impl DriverCache {
 
 impl Compiler {
     fn compile(&self, program: &[u8]) -> Result<Arc<ComputePipeline>, String> {
-        let cached =
-            self.driver
-                .disk
-                .as_ref()
-                .and_then(|disk| match disk.load_translation(program) {
-                    Ok(words) => words,
-                    Err(error) => {
-                        self.driver
-                            .diagnostic(format!("load translation cache: {error}"));
-                        None
-                    }
-                });
+        let cached = self
+            .driver
+            .disk
+            .as_ref()
+            .and_then(|disk| match disk.load_shader(program) {
+                Ok(words) => words,
+                Err(error) => {
+                    self.driver
+                        .diagnostic(format!("load translation cache: {error}"));
+                    None
+                }
+            });
         let from_disk = cached.is_some();
-        let words = match cached {
-            Some(words) => words,
-            None => self.translator.translate(SHADER_STAGE_UNKNOWN, program)?,
+        let shader = match cached {
+            Some(shader) => shader,
+            None => self.translator.translate_for_context(
+                SHADER_STAGE_UNKNOWN,
+                program,
+                &TranslationContext::default(),
+            )?,
         };
         let created = {
             // Serialize Vulkan creation with driver snapshots. Translation and I/O
             // happen outside this lock; workers never use the queue or command pools.
             let cache = self.driver.driver_cache.read().unwrap();
-            ComputePipeline::create(&self.driver.context, *cache, &words)
+            ComputePipeline::create(
+                &self.driver.context,
+                *cache,
+                &shader.words,
+                shader.requires_subgroup_size_32,
+            )
         };
         let pipeline = match created {
             Ok(pipeline) => Arc::new(pipeline),
             Err(error) if from_disk => {
                 self.driver
                     .diagnostic(format!("discard translation cache: {error}"));
-                let words = self.translator.translate(SHADER_STAGE_UNKNOWN, program)?;
+                let shader = self.translator.translate_for_context(
+                    SHADER_STAGE_UNKNOWN,
+                    program,
+                    &TranslationContext::default(),
+                )?;
                 let cache = self.driver.driver_cache.read().unwrap();
                 let pipeline = Arc::new(ComputePipeline::create(
                     &self.driver.context,
                     *cache,
-                    &words,
+                    &shader.words,
+                    shader.requires_subgroup_size_32,
                 )?);
                 drop(cache);
-                self.driver.save_translation(program, &words);
+                self.driver.save_translation(program, &shader);
                 self.driver.persist_driver();
                 return Ok(pipeline);
             }
@@ -429,7 +446,7 @@ impl Compiler {
         if from_disk {
             self.driver.translation_hits.fetch_add(1, Ordering::Relaxed);
         } else {
-            self.driver.save_translation(program, &words);
+            self.driver.save_translation(program, &shader);
         }
         self.driver.persist_driver();
         Ok(pipeline)
@@ -476,11 +493,7 @@ impl ComputePipelines {
     ) -> Result<Self, String> {
         Ok(Self {
             compiler: Arc::new(Compiler {
-                driver: DriverCache::new(
-                    context,
-                    b"novena compute main interface 1 disk 1",
-                    persistence,
-                )?,
+                driver: DriverCache::new(context, b"compute main interface 2 disk 2", persistence)?,
                 translator,
             }),
             pipelines: HashMap::new(),
@@ -580,7 +593,11 @@ impl ComputePipeline {
         context: &Arc<Context>,
         cache: vk::PipelineCache,
         words: &[u32],
+        requires_subgroup_size_32: bool,
     ) -> Result<Self, String> {
+        if requires_subgroup_size_32 {
+            context.shader_features.subgroups.validate_compute(words)?;
+        }
         let bindings = compute_bindings(words)?;
         let mut result = Self {
             context: context.clone(),
@@ -697,10 +714,17 @@ impl ComputePipeline {
                 .map_err(|error| format!("create pipeline layout: {error:?}"))?;
         }
         let module = context.create_global_shader_module(words)?;
-        let stage = vk::PipelineShaderStageCreateInfo::default()
+        let mut subgroup_size = vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo::default()
+            .required_subgroup_size(32);
+        let mut stage = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
             .module(module)
             .name(c"main");
+        if requires_subgroup_size_32 {
+            stage = stage
+                .push_next(&mut subgroup_size)
+                .flags(vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS);
+        }
         // SAFETY: the temporary module, cache and layout belong to this device.
         let created = unsafe {
             context.device.create_compute_pipelines(

@@ -182,6 +182,9 @@ impl ColorAttachmentState {
     Clone, Copy, Debug, Default, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize,
 )]
 pub struct DrawPipelineState {
+    /// Required 32-lane subgroups for vertex and fragment stages, in that order.
+    #[serde(default)]
+    pub subgroup_size_32: [bool; 2],
     /// Binding bits selecting one element per instance.
     #[serde(default)]
     pub instance_bindings: u32,
@@ -495,14 +498,27 @@ impl GraphicsPipelines {
 
     pub(crate) fn queue_startup(
         &mut self,
-        stages: &[Vec<u32>],
+        stages: &[&crate::startup_cache::TranslatedShader],
         recipe: &crate::startup_cache::PipelineRecipe,
     ) -> Result<bool, String> {
+        let mut state = recipe.state;
+        state.subgroup_size_32 = [false; 2];
+        for stage in stages {
+            if stage.requires_subgroup_size_32 {
+                let index = match execution_model(&stage.words)? {
+                    0 => 0,
+                    4 => 1,
+                    _ => return Err("unsupported graphics stage".into()),
+                };
+                state.subgroup_size_32[index] = true;
+            }
+        }
+        let words: Vec<_> = stages.iter().map(|s| s.words.clone()).collect();
         let key = Key::new(
-            stages,
+            &words,
             recipe.input.clone(),
             recipe.topology,
-            recipe.state,
+            state,
             self.uses_storage(recipe.storage),
         )?;
         self.pool.queue(key)
@@ -1084,21 +1100,30 @@ impl GraphicsPipeline {
         }
         #[cfg(feature = "draw-metrics")]
         drop(layout_span);
+        let mut subgroup_sizes = [vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo::default()
+            .required_subgroup_size(32); 2];
         let mut stages = Vec::new();
-        for (words, stage, subset) in [
+        for (index, ((words, stage, subset), subgroup_size)) in [
             (&key.vertex, UniformStage::Vertex, Part::Raster),
             (&key.fragment, UniformStage::Fragment, Part::Fragment),
-        ] {
+        ]
+        .into_iter()
+        .zip(subgroup_sizes.iter_mut())
+        .enumerate()
+        {
             if part.is_some_and(|p| p != subset) {
                 continue;
             }
             let module = modules.get(context, words, stage, key.storage)?;
-            stages.push(
-                vk::PipelineShaderStageCreateInfo::default()
-                    .stage(stage.flags())
-                    .module(module.handle)
-                    .name(c"main"),
-            );
+            let mut info = vk::PipelineShaderStageCreateInfo::default()
+                .stage(stage.flags())
+                .module(module.handle)
+                .name(c"main");
+            if key.state.subgroup_size_32[index] {
+                context.shader_features.subgroups.validate(stage.flags())?;
+                info = info.push_next(subgroup_size);
+            }
+            stages.push(info);
             result.modules.push(module);
         }
         let bindings: Vec<_> = key

@@ -715,9 +715,17 @@ impl State {
                 } else {
                     request.poll()
                 } {
-                    crate::startup_cache::TranslationStatus::Ready(shader)
-                        if !shader.requires_subgroup_size_32 =>
-                    {
+                    crate::startup_cache::TranslationStatus::Ready(shader) => {
+                        if shader.requires_subgroup_size_32 {
+                            let index = match execution_model(&shader.words)
+                                .map_err(|_| Status::Unimplemented)?
+                            {
+                                0 => 0,
+                                4 => 1,
+                                _ => return Err(Status::Unimplemented),
+                            };
+                            pipeline_state.subgroup_size_32[index] = true;
+                        }
                         translation_keys.push(shader.key.clone());
                         stages.push(shader.words.clone());
                     }
@@ -775,7 +783,10 @@ impl State {
         let pipeline = backend
             .graphics
             .request(&stages, input, topology, pipeline_state, storage)
-            .map_err(|_| Status::Unimplemented)?;
+            .map_err(|error| {
+                backend.graphics.log_skipped_draw(&error);
+                Status::Unimplemented
+            })?;
         let pending_banks;
         let banks = if let Some(pipeline) = &pipeline {
             &pipeline.banks
