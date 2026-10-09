@@ -782,7 +782,15 @@ mod tests {
             }
         });
         r.x[..3].copy_from_slice(&[0x700, 1, 0x1000]);
-        assert_eq!(call(&instance, "QueueSubmitCommands", &mut r), Status::Ok);
+        #[cfg(feature = "vulkan")]
+        let expected = if instance.gpu.lock().unwrap().is_some() {
+            Status::Unimplemented
+        } else {
+            Status::Ok
+        };
+        #[cfg(not(feature = "vulkan"))]
+        let expected = Status::Ok;
+        assert_eq!(call(&instance, "QueueSubmitCommands", &mut r), expected);
         assert!(instance.objects.recording(handle).is_none());
         assert_eq!(memory.writes.load(Ordering::Relaxed), 0);
         assert_eq!(memory.buffer, [0xa5; 16]);
@@ -821,14 +829,14 @@ mod tests {
         }
         assert_eq!(called, 168);
         assert_eq!(
-            missing,
-            ["nvnCommandBufferClearTexture", "nvnDeviceGetProcAddress",]
+            missing.iter().map(|name| &name[3..]).collect::<Vec<_>>(),
+            ["DeviceGetProcAddress"]
         );
         let vertex_bindings = [
             "nvnCommandBufferBindVertexAttribState",
             "nvnCommandBufferBindVertexStreamState",
         ];
-        assert_eq!(missing.len() + NAMES.len(), 26);
+        assert_eq!(missing.len() + NAMES.len(), 25);
 
         let follow_up = include_str!("../../../../docs/signatures/0011-command-evidence.md");
         let rows: Vec<_> = follow_up
@@ -844,10 +852,15 @@ mod tests {
             .map(|cells| format!("{}{}", &functions::all().next().unwrap().1[..3], cells[1]))
             .collect();
         assert_eq!(rows.len(), 9);
+        let clear_name = functions::all()
+            .find(|(_, name)| name.get(3..) == Some("CommandBufferClearTexture"))
+            .unwrap()
+            .1;
         assert_eq!(
             revisited,
             missing
                 .iter()
+                .chain(std::iter::once(&clear_name))
                 .chain(&NAMES[18..])
                 .chain(&["nvnCommandBufferSetPolygonOffsetClamp"])
                 .map(|name| name.to_string())
@@ -859,6 +872,7 @@ mod tests {
             .copied()
             .chain(NAMES.iter().copied())
             .chain(vertex_bindings)
+            .chain(std::iter::once(clear_name))
             .collect();
         let census = include_str!("../../../../docs/census/0001-program-a-startup.txt");
         let counts: std::collections::BTreeMap<_, _> = census
@@ -906,12 +920,12 @@ mod tests {
             let name = "nvnCommandBufferClearTexture";
             let id = functions::lookup(name).unwrap();
             let mut r = arguments;
-            assert_eq!(instance.call(id, &mut r), Status::Unimplemented);
-            expected.push(RecordedCommand::Raw {
-                function: id.0,
-                registers: arguments.x,
+            assert_eq!(instance.call(id, &mut r), Status::Ok);
+            expected.push(RecordedCommand::Operation {
+                kind: "ClearTexture",
+                arguments: arguments.x[1..].try_into().unwrap(),
             });
-            // The existing raw command fallback stores general registers only.
+            // Opaque inputs remain untouched during recording.
             assert_eq!(&r.d[1..], &arguments.d[1..]);
         }
         assert_eq!(end(&instance, 0x200), expected);

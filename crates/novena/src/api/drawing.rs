@@ -29,6 +29,7 @@ pub(super) struct Request<'a> {
     pub vertices: Vertices,
     /// Number of vertices or indices in the draw.
     pub count: u32,
+    pub geometry: crate::gpu::operations::Geometry,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -102,6 +103,11 @@ struct Prepared {
     vertices: DrawVertices,
 }
 impl State {
+    /// Arena writes can change index values used by the previous bounds check.
+    pub fn invalidate(&mut self) {
+        self.prepared = None;
+    }
+
     /// Update retained draw state from a recorded command.
     pub fn record(&mut self, command: RecordedCommand) {
         self.prepared = None;
@@ -349,7 +355,8 @@ impl State {
         request: Request<'_>,
     ) -> Result<(), Status> {
         if let Some(prepared) = &self.prepared {
-            if request.views == [0, 0]
+            if request.geometry == crate::gpu::operations::Geometry::default()
+                && request.views == [0, 0]
                 && prepared.targets == request.targets
                 && prepared.depth == request.depth
                 && prepared.primitive == request.primitive
@@ -378,10 +385,13 @@ impl State {
                         .queue_draw(
                             request.targets,
                             (request.depth != 0).then_some(request.depth),
-                            prepared.pipeline.clone(),
-                            prepared.draw.clone(),
-                            vertices,
-                            request.count,
+                            crate::gpu::graphics::PendingDraw {
+                                pipeline: prepared.pipeline.clone(),
+                                state: prepared.draw.clone(),
+                                vertices,
+                                count: request.count,
+                                geometry: request.geometry,
+                            },
                         )
                         .ok_or(Status::InternalError);
                 }
@@ -395,6 +405,7 @@ impl State {
             primitive,
             vertices,
             count,
+            geometry,
         } = request;
         let contract = backend.first_draw.as_ref().ok_or(Status::Unimplemented)?;
         let topology = mapped(&contract.topologies, primitive).ok_or(Status::Unimplemented)?;
@@ -520,8 +531,12 @@ impl State {
             let binding = u32::try_from(value(attribute, "StreamIndex")?[0])
                 .map_err(|_| Status::BadArgument)?;
             let stream = streams.get(binding as usize).ok_or(Status::Unimplemented)?;
-            if value(stream, "Divisor")?[0] != 0 {
+            let divisor = value(stream, "Divisor")?[0];
+            if divisor > 1 || binding >= 32 {
                 return Err(Status::Unimplemented);
+            }
+            if divisor == 1 {
+                pipeline_state.instance_bindings |= 1 << binding;
             }
             let stride =
                 u32::try_from(value(stream, "Stride")?[0]).map_err(|_| Status::BadArgument)?;
@@ -549,7 +564,20 @@ impl State {
             {
                 return Err(Status::BadArgument);
             }
-            if let Vertices::Arrays { first } = vertices {
+            if divisor == 1 {
+                if vertex_end(
+                    geometry.first_instance,
+                    geometry.instances,
+                    stride,
+                    offset,
+                    bytes,
+                )
+                .ok_or(Status::BadArgument)?
+                    > size
+                {
+                    return Err(Status::BadArgument);
+                }
+            } else if let Vertices::Arrays { first } = vertices {
                 if vertex_end(first, count, stride, offset, bytes).ok_or(Status::BadArgument)?
                     > size
                 {
@@ -559,7 +587,11 @@ impl State {
             independent &= !attachment_ranges.iter().any(|&(pool, offset, bytes)| {
                 pool == resolution.pool && ranges_overlap(offset, bytes, resolution.offset, size)
             });
-            fetches.push((stride, offset, bytes, size));
+            if divisor == 0 {
+                fetches.push((stride, offset, bytes, size));
+            } else {
+                independent = false;
+            }
             input.attributes.push(VertexAttribute {
                 binding,
                 format: format_kind,
@@ -979,7 +1011,10 @@ impl State {
                 height: scissor[1],
             }),
         });
-        if independent && pipeline.batch_safe {
+        if independent
+            && pipeline.batch_safe
+            && geometry == crate::gpu::operations::Geometry::default()
+        {
             self.prepared = Some(Prepared {
                 targets: targets.to_vec(),
                 depth,
@@ -996,10 +1031,13 @@ impl State {
             .queue_draw(
                 targets,
                 depth_description.map(|_| depth),
-                pipeline,
-                draw,
-                vertices,
-                count,
+                crate::gpu::graphics::PendingDraw {
+                    pipeline,
+                    state: draw,
+                    vertices,
+                    count,
+                    geometry,
+                },
             )
             .ok_or(Status::InternalError)
     }

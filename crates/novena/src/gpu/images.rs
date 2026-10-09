@@ -816,6 +816,7 @@ impl Images {
         depth: Option<u64>,
         memory: &super::GlobalMemory,
         draws: &[super::graphics::PendingDraw],
+        query: Option<vk::QueryPool>,
     ) -> Option<()> {
         let pipeline = &draws.first()?.pipeline;
         let extent = self.images.get(keys.first()?)?.info.extent;
@@ -869,6 +870,9 @@ impl Images {
                     .transition(cmd, vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
             }
             unsafe {
+                if let Some(query) = query {
+                    device.cmd_reset_query_pool(cmd, query, 0, 1);
+                }
                 device.cmd_begin_render_pass(
                     cmd,
                     &vk::RenderPassBeginInfo::default()
@@ -880,6 +884,9 @@ impl Images {
                         })),
                     vk::SubpassContents::INLINE,
                 );
+                if let Some(query) = query {
+                    device.cmd_begin_query(cmd, query, 0, vk::QueryControlFlags::empty());
+                }
                 let mut previous = None;
                 let mut previous_index = None;
                 for draw in draws {
@@ -902,7 +909,16 @@ impl Images {
                     } else {
                         false
                     };
-                    pipeline.record_vertices(cmd, draw.vertices, draw.count, bind_index);
+                    pipeline.record_vertices(
+                        cmd,
+                        draw.vertices,
+                        draw.count,
+                        bind_index,
+                        draw.geometry,
+                    );
+                }
+                if let Some(query) = query {
+                    device.cmd_end_query(cmd, query, 0);
                 }
                 device.cmd_end_render_pass(cmd);
             }

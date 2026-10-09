@@ -15,6 +15,7 @@ mod device;
 mod drawing;
 mod memory;
 mod objects;
+mod operations;
 mod queue;
 mod recording;
 mod resources;
@@ -38,6 +39,7 @@ pub fn handler(name: &str) -> Option<Handler> {
         .or_else(|| memory::handler(name))
         .or_else(|| resources::handler(name))
         .or_else(|| state::handler(name))
+        .or_else(|| operations::handler(name))
         .or_else(|| recording::handler(name))
         .or_else(|| state_commands::handler(name))
         .or_else(|| commands::handler(name))

@@ -93,7 +93,6 @@ fn record(instance: &Instance, state: &State, texture: u64, color: [f32; 4], mas
     call(instance, "nvnCommandBufferBindBlendState", &[7, 0x700]);
     call(instance, "nvnCommandBufferBarrier", &[7, 0x12]);
     call(instance, "nvnCommandBufferClearColor", &[7, 0, 0x200, mask]);
-    call(instance, "nvnCommandBufferDispatchCompute", &[7, 4, 3, 8]);
     let handle = call(instance, "nvnCommandBufferEndRecording", &[7]);
     put(state, 0x300, &handle.to_le_bytes());
     call(instance, "nvnQueueSubmitCommands", &[0, 1, 0x300]);

@@ -181,6 +181,8 @@ pub fn handler(name: &str) -> Option<Handler> {
                     let mut target_views = [0, 0];
                     #[cfg(feature = "vulkan")]
                     let mut draw_state = super::drawing::State::default();
+                    #[cfg(feature = "vulkan")]
+                    let mut operation_state = super::operations::State::default();
                     let mut commands = commands;
                     for command in commands.drain(..) {
                         #[cfg(feature = "vulkan")]
@@ -199,6 +201,34 @@ pub fn handler(name: &str) -> Option<Handler> {
                                 if backend.finish_draws().is_none() {
                                     return Status::InternalError;
                                 }
+                            }
+                        }
+                        #[cfg(feature = "vulkan")]
+                        if let Some(backend) = gpu.as_mut() {
+                            if let Some(result) = operation_state.execute(
+                                &command,
+                                instance,
+                                backend,
+                                &mut draw_state,
+                                super::operations::Targets {
+                                    colors: &targets,
+                                    depth: depth_target,
+                                    views: target_views,
+                                },
+                            ) {
+                                if let Err(status) = result {
+                                    return status;
+                                }
+                                continue;
+                            }
+                            if !operation_state.enabled
+                                && matches!(
+                                    command,
+                                    RecordedCommand::DrawArrays { .. }
+                                        | RecordedCommand::DrawElementsBaseVertex { .. }
+                                )
+                            {
+                                continue;
                             }
                         }
                         match command {
@@ -435,6 +465,7 @@ pub fn handler(name: &str) -> Option<Handler> {
                                             primitive,
                                             vertices: super::drawing::Vertices::Arrays { first },
                                             count,
+                                            geometry: crate::gpu::operations::Geometry::default(),
                                         },
                                     ) {
                                         return status;
@@ -462,6 +493,7 @@ pub fn handler(name: &str) -> Option<Handler> {
                                             views: target_views,
                                             primitive,
                                             count,
+                                            geometry: crate::gpu::operations::Geometry::default(),
                                             vertices: super::drawing::Vertices::Elements {
                                                 index_type,
                                                 indices,
@@ -483,7 +515,8 @@ pub fn handler(name: &str) -> Option<Handler> {
                                 );
                                 return Status::Unimplemented;
                             }
-                            RecordedCommand::DrawArraysInstanced { .. } => {
+                            RecordedCommand::Operation { .. }
+                            | RecordedCommand::DrawArraysInstanced { .. } => {
                                 return Status::Unimplemented
                             }
                             command @ (RecordedCommand::SetViewport(_)

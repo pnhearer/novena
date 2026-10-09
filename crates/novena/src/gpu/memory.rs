@@ -36,6 +36,7 @@ impl GlobalMemory {
                     | vk::BufferUsageFlags::UNIFORM_BUFFER
                     | vk::BufferUsageFlags::VERTEX_BUFFER
                     | vk::BufferUsageFlags::INDEX_BUFFER
+                    | vk::BufferUsageFlags::INDIRECT_BUFFER
                     | vk::BufferUsageFlags::TRANSFER_SRC
                     | vk::BufferUsageFlags::TRANSFER_DST,
             )

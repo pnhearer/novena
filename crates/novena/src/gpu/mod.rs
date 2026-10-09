@@ -14,6 +14,7 @@ pub mod image_enums;
 pub mod image_layout;
 mod images;
 mod memory;
+pub mod operations;
 mod pipeline_disk;
 mod pipeline_workers;
 mod present;
@@ -100,6 +101,8 @@ pub struct Context {
 
 /// Vulkan images, presentation, pipelines, and lazily allocated arena storage.
 pub struct Backend {
+    pub(crate) command_contract: Option<operations::CommandContract>,
+    pub(crate) execution: operations::Execution,
     pub(crate) first_draw: Option<graphics::FirstDrawContract>,
     pub(crate) texture_contract: textures::TextureContract,
     pub(crate) image_contract: image_layout::ImageContract,
@@ -131,6 +134,8 @@ impl Backend {
     fn from_context(context: Arc<Context>, scale: f32) -> Option<Self> {
         let images = Images::new(&context)?;
         Some(Self {
+            command_contract: None,
+            execution: operations::Execution::new(&context)?,
             first_draw: None,
             texture_contract: textures::TextureContract::default(),
             image_contract: image_layout::ImageContract::default(),
@@ -630,15 +635,12 @@ impl Backend {
         &mut self,
         textures: &[u64],
         depth: Option<u64>,
-        pipeline: Arc<graphics::GraphicsPipeline>,
-        state: Arc<graphics::Draw>,
-        vertices: graphics::DrawVertices,
-        count: u32,
+        draw: graphics::PendingDraw,
     ) -> Option<()> {
         if !self.pending_draws.is_empty()
             && (textures != self.draw_targets
                 || depth != self.draw_depth
-                || !Arc::ptr_eq(&pipeline, &self.pending_draws[0].pipeline))
+                || !Arc::ptr_eq(&draw.pipeline, &self.pending_draws[0].pipeline))
         {
             self.finish_draws()?;
         }
@@ -647,12 +649,7 @@ impl Backend {
             self.draw_targets.extend_from_slice(textures);
             self.draw_depth = depth;
         }
-        self.pending_draws.push(graphics::PendingDraw {
-            pipeline,
-            state,
-            vertices,
-            count,
-        });
+        self.pending_draws.push(draw);
         Some(())
     }
 
@@ -671,8 +668,10 @@ impl Backend {
             if let Some(depth) = depth {
                 self.sync_texture(depth, true)?;
             }
+            let query = self.execution.occlusion_query();
             self.images
-                .draw(&targets, depth, self.global_memory.as_ref()?, &draws)?;
+                .draw(&targets, depth, self.global_memory.as_ref()?, &draws, query)?;
+            self.execution.collect_occlusion()?;
             for &texture in &targets {
                 self.sync_texture(texture, false)?;
             }
@@ -1012,6 +1011,7 @@ impl Context {
                 .independent_blend(core.independent_blend != 0)
                 .sampler_anisotropy(core.sampler_anisotropy != 0)
                 .shader_int64(true)
+                .draw_indirect_first_instance(core.draw_indirect_first_instance == vk::TRUE)
                 .image_cube_array(core.image_cube_array != 0)
                 .texture_compression_bc(core.texture_compression_bc != 0)
                 .texture_compression_astc_ldr(core.texture_compression_astc_ldr != 0)

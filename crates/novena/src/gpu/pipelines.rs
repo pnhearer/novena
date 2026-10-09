@@ -567,7 +567,7 @@ pub struct ComputePipeline {
 }
 
 impl ComputePipeline {
-    fn create(
+    pub(crate) fn create(
         context: &Arc<Context>,
         cache: vk::PipelineCache,
         words: &[u32],
@@ -746,6 +746,29 @@ impl ComputePipeline {
         sets: &[vk::DescriptorSet],
         groups: [u32; 3],
     ) -> Result<(), String> {
+        self.record_dispatch_with(command, memory, sets, groups, None)
+    }
+
+    pub(crate) unsafe fn record_dispatch_indirect(
+        &self,
+        command: vk::CommandBuffer,
+        memory: &GlobalMemory,
+        sets: &[vk::DescriptorSet],
+        groups: [u32; 3],
+        buffer: vk::Buffer,
+        offset: u64,
+    ) -> Result<(), String> {
+        self.record_dispatch_with(command, memory, sets, groups, Some((buffer, offset)))
+    }
+
+    unsafe fn record_dispatch_with(
+        &self,
+        command: vk::CommandBuffer,
+        memory: &GlobalMemory,
+        sets: &[vk::DescriptorSet],
+        groups: [u32; 3],
+        indirect: Option<(vk::Buffer, u64)>,
+    ) -> Result<(), String> {
         if self.context.device.handle() != memory.context().device.handle() {
             return Err("arena belongs to another device".into());
         }
@@ -777,7 +800,11 @@ impl ComputePipeline {
             );
         }
         memory.push_delta(command, self.layout, vk::ShaderStageFlags::COMPUTE);
-        device.cmd_dispatch(command, groups[0], groups[1], groups[2]);
+        if let Some((buffer, offset)) = indirect {
+            device.cmd_dispatch_indirect(command, buffer, offset);
+        } else {
+            device.cmd_dispatch(command, groups[0], groups[1], groups[2]);
+        }
         device.cmd_pipeline_barrier(
             command,
             vk::PipelineStageFlags::COMPUTE_SHADER,
