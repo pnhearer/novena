@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 mod commands;
 pub mod graphics;
+pub mod image_enums;
 pub mod image_layout;
 mod images;
 mod memory;
@@ -391,7 +392,12 @@ impl Backend {
             return None;
         }
         self.sync_texture(key, true)?;
-        self.images.sampled(key)
+        if self.image_contract.swizzles.is_empty() {
+            self.images.sampled(key)
+        } else {
+            let components = self.image_contract.resolve(description)?.components;
+            self.images.sampled_with_components(key, components)
+        }
     }
 
     pub(crate) fn sampler(
@@ -407,6 +413,19 @@ impl Backend {
         Some(self.samplers.get(&(pool, id))?.handle)
     }
 
+    /// Create a sampler through the recorded-state mapping and device checks.
+    pub fn mapped_sampler(
+        &mut self,
+        pool: u64,
+        id: u32,
+        description: &textures::SamplerDescription,
+        contract: &textures::TextureContract,
+    ) -> Option<vk::Sampler> {
+        contract.validate().ok()?;
+        let key = textures::SamplerKey::new(description, contract)?;
+        self.sampler(pool, id, key)
+    }
+
     /// Allocate or reuse a typed host image. Compressed payloads remain opaque.
     pub fn ensure_image(&mut self, key: u64, descriptor: &image_layout::ImageDescriptor) -> bool {
         self.images.ensure_descriptor(key, descriptor)
@@ -415,6 +434,25 @@ impl Backend {
     /// Return a whole-resource view after making transfers visible to shaders.
     pub fn sampled_image(&mut self, key: u64) -> Option<vk::ImageView> {
         self.images.sampled(key)
+    }
+
+    /// Return a sampled view with explicit host component selection.
+    pub fn sampled_image_with_components(
+        &mut self,
+        key: u64,
+        components: vk::ComponentMapping,
+    ) -> Option<vk::ImageView> {
+        if [components.r, components.g, components.b, components.a]
+            .iter()
+            .any(|c| !(0..=6).contains(&c.as_raw()))
+        {
+            return None;
+        }
+        self.images.sampled_with_components(key, components)
+    }
+
+    pub(crate) fn has_swizzle_contract(&self) -> bool {
+        !self.image_contract.swizzles.is_empty()
     }
 
     /// Upload a whole typed image in packed-linear order; return false on failure.
@@ -904,6 +942,7 @@ impl Context {
             };
             let enabled = vk::PhysicalDeviceFeatures::default()
                 .independent_blend(core.independent_blend != 0)
+                .sampler_anisotropy(core.sampler_anisotropy != 0)
                 .shader_int64(true)
                 .image_cube_array(core.image_cube_array != 0)
                 .texture_compression_bc(core.texture_compression_bc != 0)

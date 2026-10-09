@@ -37,10 +37,15 @@ fn oracle_offset(
 fn shape(kind: ImageKind) -> ImageShape {
     ImageShape {
         width: 137,
-        height: if kind == ImageKind::Cube { 137 } else { 73 },
+        height: match kind {
+            ImageKind::D1 | ImageKind::D1Array => 1,
+            ImageKind::Cube => 137,
+            _ => 73,
+        },
         depth: if kind == ImageKind::D3 { 9 } else { 1 },
         layers: match kind {
-            ImageKind::D2 => 1,
+            ImageKind::D1 | ImageKind::D2 => 1,
+            ImageKind::D1Array => 3,
             ImageKind::D2Array => 3,
             ImageKind::D3 => 1,
             ImageKind::Cube => 6,
@@ -88,6 +93,8 @@ fn address_matches_independent_tile_oracle() {
 #[test]
 fn round_trip_all_kinds_and_block_sizes_preserves_padding() {
     for kind in [
+        ImageKind::D1,
+        ImageKind::D1Array,
         ImageKind::D2,
         ImageKind::D2Array,
         ImageKind::D3,

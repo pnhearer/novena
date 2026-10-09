@@ -1082,7 +1082,7 @@ impl novena::ShaderTranslator for SourceShaders {
 }
 
 fn compile_source(stage: &str, source: &str) -> Vec<u32> {
-    let dir = std::env::temp_dir().join(format!("draw-formats-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("draw-source-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let input = dir.join(format!("format.{stage}"));
     let output = dir.join(format!("format.{stage}.spv"));
@@ -1109,8 +1109,9 @@ fn compile_source(stage: &str, source: &str) -> Vec<u32> {
         "validate shader: {}",
         String::from_utf8_lossy(&result.stderr)
     );
-    fs::read(output)
-        .unwrap()
+    let bytes = fs::read(output).unwrap();
+    fs::remove_dir_all(dir).unwrap();
+    bytes
         .as_chunks::<4>()
         .0
         .iter()
@@ -2452,6 +2453,7 @@ fn texture_contract(set: u32) -> novena::gpu::textures::TextureContract {
     use ash::vk;
     use novena::gpu::{textures::TextureMapping, uniforms::UniformStage};
     novena::gpu::textures::TextureContract {
+        enums: None,
         bindings: vec![TextureMapping {
             stage: 5,
             index: 3,

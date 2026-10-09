@@ -330,5 +330,6 @@ mod tests {
                 String::from_utf8_lossy(&result.stderr)
             );
         }
+        fs::remove_dir_all(directory).unwrap();
     }
 }

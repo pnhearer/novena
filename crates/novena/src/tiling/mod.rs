@@ -24,6 +24,10 @@ const SECTOR_OFFSETS: [[usize; 4]; 8] = [
 /// Image dimensions and array organization supported by checked packing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageKind {
+    /// One one-dimensional image with height, depth and layer count one.
+    D1,
+    /// Array of one-dimensional images with height and depth one.
+    D1Array,
     /// One two-dimensional image with depth and layer count one.
     D2,
     /// Array of two-dimensional images with depth one.
@@ -1407,6 +1411,8 @@ fn validate(shape: ImageShape, format: BlockFormat, tile: TileShape) -> Result<(
         return Err(LayoutError::ZeroDimension);
     }
     let valid_shape = match shape.kind {
+        ImageKind::D1 => shape.height == 1 && shape.depth == 1 && shape.layers == 1,
+        ImageKind::D1Array => shape.height == 1 && shape.depth == 1,
         ImageKind::D2 => shape.depth == 1 && shape.layers == 1,
         ImageKind::D2Array => shape.depth == 1,
         ImageKind::D3 => shape.layers == 1,
