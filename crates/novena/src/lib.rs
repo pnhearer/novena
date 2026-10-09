@@ -1,15 +1,19 @@
-//! novena: a Vulkan implementation of a console graphics API.
+//! A graphics-call library with CPU execution and an optional Vulkan backend.
 //!
-//! What exists so far is the outer shell every later piece hangs on:
+//! A host creates an [`Instance`], owns program memory, and forwards calls with
+//! [`Registers`]. The library records objects and command lists, counts calls,
+//! and executes supported clears, copies, and presentation. Unsupported calls
+//! return [`Status::Unimplemented`].
 //!
-//! - the table of function names a program may request ([`functions`]),
-//! - an instance that a host creates and forwards the program's calls to,
-//! - a census of which functions were requested and called.
+//! The `vulkan` feature adds arena-backed resources and bounded graphics draws.
+//! Draw execution needs explicit host contracts for unresolved formats and state.
+//! [`ShaderTranslator`] supplies translated SPIR-V; no translator is included.
+//! [`startup_cache`] loads translated output and schedules owned worker requests.
 //!
-//! No function has behaviour yet. A call is counted, its result registers are
-//! zeroed, and the caller is told it was not implemented. See
-//! `docs/design.md` for the plan and `CLEAN-ROOM.md` for the rules every
-//! addition follows.
+//! The repository guide lives in `docs/guide`. Guest behavior is limited to the
+//! signature, shape, census, and provenance records. Public host execution uses
+//! Vulkan contracts and original synthetic tests.
+#![deny(missing_docs)]
 
 pub mod api;
 pub mod functions;
@@ -18,7 +22,9 @@ pub mod global_memory;
 pub mod gpu;
 mod instance;
 pub mod observe;
+pub mod startup_cache;
 pub mod tiling;
+mod workers;
 
 pub use instance::{
     Census, Host, HostVulkan, Instance, Registers, ShaderStage, ShaderTranslator, Status,

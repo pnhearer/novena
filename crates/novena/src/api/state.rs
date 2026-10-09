@@ -24,12 +24,14 @@ const KINDS: &[&str] = &[
 /// Splits a state function's name into its kind and its setting, or `None`
 /// for any other function.
 fn kind_and_setting(name: &str) -> Option<(&'static str, &str)> {
-    let rest = name.strip_prefix("nvn")?;
+    functions::lookup(name)?;
+    let rest = name.get(3..)?;
     let kind = KINDS.iter().find(|kind| rest.starts_with(**kind))?;
     let setting = rest[kind.len()..].strip_prefix("Set")?;
     Some((kind, setting))
 }
 
+/// Return the handler for a supported name in this command family.
 pub fn handler(name: &str) -> Option<Handler> {
     let (_, setting) = kind_and_setting(name)?;
     Some(if setting == "Defaults" {

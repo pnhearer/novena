@@ -12,20 +12,30 @@ use std::{collections::HashSet, sync::Arc};
 /// One recorded slot mapped to the translator's original descriptor pair.
 #[derive(Clone, Copy, Debug)]
 pub struct TextureMapping {
+    /// Raw stage token supplied by the caller.
     pub stage: u64,
+    /// Raw binding index supplied by the caller.
     pub index: u64,
+    /// Translated shader stage receiving the descriptor pair.
     pub target: UniformStage,
+    /// Descriptor set number in the translated module.
     pub set: u32,
+    /// Sampled-image descriptor binding number in the translated module.
     pub image: u32,
+    /// Separate sampler descriptor binding number in the translated module.
     pub sampler: u32,
 }
 
 /// Host choices for unresolved enums and bindings. No implicit guest mapping.
 #[derive(Clone, Default)]
 pub struct TextureContract {
+    /// Explicit mappings used to connect recorded slots to host resources.
     pub bindings: Vec<TextureMapping>,
+    /// Explicit mapping from caller filter tokens to Vulkan filters.
     pub filters: Vec<(u64, vk::Filter)>,
+    /// Explicit mapping from caller wrap tokens to Vulkan address modes.
     pub wraps: Vec<(u64, vk::SamplerAddressMode)>,
+    /// Raw token accepted as disabled comparison sampling.
     pub compare_disabled: u64,
     /// Opt into the recorded LOD float order and an explicit mip filter.
     pub lod: Option<vk::SamplerMipmapMode>,
@@ -67,17 +77,25 @@ impl TextureContract {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Binding {
+    /// Translated shader stage.
     pub stage: UniformStage,
+    /// Descriptor set in the translated module.
     pub set: u32,
+    /// Descriptor binding number in the translated module.
     pub binding: u32,
+    /// Reflected sampled-image or sampler descriptor type.
     pub ty: vk::DescriptorType,
+    /// Reflected image dimension, present for sampled-image bindings.
     pub image_kind: Option<ImageKind>,
+    /// Whether the reflected image type is an array.
     pub arrayed: bool,
 }
 impl Binding {
+    /// Combine source set and binding into the flattened descriptor binding.
     pub fn lowered(self) -> u32 {
         self.set * 256 + self.binding
     }
+    /// Return the descriptor set used for this stage in the graphics pipeline.
     pub fn stage_set(self) -> u32 {
         self.stage.set() + 2
     }
@@ -183,6 +201,7 @@ pub(crate) struct SamplerKey {
     mipmap: i32,
 }
 impl SamplerKey {
+    /// Create a checked sampler interpretation or Vulkan sampler; return None for unsupported state.
     pub fn new(d: &SamplerDescription, c: &TextureContract) -> Option<Self> {
         if d.compare_mode != c.compare_disabled
             || d.max_anisotropy != 1.0
@@ -233,10 +252,13 @@ impl SamplerKey {
 
 pub(crate) struct Sampler {
     context: Arc<Context>,
+    /// Complete interpreted sampler configuration.
     pub key: SamplerKey,
+    /// Owned Vulkan sampler handle.
     pub handle: vk::Sampler,
 }
 impl Sampler {
+    /// Create a checked sampler interpretation or Vulkan sampler; return None for unsupported state.
     pub fn new(context: &Arc<Context>, key: SamplerKey) -> Option<Self> {
         let limits = unsafe {
             context

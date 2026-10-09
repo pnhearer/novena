@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 FIELDS = {
@@ -39,9 +40,10 @@ def observations():
         current = None
         report = {}
         for line in path.read_text().splitlines():
-            match = re.match(r"nvn(\w+) calls=(\d+) sampled=(\d+)", line)
+            match = re.match(r"(\w+) calls=(\d+) sampled=(\d+)", line)
             if match:
                 name, calls, sampled = match.groups()
+                name = name[3:]
                 current = name if name in FIELDS else None
                 if current:
                     report[current] = {"calls": int(calls), "sampled": int(sampled)}
@@ -78,8 +80,9 @@ def main():
         return
     if not os.environ.get("NOVENA_SHADOWBOX_PATH"):
         parser.error("NOVENA_SHADOWBOX_PATH must select a translator crate")
-    target = ROOT / "target"
-    target.mkdir(exist_ok=True)
+    target = Path(os.environ.get("CARGO_TARGET_DIR",
+                                 str(Path(tempfile.gettempdir()) / "novena-checks"))).resolve()
+    target.mkdir(parents=True, exist_ok=True)
     os.environ["CARGO_TARGET_DIR"] = str(target)
     for key, suffix in [("CARGO_HOME", "cargo"), ("XDG_CACHE_HOME", "cache"),
                         ("TMPDIR", "tmp")]:
@@ -99,10 +102,10 @@ def main():
             run(command + ["--", "--ignored", "--nocapture", "--test-threads=1"], log)
         package = checks[0] or "first_draw_executes_translated_triangle"
         run(["cargo", "clippy", "--manifest-path",
-             f"target/shadowbox-global-memory/{package}/Cargo.toml",
-             "--target-dir", "target/shadowbox-global-memory/build", "--all-targets",
+             str(target / "shadowbox-global-memory" / package / "Cargo.toml"),
+             "--target-dir", str(target / "shadowbox-global-memory/build"), "--all-targets",
              "--", "-D", "warnings"], log)
-    print("Full output: target/drawing.log")
+    print(f"Full output: {target / 'drawing.log'}")
 
 
 if __name__ == "__main__":

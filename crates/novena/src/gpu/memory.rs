@@ -20,6 +20,7 @@ pub struct GlobalMemory {
 }
 
 impl GlobalMemory {
+    /// Allocate and map a device-address buffer; return None if no compatible allocation succeeds.
     pub fn new(context: &Arc<Context>, size: u64) -> Option<Self> {
         if size == 0
             || !size.is_multiple_of(16)
@@ -117,10 +118,12 @@ impl GlobalMemory {
         })
     }
 
+    /// Return the checked guest-to-device address mapping for the arena.
     pub fn addresses(&self) -> AddressMap {
         self.addresses
     }
 
+    /// Borrow the Vulkan context retained by the arena.
     pub fn context(&self) -> &Context {
         &self.context
     }
@@ -206,10 +209,12 @@ impl GlobalMemory {
         (size > 0).then_some((self.buffer, at))
     }
 
+    /// Whether the arena contains an allocation for this pool key.
     pub fn contains_pool(&self, key: u64) -> bool {
         self.allocator.pools.contains_key(&key)
     }
 
+    /// Allocate a 16-byte-aligned pool range and return its guest GPU address.
     pub fn allocate_pool(&mut self, key: u64, storage: u64, size: u64) -> Option<u64> {
         let aliased = self.allocator.pools.values().any(|pool| {
             storage >= pool.storage
@@ -237,6 +242,7 @@ impl GlobalMemory {
         self.addresses.guest(pool.offset)
     }
 
+    /// Release a pool range; return false if its key is unknown.
     pub fn release_pool(&mut self, key: u64) -> bool {
         // SAFETY: this backend serializes queue use. Waiting also protects callers
         // that submitted work directly through Context before finalizing a pool.
@@ -251,6 +257,7 @@ impl GlobalMemory {
         (offset.checked_add(size as u64)? <= pool.size).then(|| pool.offset + offset)
     }
 
+    /// Copy bytes to a checked pool range and flush noncoherent memory as needed.
     pub fn write_pool(&mut self, key: u64, offset: u64, bytes: &[u8]) -> Option<()> {
         self.write_at(self.pool_offset(key, offset, bytes.len())?, bytes)
     }
@@ -362,6 +369,7 @@ impl GlobalMemory {
         true
     }
 
+    /// Describe the eight-byte global delta range for the selected shader stages.
     pub fn push_constant_range(stages: vk::ShaderStageFlags) -> vk::PushConstantRange {
         vk::PushConstantRange::default()
             .stage_flags(stages)

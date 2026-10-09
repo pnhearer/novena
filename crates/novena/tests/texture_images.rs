@@ -63,9 +63,7 @@ fn sample_shader(kind: ImageKind, layers: u32) -> Vec<u32> {
         ImageKind::Cube if layers == 6 => 3,
         ImageKind::Cube => 4,
     };
-    let output = root
-        .join("../../target/tmp")
-        .join(format!("sample-{shape}-{}.spv", std::process::id()));
+    let output = std::env::temp_dir().join(format!("sample-{shape}-{}.spv", std::process::id()));
     fs::create_dir_all(output.parent().unwrap()).unwrap();
     let result = Command::new("glslangValidator")
         .args(["-V", "-g0", "--target-env", "vulkan1.2"])

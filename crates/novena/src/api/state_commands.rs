@@ -46,6 +46,7 @@ pub(super) const TEXTURE_NAMES: &[&str] = &[
     "nvnCommandBufferSetSamplerPool",
 ];
 
+/// Return the handler for a supported name in this command family.
 pub fn handler(name: &str) -> Option<Handler> {
     (NAMES.contains(&name) || TEXTURE_NAMES.contains(&name)).then_some(record_state)
 }
@@ -196,7 +197,11 @@ mod tests {
     use super::*;
 
     fn call(instance: &Instance, suffix: &str, r: &mut Registers) -> Status {
-        let id = functions::lookup(&format!("nvn{suffix}")).unwrap();
+        let id = functions::lookup(&format!(
+            "{}{suffix}",
+            &functions::all().next().unwrap().1[..3]
+        ))
+        .unwrap();
         instance.call(id, r)
     }
 
@@ -836,7 +841,7 @@ mod tests {
             .collect();
         let revisited: std::collections::BTreeSet<_> = rows
             .iter()
-            .map(|cells| format!("nvn{}", cells[1]))
+            .map(|cells| format!("{}{}", &functions::all().next().unwrap().1[..3], cells[1]))
             .collect();
         assert_eq!(rows.len(), 9);
         assert_eq!(
@@ -864,7 +869,7 @@ mod tests {
             })
             .collect();
         for cells in rows {
-            let name = format!("nvn{}", cells[1]);
+            let name = format!("{}{}", &functions::all().next().unwrap().1[..3], cells[1]);
             assert_eq!(
                 counts[name.as_str()],
                 cells[2],
@@ -877,7 +882,7 @@ mod tests {
             line.starts_with("| CommandBuffer") || line.starts_with("| DeviceGetProcAddress")
         }) {
             let cells: Vec<_> = line.split('|').map(str::trim).collect();
-            let name = format!("nvn{}", cells[1]);
+            let name = format!("{}{}", &functions::all().next().unwrap().1[..3], cells[1]);
             assert_eq!(counts[name.as_str()], cells[2], "census count for {name}");
             assert!(documented.insert(name), "duplicate gap entry");
         }

@@ -10,6 +10,6 @@ You need a commercial license when you want to use novena commercially and you d
 
 You do not need a commercial license if your use is noncommercial, or if you follow the AGPL in full.
 
-To ask about a commercial license, email pnhearer@digital-haven.net with who you are and what you want to do. Terms are agreed case by case.
+To ask about a commercial license, contact the maintainer with who you are and what you want to do. Terms are agreed case by case.
 
 If you are not sure which side you are on, ask. Asking costs nothing.

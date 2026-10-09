@@ -16,7 +16,9 @@ static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 /// Include generation, options and translator version in these strings.
 #[derive(Clone, Debug)]
 pub struct TranslationIdentity {
+    /// Translator implementation version used to invalidate persisted output.
     pub version: String,
+    /// Identity of every translator option that can affect generated output.
     pub configuration: String,
 }
 
@@ -232,13 +234,11 @@ mod tests {
     }
 
     fn root(name: &str) -> PathBuf {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/tmp")
-            .join(format!(
-                "disk-{name}-{}-{}",
-                std::process::id(),
-                TEMP_ID.fetch_add(1, Ordering::Relaxed)
-            ));
+        let root = std::env::temp_dir().join(format!(
+            "disk-{name}-{}-{}",
+            std::process::id(),
+            TEMP_ID.fetch_add(1, Ordering::Relaxed)
+        ));
         fs::create_dir_all(&root).unwrap();
         root
     }

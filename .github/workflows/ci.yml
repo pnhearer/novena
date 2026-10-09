@@ -14,14 +14,14 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo install cbindgen --locked
-      - run: cbindgen --config cbindgen.toml --crate novena --output /tmp/novena-generated.h
+      - run: cbindgen --config cbindgen.toml --crate novena --output "$RUNNER_TEMP/novena-generated.h"
       - run: cc -std=c11 -Wall -Wextra -Werror -Iinclude -fsyntax-only examples/host.c
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo clippy --all-targets --features vulkan -- -D warnings
       - run: cargo test
       - name: Test without a Vulkan device
-        run: VK_ICD_FILENAMES=/tmp/novena-no-such-vulkan-icd.json cargo test --features vulkan
+        run: VK_ICD_FILENAMES="$RUNNER_TEMP/novena-no-such-vulkan-icd.json" cargo test --features vulkan
       - run: cargo build --release
       - name: Build and run the C host example
         run: make -C examples/c-host run

@@ -213,6 +213,7 @@ impl Window {
         Some(true)
     }
 
+    /// Present a transfer-readable source through the native swapchain, recreating it as needed.
     pub fn present(
         &mut self,
         source: ImageInfo,
