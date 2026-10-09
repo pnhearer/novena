@@ -1602,3 +1602,29 @@ fn valid_blit(info: ImageInfo, r: super::image_layout::BlitRegion) -> bool {
                     .all(|v| v[i] >= 0 && v[i] as u32 <= extent[i])
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires a Vulkan device with unrestricted floating depth"]
+    fn depth_stencil_upload_keeps_planes_and_offset_exact() {
+        let context = Arc::new(Context::new().expect("Vulkan device required"));
+        let mut images = Images::new(&context).unwrap();
+        assert!(images.ensure_format(1, 64, 64, vk::Format::D32_SFLOAT_S8_UINT));
+        let mut memory = super::super::GlobalMemory::new(&context, 1024 * 1024 * 1024).unwrap();
+        memory.allocate_pool(1, 0, 65536).unwrap();
+        let mut source = vec![0xff; 65536];
+        let (buffer, _) = memory.image_region(1, 24576, 20480).unwrap();
+        for values in [[0.75_f32; 4], [-0.5, 0.0, 1.0, 1.5]] {
+            let depth: Vec<_> = values.into_iter().flat_map(f32::to_le_bytes).collect();
+            source[24576..40960].copy_from_slice(&depth.repeat(1024));
+            memory.write_pool(1, 0, &source).unwrap();
+            images.arena_transfer(1, buffer, 24576, true).unwrap();
+            images.wait().unwrap();
+            let (_, _, bytes) = images.readback(1).unwrap();
+            assert_eq!(bytes, source[24576..45056]);
+        }
+    }
+}
