@@ -62,6 +62,9 @@ impl Timeline {
         *queued = (*queued).max(value);
         self.posted.notify_all();
     }
+    pub fn is_posted(&self, value: u64) -> bool {
+        *self.queued.lock().unwrap_or_else(|p| p.into_inner()) >= value
+    }
     pub fn wait_posted(&self, value: u64) -> bool {
         let queued = self.queued.lock().unwrap_or_else(|p| p.into_inner());
         if *queued >= value {
@@ -824,6 +827,54 @@ mod tests {
     use crate::gpu::Context;
 
     #[test]
+    #[ignore = "requires a graphics device"]
+    fn contexts_retire_before_cross_thread_teardown() {
+        thread::scope(|scope| {
+            for worker in 0..4 {
+                scope.spawn(move || {
+                    for round in 0..4 {
+                        let context = Arc::new(Context::new().expect("graphics device required"));
+                        let weak = Arc::downgrade(&context);
+                        let mut backend = crate::gpu::Backend::from_context(context.clone(), 1.0)
+                            .expect("backend resources");
+                        backend.images.set_parallel_recording(round % 2 == 0);
+                        assert!(backend.ensure(1, 4, 4, false));
+                        let mut commands =
+                            super::super::commands::Commands::with_capacity(&context, 2).unwrap();
+                        for index in 0..24 {
+                            if (worker + index) % 2 == 0 {
+                                commands.begin_direct().unwrap();
+                            } else {
+                                commands.begin().unwrap();
+                            }
+                            commands.submit(false, None).unwrap();
+                            let color = if index % 2 == 0 {
+                                [1.0, 0.0, 0.0, 1.0]
+                            } else {
+                                [0.0, 0.0, 1.0, 1.0]
+                            };
+                            assert!(backend.clear_color(1, color, 15));
+                            backend.enqueue_callback(index % 2, 1, 4, 4).unwrap();
+                        }
+                        let retained = commands.submission().unwrap();
+                        drop(context);
+                        thread::spawn(move || {
+                            drop(backend);
+                            drop(commands);
+                            assert!(weak.upgrade().is_some());
+                            retained.wait().unwrap();
+                            drop(retained);
+                            assert!(weak.upgrade().is_none());
+                        })
+                        .join()
+                        .unwrap();
+                    }
+                });
+            }
+        });
+    }
+
+    #[test]
     #[ignore = "requires a Vulkan device"]
     fn retained_batch_completes_repeated_and_distinct_timeline_thresholds() {
         let context = Arc::new(Context::new().expect("Vulkan device required"));
@@ -953,7 +1004,7 @@ mod tests {
         direct.submit(false, None).unwrap();
         assert!(direct.wait().is_none());
         assert!(direct.ready(direct.completion()).is_none());
-        let mut readback = super::super::commands::Commands::with_submission_ack(&context).unwrap();
+        let mut readback = super::super::commands::Commands::with_capacity(&context, 1).unwrap();
         readback.begin_direct().unwrap();
         readback.submit(false, None).unwrap();
         assert!(readback.wait().is_none());

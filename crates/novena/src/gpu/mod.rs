@@ -156,6 +156,13 @@ pub struct Backend {
     scale: f32,
 }
 
+impl Drop for Backend {
+    fn drop(&mut self) {
+        // Retire every command user before field destruction starts.
+        let _ = self.context.wait_queue();
+    }
+}
+
 impl Backend {
     /// Create a backend with output scale at least one; return None on setup failure.
     pub fn new(scale: f32) -> Option<Self> {
@@ -476,6 +483,9 @@ impl Backend {
         key: textures::SamplerKey,
     ) -> Option<vk::Sampler> {
         if self.samplers.get(&(pool, id)).is_none_or(|s| s.key != key) {
+            if self.samplers.contains_key(&(pool, id)) {
+                self.context.wait_queue()?;
+            }
             self.graphics.invalidate_descriptors();
             self.samplers
                 .insert((pool, id), textures::Sampler::new(&self.context, key)?);
@@ -1553,6 +1563,55 @@ fn find_memory_type(context: &Context, bits: u32, flags: vk::MemoryPropertyFlags
 #[cfg(test)]
 mod tests {
     use super::{Backend, ShaderFeatures};
+
+    #[test]
+    #[ignore = "requires a graphics device"]
+    fn sampler_replacement_retires_queued_users() {
+        use super::{textures, Context};
+        use ash::vk;
+        use std::{sync::mpsc, sync::Arc, sync::Mutex, time::Duration};
+
+        let mut backend = Backend::new(1.0).expect("graphics device required");
+        let contract = textures::TextureContract {
+            filters: vec![(0, vk::Filter::NEAREST), (1, vk::Filter::LINEAR)],
+            wraps: vec![(0, vk::SamplerAddressMode::REPEAT)],
+            ..Default::default()
+        };
+        let key = |min_filter| {
+            textures::SamplerKey::new(
+                &textures::SamplerDescription {
+                    min_filter,
+                    max_anisotropy: 1.0,
+                    ..Default::default()
+                },
+                &contract,
+            )
+            .unwrap()
+        };
+        let original = backend.sampler(1, 0, key(0)).unwrap();
+        let replacement = key(1);
+        let context: Arc<Context> = backend.context.clone();
+        let (entered, entry) = mpsc::sync_channel(1);
+        let (release, released) = mpsc::sync_channel(1);
+        let released = Mutex::new(released);
+        let operation: super::recording_device::Operation = Arc::new(move |_, _| {
+            entered.send(()).unwrap();
+            released.lock().unwrap().recv().unwrap();
+        });
+        let completion = context.command_workers.enqueue(vec![operation], None, None);
+        entry.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (changed, change) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            let sampler = backend.sampler(1, 0, replacement).unwrap();
+            changed.send(sampler != original).unwrap();
+        });
+        let early = change.recv_timeout(Duration::from_millis(100));
+        release.send(()).unwrap();
+        completion.wait().unwrap();
+        worker.join().unwrap();
+        assert!(matches!(early, Err(mpsc::RecvTimeoutError::Timeout)));
+        assert!(change.recv_timeout(Duration::from_secs(5)).unwrap());
+    }
 
     #[test]
     #[ignore = "requires a Vulkan device"]

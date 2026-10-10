@@ -101,7 +101,7 @@ impl Readbacks {
             let target = Image::new(&self.context, width, height, vk::Format::R8G8B8A8_UNORM)?;
             let buffer = Buffer::new(&self.context, target.info.size)?;
             self.slots[index] = Some(Slot {
-                commands: Commands::with_submission_ack(&self.context)?,
+                commands: Commands::with_capacity(&self.context, 1)?,
                 target,
                 buffer,
             });

@@ -27,15 +27,19 @@ pub(super) struct TransferKey {
 
 #[derive(Clone)]
 pub(super) struct Submission {
-    context: Arc<Context>,
+    // Fields drop in order. Release the semaphore before its final device owner.
     timeline: Arc<super::command_workers::Timeline>,
     value: u64,
     receipt: (super::command_workers::Completion, u64),
+    context: Arc<Context>,
 }
 
 impl Submission {
     pub fn ready(&self) -> Option<bool> {
         self.receipt.0.ready()?;
+        if !self.timeline.is_posted(self.value) {
+            return Some(false);
+        }
         let complete = unsafe {
             self.context
                 .device
@@ -58,6 +62,9 @@ impl Submission {
             .values(&values);
         while !self.ready()? {
             self.context.command_workers.healthy()?;
+            if !self.timeline.wait_posted(self.value) {
+                continue;
+            }
             match unsafe { self.context.device.wait_semaphores(&info, 100_000_000) } {
                 Ok(()) | Err(vk::Result::TIMEOUT) => {}
                 Err(_) => return None,
@@ -85,19 +92,12 @@ pub(super) struct Commands {
     capture: Option<super::recording_device::Capture>,
     reusing: bool,
     pending: Option<Vec<TransferKey>>,
-    acknowledge: bool,
 }
 
 impl Commands {
     /// Create reusable execution resources; return None if Vulkan setup fails.
     pub fn new(context: &Arc<Context>) -> Option<Self> {
         Self::with_capacity(context, FRAMES)
-    }
-
-    pub fn with_submission_ack(context: &Arc<Context>) -> Option<Self> {
-        let mut commands = Self::with_capacity(context, 1)?;
-        commands.acknowledge = true;
-        Some(commands)
     }
 
     pub fn with_capacity(context: &Arc<Context>, capacity: usize) -> Option<Self> {
@@ -110,7 +110,6 @@ impl Commands {
             capture: None,
             reusing: false,
             pending: None,
-            acknowledge: false,
         };
         commands.timeline = Some(super::command_workers::Timeline::new(&context.device)?);
         for _ in 0..capacity {
@@ -285,6 +284,11 @@ impl Commands {
     }
 
     pub fn ready(&self, value: u64) -> Option<bool> {
+        self.context.command_workers.healthy()?;
+        if !self.timeline.as_ref()?.is_posted(value) {
+            self.context.command_workers.flush_direct();
+            return Some(false);
+        }
         let complete = unsafe {
             self.context
                 .device
@@ -320,10 +324,8 @@ impl Commands {
         if value == 0 || self.ready(value)? {
             return Some(());
         }
-        if self.acknowledge {
-            while !self.timeline.as_ref()?.wait_posted(value) {
-                self.context.command_workers.healthy()?;
-            }
+        while !self.timeline.as_ref()?.wait_posted(value) {
+            self.context.command_workers.healthy()?;
         }
         let semaphores = [self.timeline.as_ref()?.semaphore()];
         let values = [value];
