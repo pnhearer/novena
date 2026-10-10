@@ -1,4 +1,4 @@
-//! Original pattern images, sampled on the GPU and compared byte for byte. Provenance: 0031.
+//! Original pattern images, sampled on the GPU and compared byte for byte. Provenance: 0031, 0043.
 #![cfg(feature = "vulkan")]
 use ash::vk;
 use novena::{
@@ -10,13 +10,9 @@ use novena::{
 };
 use std::{
     ffi::CString,
-    fs,
-    path::PathBuf,
-    process::Command,
-    sync::atomic::{AtomicU64, Ordering},
+    io::Write,
+    process::{Command, Stdio},
 };
-
-static SHADER_ID: AtomicU64 = AtomicU64::new(0);
 
 fn packing(shape: ImageShape, format: vk::Format, height: u8, depth: u8) -> Layout {
     Layout::new(
@@ -75,7 +71,6 @@ fn compile_sample_shader(
     wide: bool,
     extra: &[String],
 ) -> Vec<u32> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let shape = match kind {
         ImageKind::D1 => 5,
         ImageKind::D1Array => 6,
@@ -85,21 +80,78 @@ fn compile_sample_shader(
         ImageKind::Cube if layers == 6 => 3,
         ImageKind::Cube => 4,
     };
-    let output = std::env::temp_dir().join(format!(
-        "sample-{shape}-{class}-{wide}-{}-{}.spv",
-        std::process::id(),
-        SHADER_ID.fetch_add(1, Ordering::Relaxed)
-    ));
-    fs::create_dir_all(output.parent().unwrap()).unwrap();
-    let result = Command::new("glslangValidator")
-        .args(["-V", "-g0", "--target-env", "vulkan1.2"])
-        .arg(format!("-DSHAPE={shape}"))
-        .arg(format!("-DCLASS={class}"))
-        .arg(format!("-DWIDE={}", u32::from(wide)))
-        .args(extra)
-        .arg("-o")
-        .arg(&output)
-        .arg(root.join("tests/shaders/sample_image.comp"))
+    let compiler = shaderc::Compiler::new().unwrap();
+    let mut options = shaderc::CompileOptions::new().unwrap();
+    options.set_target_env(
+        shaderc::TargetEnv::Vulkan,
+        shaderc::EnvVersion::Vulkan1_2 as u32,
+    );
+    options.add_macro_definition("SHAPE", Some(&shape.to_string()));
+    options.add_macro_definition("CLASS", Some(&class.to_string()));
+    options.add_macro_definition("WIDE", Some(&u32::from(wide).to_string()));
+    for definition in extra {
+        let (name, value) = definition
+            .strip_prefix("-D")
+            .unwrap()
+            .split_once('=')
+            .unwrap();
+        options.add_macro_definition(name, Some(value));
+    }
+    let module = compiler
+        .compile_into_spirv(
+            include_str!("shaders/sample_image.comp"),
+            shaderc::ShaderKind::Compute,
+            "sample_image.comp",
+            "main",
+            Some(&options),
+        )
+        .unwrap();
+    let mut validator = Command::new("spirv-val")
+        .args(["--target-env", "vulkan1.2"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    validator
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(module.as_binary_u8())
+        .unwrap();
+    let result = validator.wait_with_output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    module.as_binary().to_vec()
+}
+
+#[test]
+#[ignore = "requires spirv-val"]
+fn shader_compilation_without_scratch_storage() {
+    const PROBE: &str = "SAMPLE_SHADER_COMPILER_PROBE";
+    if std::env::var_os(PROBE).is_some() {
+        let first = sample_shader(ImageKind::D2, 1);
+        let second = sample_shader(ImageKind::D2, 1);
+        assert_eq!(first.first(), Some(&0x0723_0203));
+        assert_eq!(first, second);
+        return;
+    }
+    let executable = std::env::current_exe().unwrap();
+    let result = Command::new(&executable)
+        .args([
+            "--exact",
+            "shader_compilation_without_scratch_storage",
+            "--include-ignored",
+            "--nocapture",
+        ])
+        .env(PROBE, "1")
+        .env("TMPDIR", &executable)
+        .env("TMP", &executable)
+        .env("TEMP", &executable)
         .output()
         .unwrap();
     assert!(
@@ -108,21 +160,8 @@ fn compile_sample_shader(
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
     );
-    assert!(Command::new("spirv-val")
-        .args(["--target-env", "vulkan1.2"])
-        .arg(&output)
-        .status()
-        .unwrap()
-        .success());
-    let bytes = fs::read(&output).unwrap();
-    fs::remove_file(output).unwrap();
-    bytes
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|b| u32::from_le_bytes(*b))
-        .collect()
 }
+
 fn sampled(backend: &mut Backend, key: u64, layout: &Layout) -> Vec<u8> {
     let words = sample_shader(layout.shape().kind, layout.shape().layers);
     sampled_words(

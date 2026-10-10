@@ -17,7 +17,7 @@ jobs:
       - run: apt-get update && apt-get install -y curl build-essential libx11-dev libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers xvfb xauth python3
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - run: apt-get install -y glslang-tools spirv-tools
+      - run: apt-get install -y glslang-tools spirv-tools cmake git
       - name: Check every GPU test with strict validation
         run: python3 scripts/check-validation.py --features vulkan
       - name: Check pixels, swapchain resize and frame reuse

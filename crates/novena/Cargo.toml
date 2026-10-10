@@ -22,6 +22,9 @@ sha2 = "0.10"
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 
+[dev-dependencies]
+shaderc = "0.10.1"
+
 [[example]]
 name = "textured_triangle"
 required-features = ["vulkan"]

@@ -79,6 +79,11 @@ It reported no validation messages and no driver crash. The same fixture passed
 in the other nineteen runs. No driver crash or validation message occurred
 across the series.
 
+2026-10-09 follow-up: removing the compiler's output directory after launch
+reproduced the shader compiler failure. The sampling fixture now compiles in
+memory. [Note 0043](0043-shader-fixture-storage.md) records the storage regression
+and repeated validation.
+
 Formatting and strict Clippy passed for all targets and features. Default tests
 passed. The complete suite with all features and the external translator
 configured passed under both synchronization and GPU-assisted validation, with

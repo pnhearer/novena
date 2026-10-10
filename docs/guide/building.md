@@ -3,6 +3,12 @@
 Run these commands from the repository root. Use a current stable Rust
 toolchain. The default features are empty and need no Vulkan loader.
 
+Tests and Clippy build a native shader compiler as a development dependency.
+It uses an installed system library when available, or builds bundled source.
+For the source build, install a C++ toolchain, CMake, Git, and Python. MSVC
+source builds also require Ninja. Production library builds do not use this
+development dependency.
+
 ```sh
 cargo build --workspace
 cargo test --workspace
